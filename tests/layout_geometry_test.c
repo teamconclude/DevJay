@@ -1,0 +1,46 @@
+#include "../layout_geometry.h"
+#include <assert.h>
+#include <stdio.h>
+static void check(DPRect a, DPRect b) {
+    assert(a.x == b.x && a.y == b.y && a.width == b.width && a.height == b.height);
+}
+int main(void) {
+    DPRect screen = {0, 50, 1440, 830}; // Dock/menu excluded.
+    check(dp_clamp((DPRect){100,100,560,156}, screen), (DPRect){100,100,560,156});
+    check(dp_clamp((DPRect){1300,800,560,156}, screen), (DPRect){872,716,560,156});
+    check(dp_clamp((DPRect){-300,-100,300,245}, screen), (DPRect){8,58,300,245});
+    check(dp_clamp((DPRect){100,100,560,156}, (DPRect){0,0,400,120}), (DPRect){8,8,384,104});
+    check(dp_clamp((DPRect){-1500,100,300,245}, (DPRect){-1920,0,1920,1080}), (DPRect){-1500,100,300,245});
+    DPRect screens[] = {{-1920,0,1920,1080}, {0,0,1440,900}, {1600,0,1920,1080}};
+    assert(dp_nearest_screen((DPRect){-1800,50,300,245}, screens,3) == 0);
+    assert(dp_nearest_screen((DPRect){1450,100,100,100}, screens,3) == 1); // gap
+    assert(dp_nearest_screen((DPRect){4000,100,300,245}, screens,3) == 2); // unplugged far right
+    assert(dp_nearest_screen((DPRect){1400,100,400,245}, screens,3) == 2); // most overlap
+    check(dp_panel_size(0, 5, 2000, 1200, 0, 0, 0), (DPRect){0,0,1130,174});
+    check(dp_panel_size(1, 5, 2000, 1200, 0, 0, 0), (DPRect){0,0,234,809});
+    check(dp_panel_size(2, 5, 2000, 1200, 0, 0, 0), (DPRect){0,0,682,329});
+    check(dp_panel_size(2, 8, 500, 1200, 22, 0, 0), (DPRect){0,0,458,671});
+    check(dp_panel_size(2, 5, 2000, 1200, 0, 800, 450), (DPRect){0,0,818,467});
+    check(dp_panel_size(1, 20, 1000, 700, 0, 0, 0), (DPRect){0,0,234,700});
+    check(dp_panel_size(0, 0, 2000, 1200, 0, 0, 0), (DPRect){0,0,234,174});
+    DPRect old = {0,0,1440,900}, larger = {0,0,1920,1080};
+    check(dp_reanchor((DPRect){1120,30,300,200}, old, larger), (DPRect){1600,30,300,200});
+    check(dp_reanchor((DPRect){1120,670,300,200}, old, larger), (DPRect){1600,850,300,200});
+    check(dp_reanchor((DPRect){400,300,300,200}, old, larger), (DPRect){400,480,300,200});
+    check(dp_reanchor((DPRect){1120,30,300,200}, old, (DPRect){-1280,100,1280,720}), (DPRect){-320,130,300,200});
+    check(dp_reanchor((DPRect){1120,30,300,200}, old, (DPRect){0,0,800,600}), (DPRect){480,30,300,200});
+    check(dp_reanchor((DPRect){1120,30,300,200}, old, (DPRect){0,0,240,160}), (DPRect){8,8,224,144});
+    check(dp_reanchor((DPRect){1120,80,300,200}, (DPRect){0,50,1440,830}, (DPRect){0,70,1920,990}), (DPRect){1600,100,300,200});
+    // A user-positioned Site can overlap the Dock's reserved area. It must
+    // remain bottom-anchored rather than acquiring a large top-based offset.
+    check(dp_reanchor((DPRect){2877,42,289,173}, (DPRect){0,90,3200,1680}, (DPRect){0,90,3840,2040}), (DPRect){3517,98,289,173});
+    check(dp_reanchor((DPRect){-310, -478, 300,174}, (DPRect){-2560,-460,2560,1410}, (DPRect){-3840,-508,3840,2130}), (DPRect){-310,-500,300,174});
+    check(dp_reanchor((DPRect){1160,30,300,200}, old, larger), (DPRect){1612,30,300,200});
+    // Thresholds use the old usable screen dimensions; anchored gaps remain
+    // in points rather than growing with the new resolution.
+    check(dp_reanchor((DPRect){1500,150,300,200}, (DPRect){0,0,2000,1500}, (DPRect){0,0,3000,2000}), (DPRect){2500,150,300,200});
+    check(dp_reanchor((DPRect){1499,151,300,200}, (DPRect){0,0,2000,1500}, (DPRect){0,0,3000,2000}), (DPRect){1499,651,300,200});
+    check(dp_reanchor((DPRect){600,60,300,200}, (DPRect){0,0,1000,600}, (DPRect){0,0,1500,900}), (DPRect){1100,60,300,200});
+    check(dp_reanchor((DPRect){599,61,300,200}, (DPRect){0,0,1000,600}, (DPRect){0,0,1500,900}), (DPRect){599,361,300,200});
+    puts("Window geometry: 30 checks passed");
+}

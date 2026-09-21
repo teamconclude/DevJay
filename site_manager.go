@@ -1,0 +1,484 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"maps"
+	"path/filepath"
+	"slices"
+	"sync"
+	"time"
+
+	"github.com/wailsapp/wails/v3/pkg/application"
+	"github.com/wailsapp/wails/v3/pkg/events"
+)
+
+type siteRuntime struct {
+	Site   Site
+	Window *application.WebviewWindow
+	Ready  bool
+	Git    GitStatus
+	Cancel context.CancelFunc
+}
+type SiteView struct {
+	Site
+	Prefix   string          `json:"prefix"`
+	Name     string          `json:"name"`
+	Window   cardState       `json:"window"`
+	Position DesktopPosition `json:"position"`
+	Git      GitStatus       `json:"git"`
+}
+type appSnapshot struct {
+	Layout       string                   `json:"layout"`
+	Placements   map[string]CardPlacement `json:"placements"`
+	SettingsOpen bool                     `json:"settingsOpen"`
+	Decoration   string                   `json:"decoration"`
+	Sites        []SiteView               `json:"sites"`
+	Manual       bool                     `json:"manual"`
+	Preferences  map[string]bool          `json:"preferences"`
+	Error        string                   `json:"error"`
+}
+type siteManager struct {
+	app                                                      *application.App
+	panel, settings                                          *application.WebviewWindow
+	panelReady, settingsReady, openSettingsPending, browsing bool
+	allDesktopsItem, onTopItem                               *application.MenuItem
+	mu                                                       sync.Mutex // Protect runtime membership against the shutdown callback.
+	config                                                   SiteConfig
+	configError                                              error
+	runtime                                                  map[string]*siteRuntime
+	commands                                                 chan func()
+}
+
+func newSiteManager(app *application.App, c SiteConfig, err error) *siteManager {
+	if err != nil {
+		c = SiteConfig{Version: 1, Sites: []Site{}}
+	}
+	return &siteManager{app: app, config: c, configError: err, runtime: map[string]*siteRuntime{}, commands: make(chan func(), 128)}
+}
+func (m *siteManager) send(fn func()) {
+	select {
+	case <-m.app.Context().Done():
+		return
+	case m.commands <- fn:
+	}
+}
+func (m *siteManager) run() {
+	tick := time.NewTicker(time.Second)
+	defer tick.Stop()
+	for {
+		select {
+		case <-m.app.Context().Done():
+			return
+		case fn := <-m.commands:
+			if m.app.Context().Err() == nil {
+				fn()
+			}
+		case <-tick.C:
+			m.broadcast()
+		}
+	}
+}
+func (m *siteManager) notice(text string, failed bool) {
+	m.app.Event.Emit("devjay:notice", map[string]any{"text": text, "error": failed})
+}
+func (m *siteManager) syncSettings() {
+	if !m.panelReady {
+		return
+	}
+	p := panelPreferences(m.panel)
+	m.allDesktopsItem.SetChecked(p["allDesktops"])
+	m.onTopItem.SetChecked(p["onTop"])
+	m.broadcast()
+}
+func (m *siteManager) openSettings() {
+	if !m.settingsReady || !m.panelReady {
+		m.openSettingsPending = true
+		return
+	}
+	m.openSettingsPending = false
+	showSettingsWindow(m.settings, m.panel)
+	m.broadcast()
+}
+func (m *siteManager) createWindow(site Site) {
+	window := m.app.Window.NewWithOptions(application.WebviewWindowOptions{Name: "site-" + site.ID, Title: "DevJay Site · " + filepath.Base(site.Path), URL: "/?site=" + site.ID, Width: 290, Height: 174, Frameless: m.config.decoration() != "normal", X: 160, Y: 260, InitialPosition: application.WindowXY, DisableResize: true, CloseButtonState: application.ButtonDisabled, MaximiseButtonState: application.ButtonDisabled, BackgroundColour: application.NewRGB(20, 24, 32), Mac: application.MacWindow{CornerType: application.MacWindowCornerTypeRounded, CollectionBehavior: application.MacWindowCollectionBehaviorManaged | application.MacWindowCollectionBehaviorFullScreenNone, TabbingMode: application.MacWindowTabbingModeDisallowed}})
+	m.mu.Lock()
+	m.runtime[site.ID] = &siteRuntime{Site: site, Window: window, Git: GitStatus{Summary: "Checking repository…", Tone: "muted"}}
+	m.mu.Unlock()
+	window.OnWindowEvent(events.Common.WindowRuntimeReady, func(*application.WindowEvent) {
+		m.send(func() {
+			m.mu.Lock()
+			r := m.runtime[site.ID]
+			m.mu.Unlock()
+			if r == nil || r.Ready {
+				return
+			}
+			restoreWindowLayout(window, "site-"+site.ID)
+			applyTopPreference()
+			ctx, cancel := context.WithCancel(m.app.Context())
+			m.mu.Lock()
+			r.Ready = true
+			r.Cancel = cancel
+			m.mu.Unlock()
+			go watchGit(ctx, site.Path, func(status GitStatus) {
+				m.send(func() {
+					if current := m.runtime[site.ID]; current == r {
+						m.mu.Lock()
+						current.Git = status
+						m.mu.Unlock()
+					}
+				})
+			})
+			m.broadcast()
+		})
+	})
+}
+func (m *siteManager) snapshot() appSnapshot {
+	m.mu.Lock()
+	items := make(map[string]siteRuntime, len(m.runtime))
+	for id, r := range m.runtime {
+		items[id] = *r
+	}
+	m.mu.Unlock()
+	positions := map[string]DesktopPosition{}
+	states := map[string]cardState{}
+	for id, r := range items {
+		if r.Ready {
+			positions[id] = desktopPosition(r.Window)
+			states[id] = windowState(r.Window, id)
+		}
+	}
+	result := appSnapshot{Layout: m.config.layout(), Placements: m.config.Placements, SettingsOpen: m.settingsReady && m.settings.IsVisible(), Decoration: m.config.decoration(), Sites: []SiteView{}, Manual: m.config.Manual, Preferences: map[string]bool{"allDesktops": true, "onTop": true}}
+	if m.panelReady {
+		result.Preferences = panelPreferences(m.panel)
+	}
+	if m.configError != nil {
+		result.Error = "Cannot read saved Sites. Configuration has not been overwritten: " + m.configError.Error()
+	}
+	for _, site := range orderedSites(m.config, positions) {
+		r := items[site.ID]
+		prefix, name := displayPath(site.Path)
+		result.Sites = append(result.Sites, SiteView{site, prefix, name, states[site.ID], positions[site.ID], r.Git})
+	}
+	return result
+}
+func (m *siteManager) broadcast() {
+	if !m.panelReady {
+		return
+	}
+	snapshot := m.snapshot()
+	m.app.Event.Emit("devjay:snapshot", snapshot)
+}
+func (m *siteManager) activate(id string) {
+	r := m.runtime[id]
+	if r == nil || !r.Ready {
+		return
+	}
+	// Focus is transient and cannot reliably confirm a desktop switch.
+	// Request activation without treating a later focus sample as a failure.
+	focusSite(r.Window)
+	m.broadcast()
+}
+func (m *siteManager) save(c SiteConfig) error {
+	if m.configError != nil {
+		return errors.New("Saved Site configuration needs repair before making changes.")
+	}
+	if err := saveSites(siteConfigPath(), c); err != nil {
+		return fmt.Errorf("Could not save Sites: %w", err)
+	}
+	m.config = c
+	return nil
+}
+
+// Add-site feedback belongs to the Settings drop area, not workspace windows.
+func (m *siteManager) siteError(message string) {
+	m.app.Event.Emit("devjay:site-error", message)
+}
+
+func (m *siteManager) add(path string) {
+	site, err := newSite(path, m.config.Sites)
+	if err != nil {
+		m.siteError(err.Error())
+		return
+	}
+	c := m.config
+	c.Sites = append(slices.Clone(c.Sites), site)
+	c.Order = append(slices.Clone(c.Order), site.ID)
+	if err = m.save(c); err != nil {
+		m.siteError(err.Error())
+		return
+	}
+	m.createWindow(site)
+	m.notice("Site added. Place its window on the desired desktop.", false)
+	m.broadcast()
+}
+func (m *siteManager) remove(id string) {
+	r := m.runtime[id]
+	if r == nil {
+		return
+	}
+	c := m.config
+	c.Sites = slices.DeleteFunc(slices.Clone(c.Sites), func(s Site) bool { return s.ID == id })
+	c.Order = slices.DeleteFunc(slices.Clone(c.Order), func(s string) bool { return s == id })
+	if c.Placements != nil {
+		c.Placements = maps.Clone(c.Placements)
+		delete(c.Placements, id)
+	}
+	if err := m.save(c); err != nil {
+		m.notice(err.Error(), true)
+		return
+	}
+	m.mu.Lock()
+	delete(m.runtime, id)
+	m.mu.Unlock()
+	if r.Cancel != nil {
+		r.Cancel()
+	}
+	if r.Ready {
+		saveWindowLayout(r.Window)
+	}
+	r.Window.Close()
+	m.notice("Site removed. Its folder is unchanged.", false)
+	m.broadcast()
+}
+func (m *siteManager) browse() {
+	if m.browsing {
+		return
+	}
+	m.browsing = true
+	go func() {
+		path, err := m.app.Dialog.OpenFile().SetTitle("Add a DevJay Site").SetButtonText("Add Site").CanChooseDirectories(true).CanChooseFiles(false).CanCreateDirectories(false).AttachToWindow(m.settings).PromptForSingleSelection()
+		m.send(func() {
+			m.browsing = false
+			if err != nil {
+				m.siteError("Could not open the folder picker.")
+			} else if path != "" {
+				m.add(path)
+			} else {
+				m.notice("No folder selected.", false)
+			}
+		})
+	}()
+}
+func (m *siteManager) registerEvents() {
+	m.app.Event.On("devjay:reset-placements", func(e *application.CustomEvent) {
+		if e.Sender != "settings" {
+			return
+		}
+		m.send(func() {
+			c := m.config
+			c.Placements = nil
+			if err := m.save(c); err != nil {
+				m.notice(err.Error(), true)
+			}
+			m.broadcast()
+		})
+	})
+	m.app.Event.On("devjay:layout", func(e *application.CustomEvent) {
+		if e.Sender != "settings" {
+			return
+		}
+		value, ok := e.Data.(string)
+		if !ok || !validLayout(value) {
+			return
+		}
+		m.send(func() {
+			c := m.config
+			if c.layout() == value {
+				return
+			}
+			c.Layout = value
+			if err := m.save(c); err != nil {
+				m.notice(err.Error(), true)
+				m.broadcast()
+				return
+			}
+			fitControlPanel(m.panel, c)
+			m.broadcast()
+		})
+	})
+	m.app.Event.On("devjay:placements", func(e *application.CustomEvent) {
+		if e.Sender != "control-panel" {
+			return
+		}
+		data, err := json.Marshal(e.Data)
+		if err != nil {
+			return
+		}
+		var positions map[string]CardPlacement
+		if json.Unmarshal(data, &positions) != nil {
+			return
+		}
+		m.send(func() {
+			if !m.settings.IsVisible() || m.config.layout() != "custom" || !validPlacements(m.config.Sites, positions) {
+				m.broadcast()
+				return
+			}
+			c := m.config
+			c.Placements = positions
+			c.Manual = true
+			if err := m.save(c); err != nil {
+				m.notice(err.Error(), true)
+			}
+			m.broadcast()
+		})
+	})
+	m.app.Event.On("devjay:decoration", func(e *application.CustomEvent) {
+		if e.Sender != "settings" {
+			return
+		}
+		value, ok := e.Data.(string)
+		if !ok || (value != "none" && value != "minimal" && value != "normal") {
+			return
+		}
+		m.send(func() {
+			c := m.config
+			c.Decoration = value
+			if err := m.save(c); err != nil {
+				m.notice(err.Error(), true)
+				m.broadcast()
+				return
+			}
+			m.panel.SetFrameless(value != "normal")
+			m.panel.SetTitle("DevJay")
+			for _, r := range m.runtime {
+				r.Window.SetFrameless(value != "normal")
+				r.Window.SetTitle("DevJay Site · " + filepath.Base(r.Site.Path))
+			}
+			m.notice("Window decoration saved.", false)
+			m.broadcast()
+		})
+	})
+
+	m.app.Event.On("devjay:hello", func(e *application.CustomEvent) { m.send(m.broadcast) })
+	m.app.Event.On("devjay:settings-open", func(e *application.CustomEvent) {
+		m.send(func() {
+			if e.Sender == "control-panel" {
+				m.openSettings()
+				return
+			}
+			for id := range m.runtime {
+				if e.Sender == "site-"+id {
+					m.openSettings()
+					return
+				}
+			}
+		})
+	})
+	m.app.Event.On("devjay:settings-close", func(e *application.CustomEvent) {
+		if e.Sender == "settings" {
+			m.settings.Hide()
+			m.send(m.broadcast)
+		}
+	})
+	m.app.Event.On("devjay:activate", func(e *application.CustomEvent) {
+		if e.Sender != "control-panel" && e.Sender != "settings" {
+			return
+		}
+		if id, ok := e.Data.(string); ok {
+			m.send(func() { m.activate(id) })
+		}
+	})
+	m.app.Event.On("devjay:add", func(e *application.CustomEvent) {
+		if e.Sender != "settings" {
+			return
+		}
+		if path, ok := e.Data.(string); ok {
+			m.send(func() { m.add(path) })
+		}
+	})
+	m.app.Event.On("devjay:browse", func(e *application.CustomEvent) {
+		if e.Sender == "settings" {
+			m.send(m.browse)
+		}
+	})
+	m.app.Event.On("devjay:remove", func(e *application.CustomEvent) {
+		if e.Sender != "settings" {
+			return
+		}
+		if id, ok := e.Data.(string); ok {
+			m.send(func() { m.remove(id) })
+		}
+	})
+	for _, pref := range []string{"allDesktops", "onTop"} {
+		m.app.Event.On("devjay:"+pref, func(e *application.CustomEvent) {
+			if e.Sender != "settings" {
+				return
+			}
+			if value, ok := e.Data.(bool); ok {
+				m.send(func() { setPanelPreference(m.panel, pref, value); m.syncSettings() })
+			}
+		})
+	}
+	m.app.Event.On("devjay:order", func(e *application.CustomEvent) {
+		if e.Sender != "settings" && e.Sender != "control-panel" {
+			return
+		}
+		data, err := json.Marshal(e.Data)
+		if err != nil {
+			return
+		}
+		var ids []string
+		if json.Unmarshal(data, &ids) != nil {
+			return
+		}
+		m.send(func() {
+			if e.Sender == "control-panel" && !m.settings.IsVisible() {
+				m.broadcast()
+				return
+			}
+			if !validOrder(m.config.Sites, ids) {
+				m.notice("The Site list changed. Try dragging again.", true)
+				m.broadcast()
+				return
+			}
+			c := m.config
+			c.Manual = true
+			c.Order = ids
+			if err := m.save(c); err != nil {
+				m.notice(err.Error(), true)
+				return
+			}
+			m.notice("Custom card order saved.", false)
+			m.broadcast()
+		})
+	})
+	m.app.Event.On("devjay:sorting", func(e *application.CustomEvent) {
+		if e.Sender != "settings" {
+			return
+		}
+		value, ok := e.Data.(string)
+		if !ok || (value != "name" && value != "manual") {
+			return
+		}
+		m.send(func() {
+			c := m.config
+			c.Manual = value == "manual"
+			if err := m.save(c); err != nil {
+				m.notice(err.Error(), true)
+				return
+			}
+			m.notice("Sorting saved.", false)
+			m.broadcast()
+		})
+	})
+}
+func (m *siteManager) shutdown() {
+	m.mu.Lock()
+	items := make([]siteRuntime, 0, len(m.runtime))
+	for _, r := range m.runtime {
+		items = append(items, *r)
+	}
+	m.mu.Unlock()
+	saveWindowLayout(m.panel)
+	for _, r := range items {
+		if r.Cancel != nil {
+			r.Cancel()
+		}
+		if r.Ready {
+			saveWindowLayout(r.Window)
+		}
+	}
+}
