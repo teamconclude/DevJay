@@ -5,6 +5,14 @@
 
 typedef struct { double x, y, width, height; } DPRect;
 
+// Floating windows may intentionally overlap the Dock's reserved strip.
+// Keep the menu bar excluded, but anchor to the physical display's other edges.
+static inline DPRect dp_placement_bounds(DPRect screen, DPRect visible) {
+    double top = fmin(screen.y + screen.height, visible.y + visible.height);
+    screen.height = top - screen.y;
+    return screen;
+}
+
 static inline DPRect dp_clamp(DPRect frame, DPRect visible) {
     double inset = 8;
     if (visible.width <= 2 * inset || visible.height <= 2 * inset) inset = 0;
@@ -19,8 +27,8 @@ static inline DPRect dp_clamp(DPRect frame, DPRect visible) {
 
 // AppKit coordinates grow upward. Prefer the left/top offsets unless a window
 // sits within 10% of the usable width/height of the nearer right/bottom edge.
-// A negative gap can occur when a user places it over the Dock reserved area;
-// that still counts as near the edge, and the final clamp keeps it usable.
+// A negative gap still counts as near the edge; the final clamp brings an
+// off-screen window back inside the display.
 static inline DPRect dp_reanchor(DPRect frame, DPRect old, DPRect next) {
     if (old.width <= 0 || old.height <= 0) return dp_clamp(frame, next);
     double left = frame.x - old.x, right = old.x + old.width - frame.x - frame.width;

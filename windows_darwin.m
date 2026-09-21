@@ -2,6 +2,76 @@
 #import <objc/runtime.h>
 #import <WebKit/WebKit.h>
 
+// WebKit's CSS hover tracking can stop when its window is inactive. An
+// always-active AppKit tracking area reports position without activating it.
+@interface DevJayHoverTracker : NSObject {
+@public
+    WKWebView *view; // Owned by the window; this tracker is associated with it.
+    NSPoint position;
+    NSUInteger revision;
+    BOOL pending;
+}
+- (void)publish;
+@end
+
+@implementation DevJayHoverTracker
+- (void)publish {
+    if (pending) return;
+    pending = YES;
+    NSUInteger sent = revision;
+    NSString *script = [NSString stringWithFormat:
+        @"window.dispatchEvent(new CustomEvent('devjay:native-hover',{detail:{x:%.17g,y:%.17g}}))",
+        position.x, position.y];
+    // Keep the view alive until delivery finishes, including during closing.
+    WKWebView *target = view;
+    [target evaluateJavaScript:script completionHandler:^(id result, NSError *error) {
+        pending = NO;
+        if (sent != revision && target.window != nil) [self publish];
+    }];
+}
+- (void)mouseMoved:(NSEvent *)event {
+    NSRect bounds = view.bounds;
+    if (bounds.size.width <= 0 || bounds.size.height <= 0) return;
+    NSPoint point = [view convertPoint:event.locationInWindow fromView:nil];
+    position.x = (point.x - NSMinX(bounds)) / bounds.size.width;
+    position.y = view.isFlipped ? (point.y - NSMinY(bounds)) / bounds.size.height
+                               : (NSMaxY(bounds) - point.y) / bounds.size.height;
+    revision++;
+    [self publish];
+}
+- (void)mouseEntered:(NSEvent *)event { [self mouseMoved:event]; }
+- (void)mouseExited:(NSEvent *)event {
+    position = NSMakePoint(-1, -1);
+    revision++;
+    [self publish];
+}
+@end
+
+static WKWebView *devjay_webview(NSView *view) {
+    if ([view isKindOfClass:WKWebView.class]) return (WKWebView *)view;
+    for (NSView *child in view.subviews) {
+        WKWebView *webview = devjay_webview(child);
+        if (webview) return webview;
+    }
+    return nil;
+}
+
+void devjay_track_hover(void *pointer) {
+    NSWindow *window = (NSWindow *)pointer;
+    WKWebView *view = devjay_webview(window.contentView);
+    static const char trackerKey;
+    if (!view || objc_getAssociatedObject(view, &trackerKey)) return;
+    DevJayHoverTracker *tracker = [[[DevJayHoverTracker alloc] init] autorelease];
+    tracker->view = view;
+    objc_setAssociatedObject(view, &trackerKey, tracker, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    NSTrackingArea *area = [[NSTrackingArea alloc] initWithRect:NSZeroRect
+        options:NSTrackingMouseEnteredAndExited | NSTrackingMouseMoved | NSTrackingActiveAlways | NSTrackingInVisibleRect
+        owner:tracker userInfo:nil];
+    [view addTrackingArea:area];
+    [area release];
+    window.acceptsMouseMovedEvents = YES;
+}
+
 // Called on the AppKit main thread through application.InvokeSync.
 unsigned int devjay_window_state(void *pointer) {
     NSWindow *window = (NSWindow *)pointer;
@@ -10,6 +80,7 @@ unsigned int devjay_window_state(void *pointer) {
     if (window.isOnActiveSpace && window.isVisible && !window.isMiniaturized) flags |= 1;
     if (window.isKeyWindow && NSApp.isActive) flags |= 2;
     if (window.isMiniaturized) flags |= 4;
+    if (window.isVisible) flags |= 8;
     return flags;
 }
 

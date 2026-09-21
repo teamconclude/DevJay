@@ -3,8 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
-	"fmt"
 	"maps"
 	"path/filepath"
 	"slices"
@@ -50,6 +48,7 @@ type siteManager struct {
 	configError                                              error
 	runtime                                                  map[string]*siteRuntime
 	commands                                                 chan func()
+	lastSnapshot                                             string
 }
 
 func newSiteManager(app *application.App, c SiteConfig, err error) *siteManager {
@@ -77,12 +76,9 @@ func (m *siteManager) run() {
 				fn()
 			}
 		case <-tick.C:
-			m.broadcast()
+			m.publishSnapshot(false)
 		}
 	}
-}
-func (m *siteManager) notice(text string, failed bool) {
-	m.app.Event.Emit("devjay:notice", map[string]any{"text": text, "error": failed})
 }
 func (m *siteManager) syncSettings() {
 	if !m.panelReady {
@@ -142,18 +138,15 @@ func (m *siteManager) snapshot() appSnapshot {
 		items[id] = *r
 	}
 	m.mu.Unlock()
-	positions := map[string]DesktopPosition{}
-	states := map[string]cardState{}
-	for id, r := range items {
-		if r.Ready {
-			positions[id] = desktopPosition(r.Window)
-			states[id] = windowState(r.Window, id)
-		}
-	}
-	result := appSnapshot{Layout: m.config.layout(), Placements: m.config.Placements, SettingsOpen: m.settingsReady && m.settings.IsVisible(), Decoration: m.config.decoration(), Sites: []SiteView{}, Manual: m.config.Manual, Preferences: map[string]bool{"allDesktops": true, "onTop": true}}
+	var panel, settings *application.WebviewWindow
 	if m.panelReady {
-		result.Preferences = panelPreferences(m.panel)
+		panel = m.panel
 	}
+	if m.settingsReady {
+		settings = m.settings
+	}
+	positions, states, preferences, settingsOpen := readWindowSnapshot(items, panel, settings)
+	result := appSnapshot{Layout: m.config.layout(), Placements: m.config.Placements, SettingsOpen: settingsOpen, Decoration: m.config.decoration(), Sites: []SiteView{}, Manual: m.config.Manual, Preferences: preferences}
 	if m.configError != nil {
 		result.Error = "Cannot read saved Sites. Configuration has not been overwritten: " + m.configError.Error()
 	}
@@ -164,11 +157,28 @@ func (m *siteManager) snapshot() appSnapshot {
 	}
 	return result
 }
-func (m *siteManager) broadcast() {
+
+// Poll timestamps alone do not warrant waking every web view. Explicit UI
+// requests still receive a snapshot, including rejected optimistic edits.
+func snapshotSignature(snapshot appSnapshot) string {
+	snapshot.Sites = slices.Clone(snapshot.Sites)
+	for i := range snapshot.Sites {
+		snapshot.Sites[i].Git.Checked = ""
+	}
+	data, _ := json.Marshal(snapshot)
+	return string(data)
+}
+func (m *siteManager) broadcast() { m.publishSnapshot(true) }
+func (m *siteManager) publishSnapshot(force bool) {
 	if !m.panelReady {
 		return
 	}
 	snapshot := m.snapshot()
+	signature := snapshotSignature(snapshot)
+	if !force && signature == m.lastSnapshot {
+		return
+	}
+	m.lastSnapshot = signature
 	m.app.Event.Emit("devjay:snapshot", snapshot)
 }
 func (m *siteManager) activate(id string) {
@@ -183,16 +193,16 @@ func (m *siteManager) activate(id string) {
 }
 func (m *siteManager) save(c SiteConfig) error {
 	if m.configError != nil {
-		return errors.New("Saved Site configuration needs repair before making changes.")
+		return userMessage("Saved Site configuration needs repair before making changes.")
 	}
 	if err := saveSites(siteConfigPath(), c); err != nil {
-		return fmt.Errorf("Could not save Sites: %w", err)
+		return userMessage("Could not save Sites: " + err.Error())
 	}
 	m.config = c
 	return nil
 }
 
-// Add-site feedback belongs to the Settings drop area, not workspace windows.
+// Settings feedback stays in the drop area; successful actions silently clear it.
 func (m *siteManager) siteError(message string) {
 	m.app.Event.Emit("devjay:site-error", message)
 }
@@ -211,7 +221,7 @@ func (m *siteManager) add(path string) {
 		return
 	}
 	m.createWindow(site)
-	m.notice("Site added. Place its window on the desired desktop.", false)
+	m.siteError("")
 	m.broadcast()
 }
 func (m *siteManager) remove(id string) {
@@ -227,7 +237,7 @@ func (m *siteManager) remove(id string) {
 		delete(c.Placements, id)
 	}
 	if err := m.save(c); err != nil {
-		m.notice(err.Error(), true)
+		m.siteError(err.Error())
 		return
 	}
 	m.mu.Lock()
@@ -240,7 +250,7 @@ func (m *siteManager) remove(id string) {
 		saveWindowLayout(r.Window)
 	}
 	r.Window.Close()
-	m.notice("Site removed. Its folder is unchanged.", false)
+	m.siteError("")
 	m.broadcast()
 }
 func (m *siteManager) browse() {
@@ -257,7 +267,7 @@ func (m *siteManager) browse() {
 			} else if path != "" {
 				m.add(path)
 			} else {
-				m.notice("No folder selected.", false)
+				m.siteError("")
 			}
 		})
 	}()
@@ -271,7 +281,7 @@ func (m *siteManager) registerEvents() {
 			c := m.config
 			c.Placements = nil
 			if err := m.save(c); err != nil {
-				m.notice(err.Error(), true)
+				m.siteError(err.Error())
 			}
 			m.broadcast()
 		})
@@ -291,7 +301,7 @@ func (m *siteManager) registerEvents() {
 			}
 			c.Layout = value
 			if err := m.save(c); err != nil {
-				m.notice(err.Error(), true)
+				m.siteError(err.Error())
 				m.broadcast()
 				return
 			}
@@ -320,7 +330,7 @@ func (m *siteManager) registerEvents() {
 			c.Placements = positions
 			c.Manual = true
 			if err := m.save(c); err != nil {
-				m.notice(err.Error(), true)
+				m.siteError(err.Error())
 			}
 			m.broadcast()
 		})
@@ -337,7 +347,7 @@ func (m *siteManager) registerEvents() {
 			c := m.config
 			c.Decoration = value
 			if err := m.save(c); err != nil {
-				m.notice(err.Error(), true)
+				m.siteError(err.Error())
 				m.broadcast()
 				return
 			}
@@ -347,7 +357,7 @@ func (m *siteManager) registerEvents() {
 				r.Window.SetFrameless(value != "normal")
 				r.Window.SetTitle("DevJay Site · " + filepath.Base(r.Site.Path))
 			}
-			m.notice("Window decoration saved.", false)
+			m.siteError("")
 			m.broadcast()
 		})
 	})
@@ -430,7 +440,7 @@ func (m *siteManager) registerEvents() {
 				return
 			}
 			if !validOrder(m.config.Sites, ids) {
-				m.notice("The Site list changed. Try dragging again.", true)
+				m.siteError("The Site list changed. Try dragging again.")
 				m.broadcast()
 				return
 			}
@@ -438,10 +448,10 @@ func (m *siteManager) registerEvents() {
 			c.Manual = true
 			c.Order = ids
 			if err := m.save(c); err != nil {
-				m.notice(err.Error(), true)
+				m.siteError(err.Error())
 				return
 			}
-			m.notice("Custom card order saved.", false)
+			m.siteError("")
 			m.broadcast()
 		})
 	})
@@ -457,10 +467,10 @@ func (m *siteManager) registerEvents() {
 			c := m.config
 			c.Manual = value == "manual"
 			if err := m.save(c); err != nil {
-				m.notice(err.Error(), true)
+				m.siteError(err.Error())
 				return
 			}
-			m.notice("Sorting saved.", false)
+			m.siteError("")
 			m.broadcast()
 		})
 	})

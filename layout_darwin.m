@@ -9,6 +9,10 @@ static const char layoutObserverKey;
 static DPRect dp_rect(NSRect r) { return (DPRect){r.origin.x, r.origin.y, r.size.width, r.size.height}; }
 static NSRect ns_rect(DPRect r) { return NSMakeRect(r.x, r.y, r.width, r.height); }
 
+static NSRect placement_bounds(NSScreen *screen) {
+    return ns_rect(dp_placement_bounds(dp_rect(screen.frame), dp_rect(screen.visibleFrame)));
+}
+
 static NSString *screen_identifier(NSScreen *screen) {
     NSNumber *number = screen.deviceDescription[@"NSScreenNumber"];
     if (number == nil) return @"";
@@ -24,7 +28,7 @@ static NSScreen *nearest_screen(NSRect frame) {
     if (screens.count == 0) return nil;
     DPRect *rects = calloc(screens.count, sizeof(DPRect));
     if (rects == NULL) return screens.firstObject;
-    for (NSUInteger i = 0; i < screens.count; i++) rects[i] = dp_rect(screens[i].visibleFrame);
+    for (NSUInteger i = 0; i < screens.count; i++) rects[i] = dp_rect(placement_bounds(screens[i]));
     NSUInteger index = dp_nearest_screen(dp_rect(frame), rects, screens.count);
     free(rects);
     return screens[index];
@@ -40,7 +44,7 @@ static NSScreen *nearest_screen(NSRect frame) {
     NSString *failedLaunchSpace;
     NSTimer *timer;
     NSString *lastScreen;
-    NSRect lastFrame, lastVisible;
+    NSRect lastFrame, lastBounds;
     BOOL hasPlacement;
 }
 - (void)save;
@@ -60,7 +64,7 @@ static NSScreen *nearest_screen(NSRect frame) {
         for (NSScreen *candidate in NSScreen.screens) {
             if ([screen_identifier(candidate) isEqual:lastScreen]) { previousScreen = candidate; break; }
         }
-        if (!previousScreen || !NSEqualRects(previousScreen.visibleFrame, lastVisible)) {
+        if (!previousScreen || !NSEqualRects(placement_bounds(previousScreen), lastBounds)) {
             [self screensChanged:nil];
             return;
         }
@@ -72,7 +76,7 @@ static NSScreen *nearest_screen(NSRect frame) {
     if (!screen) return;
     [lastScreen release]; lastScreen = [screen_identifier(screen) copy];
     lastFrame = window.frame;
-    lastVisible = screen.visibleFrame;
+    lastBounds = placement_bounds(screen);
     hasPlacement = YES;
     NSMutableDictionary *state = [NSMutableDictionary dictionaryWithDictionary:@{
         @"frame": NSStringFromRect(window.frame),
@@ -121,6 +125,7 @@ static NSScreen *nearest_screen(NSRect frame) {
 }
 - (void)windowMoved:(NSNotification *)notification { [self save]; }
 - (void)screensChanged:(NSNotification *)notification {
+    dp_invalidate_space_cache();
     BOOL wasAdjusting = adjusting;
     adjusting = YES;
     NSScreen *screen = nil;
@@ -130,16 +135,17 @@ static NSScreen *nearest_screen(NSRect frame) {
     screen = screen ?: window.screen ?: nearest_screen(window.frame);
     if (screen) {
         DPRect frame = hasPlacement
-            ? dp_reanchor(dp_rect(lastFrame), dp_rect(lastVisible), dp_rect(screen.visibleFrame))
-            : dp_clamp(dp_rect(window.frame), dp_rect(screen.visibleFrame));
+            ? dp_reanchor(dp_rect(lastFrame), dp_rect(lastBounds), dp_rect(placement_bounds(screen)))
+            : dp_clamp(dp_rect(window.frame), dp_rect(placement_bounds(screen)));
         [window setFrame:ns_rect(frame) display:YES];
         [lastScreen release]; lastScreen = [screen_identifier(screen) copy];
-        lastFrame = window.frame; lastVisible = screen.visibleFrame; hasPlacement = YES;
+        lastFrame = window.frame; lastBounds = placement_bounds(screen); hasPlacement = YES;
     }
     adjusting = wasAdjusting;
     if (screen) [self save];
 }
 - (void)spaceChanged:(NSNotification *)notification {
+    dp_invalidate_space_cache();
     // Space membership can change without changing a window's frame.
     [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(save) object:nil];
     [self performSelector:@selector(save) withObject:nil afterDelay:0.5];
@@ -176,21 +182,29 @@ void devjay_restore_layout(void *pointer, const char *identifier) {
                 for (NSScreen *candidate in NSScreen.screens) {
                     if ([screen_identifier(candidate) isEqual:state[@"screen"]]) { screen = candidate; break; }
                 }
-                NSString *oldBounds = [state[@"visibleFrame"] isKindOfClass:NSString.class]
-                    ? state[@"visibleFrame"] : state[@"screenFrame"];
+                // Existing records contain both rectangles. Reconstruct bounds
+                // without the Dock exclusion, including for pre-fix placements.
+                NSString *oldBounds = [state[@"screenFrame"] isKindOfClass:NSString.class]
+                    ? state[@"screenFrame"] : state[@"visibleFrame"];
                 if (screen && [oldBounds isKindOfClass:NSString.class]) {
                     NSRect oldScreen = NSRectFromString(oldBounds);
                     if (isfinite(oldScreen.origin.x) && isfinite(oldScreen.origin.y) &&
                         isfinite(oldScreen.size.width) && isfinite(oldScreen.size.height) &&
                         oldScreen.size.width > 0 && oldScreen.size.height > 0) {
-                        frame = ns_rect(dp_reanchor(dp_rect(frame), dp_rect(oldScreen), dp_rect(screen.visibleFrame)));
+                        if ([state[@"visibleFrame"] isKindOfClass:NSString.class]) {
+                            NSRect visible = NSRectFromString(state[@"visibleFrame"]);
+                            if (isfinite(NSMaxY(visible)) && visible.size.height > 0) {
+                                oldScreen = ns_rect(dp_placement_bounds(dp_rect(oldScreen), dp_rect(visible)));
+                            }
+                        }
+                        frame = ns_rect(dp_reanchor(dp_rect(frame), dp_rect(oldScreen), dp_rect(placement_bounds(screen))));
                     }
                 }
             }
         }
     }
     screen = screen ?: nearest_screen(frame);
-    if (screen) [window setFrame:ns_rect(dp_clamp(dp_rect(frame), dp_rect(screen.visibleFrame))) display:YES];
+    if (screen) [window setFrame:ns_rect(dp_clamp(dp_rect(frame), dp_rect(placement_bounds(screen)))) display:YES];
     DevJayLayoutObserver *observer = [[[DevJayLayoutObserver alloc] init] autorelease];
     observer->window = window;
     observer->adjusting = YES;
@@ -222,7 +236,7 @@ void devjay_fit_panel(void *pointer, int mode, int count, int header, double ext
     NSWindow *window = (NSWindow *)pointer;
     NSScreen *screen = window.screen ?: nearest_screen(window.frame);
     if (!window || !screen) return;
-    NSRect available = screen.visibleFrame;
+    NSRect available = placement_bounds(screen);
     NSRect chrome = [window frameRectForContentRect:NSMakeRect(0, 0, 0, 0)];
     DPRect size = dp_panel_size(mode, count, available.size.width - 16 - chrome.size.width,
                                available.size.height - 16 - chrome.size.height, header, extentWidth, extentHeight);

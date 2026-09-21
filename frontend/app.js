@@ -2,6 +2,8 @@ import { Events, Window } from '/wails/runtime.js';
 import { cardStatus } from './card-status.js';
 import { installPanelDrag } from './panel-drag.js';
 import { installDragOriginGuard } from './drag-origin.js';
+import { installCardHover } from './card-hover.js';
+installCardHover(window, document);
 installDragOriginGuard(window, document.documentElement);
 const params = new URLSearchParams(location.search);
 const siteID = params.get('site');
@@ -20,7 +22,14 @@ function details(site, parent) {
   if (parent.dataset.details === signature) return;
   parent.dataset.details = signature;
   parent.replaceChildren();
-  parent.append(pathLabel(site), el('div', 'branch', site.git.branch || 'Folder'));
+  const heading = el('div', 'card-heading');
+  const title = siteID ? el('div', 'card-title') : button('', () => emit('activate', site.id), 'card-title');
+  title.append(pathLabel(site), el('div', 'branch', site.git.branch || 'Folder'));
+  title.title = siteID ? 'Drag to move this Site' : 'Go to this Site · Drag to move the panel';
+  if (!siteID) title.setAttribute('aria-label', `Activate ${site.path}, ${site.git.branch || 'folder'}`);
+  const gear = button('⚙', () => emit('settings-open'), 'card-settings');
+  gear.setAttribute('aria-label', `Settings for ${site.name}`); gear.title = 'Settings';
+  heading.append(title, gear); parent.append(heading);
   const status = cardStatus(site.git);
   const body = el('div', 'card-status');
   function line(text, tone, symbol, title = text) {
@@ -28,22 +37,27 @@ function details(site, parent) {
     const icon = el('span', 'status-symbol', symbol); icon.setAttribute('aria-hidden', 'true');
     row.append(icon, el('span', '', text)); row.title = title; body.append(row);
   }
-  function metrics(label, values) {
+  function metrics(label, values, title) {
     if (!values.length) return;
     const row = el('div', 'metric-row copyable'); row.append(el('span', 'metric-label', label));
+    if (title) { row.classList.add('review-row'); row.title = title; row.setAttribute('aria-label', `${label}: ${title}`); }
     for (const item of values) {
       const badge = el('span', `metric ${item.tone}`); badge.title = item.title; badge.setAttribute('aria-label', item.title);
       const symbol = el('span', 'metric-symbol', item.symbol); symbol.setAttribute('aria-hidden', 'true');
-      badge.append(symbol);
+      if (item.symbol) badge.append(symbol);
       if (item.value !== '') badge.append(el('strong', '', item.value));
       badge.append(el('span', 'metric-unit', item.label)); row.append(badge);
     }
     body.append(row);
   }
-  if (status.alert) line(status.alert.text, status.alert.tone, status.alert.symbol, site.git.summary);
+  if (status.alert) line(status.alert.text, status.alert.tone, status.alert.symbol, site.git.localNote || site.git.summary);
   if (status.quiet) line(status.quiet, 'good quiet-status', '✓');
   metrics('Local', status.local); metrics('Remote', status.remote);
-  if (status.pr) line(status.pr, `pr-status ${status.prTone}`, status.prTone === 'good' ? '✓' : '⑂', site.git.github);
+  if (status.pr) line(status.pr, `pr-status ${status.prTone}`, status.prTone === 'good' ? '✓' : '⑂', status.prTitle);
+  for (const review of status.reviews) {
+    metrics(review.label, review.values, review.title);
+    if (review.note) line(review.note, 'freshness warning', '◷', review.title);
+  }
   if (status.freshness) line(status.freshness, 'freshness muted', '◷', [site.git.remoteNote, site.git.remoteChecked ? `Last checked ${new Date(site.git.remoteChecked).toLocaleString()}` : ''].filter(Boolean).join('\n'));
   parent.append(body);
 }
@@ -90,7 +104,6 @@ if (settings) {
   document.addEventListener('keydown', e => { if (e.key === 'Escape') emit('settings-close'); });
 } else if (siteID) {
   document.body.className = 'workspace'; document.body.dataset.decoration = 'none'; root.title = 'Drag to move this Site';
-  root.addEventListener('contextmenu', e => { e.preventDefault(); emit('settings-open'); });
   const header = el('header');
   const grip = el('span', 'grip', '⠿'); grip.title = 'Drag to move this Site';
   const gear = button('⚙', () => emit('settings-open'), 'gear'); gear.setAttribute('aria-label', 'Settings'); gear.title = 'Settings';
@@ -99,7 +112,7 @@ if (settings) {
   list = el('div', 'site-detail'); root.append(header, list, notice);
 } else {
   document.body.className = 'strip'; document.body.dataset.decoration = 'none';
-  root.addEventListener('contextmenu', e => { e.preventDefault(); emit('settings-open'); }); const header = el('header');
+  const header = el('header');
   const gear = button('⚙', () => emit('settings-open'), 'gear'); gear.setAttribute('aria-label', 'Settings'); gear.title = 'Settings';
   const grip = el('span', 'grip', '⠿'); grip.title = 'DevJay · Drag to move';
   const close = button('×', () => Window.Close(), 'close-window'); close.setAttribute('aria-label', 'Quit DevJay'); close.title = 'Quit DevJay';
@@ -239,17 +252,20 @@ function render(state) {
     const site = state.sites.find(s => s.id === siteID); if (!site) return;
     details(site, list); root.title = `${site.path}\n${site.position.label || 'Desktop unknown'}\nDrag to move this Site`;
   } else {
-    if (!state.sites.length) { list.replaceChildren(button('Add your first Site in Settings', () => emit('settings-open'), 'empty')); return; }
+    if (!state.sites.length) {
+      if (!list.firstElementChild?.classList.contains('empty')) list.replaceChildren(button('Add your first Site in Settings', () => emit('settings-open'), 'empty'));
+      return;
+    }
     for (const child of [...list.children]) if (!state.sites.some(s => s.id === child.dataset.id)) child.remove();
     state.sites.forEach((site, index) => {
       let card = [...list.children].find(n => n.dataset.id === site.id);
-      if (!card) { card = button('', () => emit('activate', site.id), 'card'); card.dataset.id = site.id; }
+      if (!card) { card = el('div', 'card'); card.dataset.id = site.id; }
       const position = cardPlacements(state)[site.id];
       card.style.left = free ? `${position.x}px` : '';
       card.style.top = free ? `${position.y}px` : '';
       card.style.zIndex = free ? position.z : '';
       card.classList.toggle('visible', site.window.onDesktop);
-      card.setAttribute('aria-label', `Activate ${site.path}, ${site.git.branch || 'folder'}, ${site.git.summary}${site.window.onDesktop ? ', visible on current desktop' : ''}`);
+      card.setAttribute('aria-label', `Activate ${site.path}, ${site.git.branch || 'folder'}, ${site.git.localNote || site.git.summary}${site.window.onDesktop ? ', visible on current desktop' : ''}`);
       details(site, card);
       let handle = card.querySelector('.card-move-handle');
       if (!handle) {
@@ -260,7 +276,7 @@ function render(state) {
         card.append(handle);
       }
       handle.hidden = !state.settingsOpen;
-      card.title = [site.window.onDesktop ? 'Visible on current desktop' : '', site.path, site.git.branch, site.git.summary, site.git.github, site.git.remoteNote, site.position.label, site.git.tracking ? `Tracking ${site.git.tracking}` : '', site.git.remoteChecked ? `Remote checked ${new Date(site.git.remoteChecked).toLocaleString()}` : ''].filter(Boolean).join('\n');
+      card.title = [site.window.onDesktop ? 'Visible on current desktop' : '', site.path, site.git.branch, site.git.summary, site.git.localNote, site.git.github, site.git.remoteNote, site.position.label, site.git.tracking ? `Tracking ${site.git.tracking}` : '', site.git.remoteChecked ? `Remote checked ${new Date(site.git.remoteChecked).toLocaleString()}` : ''].filter(Boolean).join('\n');
       if (list.children[index] !== card) list.insertBefore(card, list.children[index] || null);
     });
   }
@@ -268,9 +284,8 @@ function render(state) {
 if (settings) Events.On('devjay:site-error', event => {
   clearTimeout(siteErrorTimer);
   siteError.textContent = event.data;
-  siteError.hidden = false;
+  siteError.hidden = !event.data;
   siteErrorTimer = setTimeout(() => { siteError.hidden = true; siteError.textContent = ''; }, 5000);
 });
 Events.On('devjay:snapshot', event => render(event.data));
-Events.On('devjay:notice', event => { report(event.data.text, event.data.error);  });
 emit('hello');

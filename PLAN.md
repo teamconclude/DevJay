@@ -26,6 +26,21 @@ Checked items describe implemented behavior, not certification across all suppor
 
 The current product monitors and navigates; it has no checkout-update buttons. Git fetches update remote-tracking references but do not alter checked-out files or local branches. Desktop restoration uses runtime-loaded private SkyLight APIs; ordinary activation uses AppKit. DevJay uses its own application-support directory and the `io.teamconclude.devjay` bundle identifier.
 
+## Review follow-up — 21 September 2026
+
+- [x] Distinguish failed Git readings from confirmed non-repositories and missing upstreams. Keep the last complete status, PR findings, cache identity, and retry time on transient errors; show an explicit cached-status warning.
+- [x] Reserve four command slots for local work and two for network work. Wait at least a minute after a completed remote attempt before retrying.
+- [x] Reuse porcelain ahead/behind counts and cache tool discovery. Batch native snapshot reads into one main-thread visit, share display topology for 200 ms, and suppress unchanged timer broadcasts while still answering explicit UI requests.
+- [x] Preserve the empty-state button across refreshes. Keep success notices silent, remove their unused strings, and route Settings-operation errors to the Settings drop area.
+- [x] Guard failed desktop-position JSON serialization, consolidate obsolete CSS, and give user-facing validation messages an explicit type.
+- [x] Align the compiler, linker, and app bundle on macOS 13.0; use a unique temporary geometry-test binary and clarify which quit controls are visible.
+
+Validation on Apple M4 Max, macOS 27.0, Go 1.27.1: `make check`, race-enabled Go tests, `staticcheck`, app build, code-signature verification, and deployment-target inspection passed. The test suite includes command failures at each local lookup, blocked network capacity, local timeout, cache/review preservation, recovery, actual branch changes, and Git ahead/behind display preferences. The binary and plist both report macOS 13.0; the dependency's duplicate `-lobjc` linker warning remains.
+
+Live smoke checks confirmed restored Site desktop labels, a control-panel click navigating to a Site, and unchanged Settings/card appearance after CSS consolidation. The existing PR report display still updates, including the earlier-commit label. This does not replace the broader display, resolution, empty-state keyboard, and hardware matrix below.
+
+A 20-read local benchmark on the development checkout measured 54.3 ms/read before and 53.9 ms/read after, effectively unchanged at this sample size. Local subprocess count fell from six to five per tracked Site reading; native snapshot main-thread visits fell from roughly 2N+2 to one. Full idle CPU, memory, and large-repository/network measurements remain open in section 2; per-window placement polling remains to detect otherwise silent Space moves.
+
 ## 1. Stabilize the current experience
 
 This is the first priority before adding more features or publishing a release.

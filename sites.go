@@ -13,6 +13,11 @@ import (
 	"strings"
 )
 
+// userMessage is complete UI copy, intentionally capitalized and punctuated.
+type userMessage string
+
+func (m userMessage) Error() string { return string(m) }
+
 type Site struct {
 	ID   string `json:"id"`
 	Path string `json:"path"`
@@ -140,20 +145,20 @@ func newSite(path string, existing []Site) (Site, error) {
 		path = filepath.Join(home, path[2:])
 	}
 	if !filepath.IsAbs(path) {
-		return Site{}, errors.New("Choose a folder or enter an absolute path (such as ~/c1).")
+		return Site{}, userMessage("Choose a folder or enter an absolute path (such as ~/c1).")
 	}
 	resolved, err := filepath.EvalSymlinks(filepath.Clean(path))
 	if err != nil {
-		return Site{}, errors.New("That folder cannot be opened.")
+		return Site{}, userMessage("That folder cannot be opened.")
 	}
 	info, err := os.Stat(resolved)
 	if err != nil || !info.IsDir() {
-		return Site{}, errors.New("Choose a folder, not a file.")
+		return Site{}, userMessage("Choose a folder, not a file.")
 	}
 	for _, s := range existing {
 		old, err := os.Stat(s.Path)
 		if resolved == s.Path || (err == nil && os.SameFile(info, old)) {
-			return Site{}, errors.New("That folder is already a Site.")
+			return Site{}, userMessage("That folder is already a Site.")
 		}
 	}
 	sum := sha256.Sum256([]byte(resolved))

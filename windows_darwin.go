@@ -5,6 +5,7 @@ package main
 #include <stdlib.h>
 unsigned int devjay_window_state(void *window);
 int devjay_prepare_panel(void *window);
+void devjay_track_hover(void *window);
 unsigned int devjay_panel_preferences(void *window);
 void devjay_all_desktops(void *window, int enabled);
 void devjay_all_windows_on_top(int enabled);
@@ -24,10 +25,37 @@ import (
 	"unsafe"
 )
 
-func windowState(window *application.WebviewWindow, name string) cardState {
-	var flags uint
-	application.InvokeSync(func() { flags = uint(C.devjay_window_state(window.NativeWindow())) })
-	return cardState{Name: name, OnDesktop: flags&1 != 0, Focused: flags&2 != 0, Minimized: flags&4 != 0}
+// Collect native state in one main-thread visit instead of one per property.
+func readWindowSnapshot(items map[string]siteRuntime, panel, settings *application.WebviewWindow) (map[string]DesktopPosition, map[string]cardState, map[string]bool, bool) {
+	positions := map[string]DesktopPosition{}
+	states := map[string]cardState{}
+	preferences := map[string]bool{"allDesktops": true, "onTop": true}
+	settingsOpen := false
+	application.InvokeSync(func() {
+		for id, item := range items {
+			if !item.Ready {
+				continue
+			}
+			pointer := item.Window.NativeWindow()
+			flags := uint(C.devjay_window_state(pointer))
+			states[id] = cardState{Name: id, OnDesktop: flags&1 != 0, Focused: flags&2 != 0, Minimized: flags&4 != 0}
+			raw := C.devjay_desktop_position(pointer)
+			if raw != nil {
+				var position DesktopPosition
+				_ = json.Unmarshal([]byte(C.GoString(raw)), &position)
+				C.free(unsafe.Pointer(raw))
+				positions[id] = position
+			}
+		}
+		if panel != nil {
+			flags := C.devjay_panel_preferences(panel.NativeWindow())
+			preferences["allDesktops"], preferences["onTop"] = flags&1 != 0, flags&2 != 0
+		}
+		if settings != nil {
+			settingsOpen = C.devjay_window_state(settings.NativeWindow())&8 != 0
+		}
+	})
+	return positions, states, preferences, settingsOpen
 }
 
 func prepareControlPanel(window *application.WebviewWindow) bool {
@@ -64,24 +92,16 @@ func focusSite(window *application.WebviewWindow) {
 func restoreWindowLayout(window *application.WebviewWindow, identifier string) {
 	value := C.CString(identifier)
 	defer C.free(unsafe.Pointer(value))
-	application.InvokeSync(func() { C.devjay_restore_layout(window.NativeWindow(), value) })
+	application.InvokeSync(func() {
+		C.devjay_restore_layout(window.NativeWindow(), value)
+		C.devjay_track_hover(window.NativeWindow())
+	})
 }
 
 func saveWindowLayout(window *application.WebviewWindow) {
 	application.InvokeSync(func() { C.devjay_save_layout(window.NativeWindow()) })
 }
 
-func desktopPosition(window *application.WebviewWindow) DesktopPosition {
-	var result DesktopPosition
-	application.InvokeSync(func() {
-		raw := C.devjay_desktop_position(window.NativeWindow())
-		if raw != nil {
-			defer C.free(unsafe.Pointer(raw))
-			_ = json.Unmarshal([]byte(C.GoString(raw)), &result)
-		}
-	})
-	return result
-}
 func showSettingsWindow(window, parent *application.WebviewWindow) {
 	application.InvokeSync(func() { C.devjay_show_settings(window.NativeWindow(), parent.NativeWindow()) })
 }

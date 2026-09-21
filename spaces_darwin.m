@@ -31,16 +31,30 @@ BOOL dp_spaces_available(void) {
     return available;
 }
 
-static NSArray *spaces(void) {
+// All callers run on the AppKit thread. Share topology across one snapshot
+// and nearby layout saves; a short lifetime also detects changes without events.
+static NSArray *cachedDisplays;
+static NSTimeInterval cachedAt;
+void dp_invalidate_space_cache(void) {
+    [cachedDisplays release]; cachedDisplays = nil;
+}
+static NSArray *display_spaces(void) {
     if (!dp_spaces_available()) return @[];
-    CFArrayRef raw = copyDisplaySpaces(connection);
-    if (!raw) return @[];
+    NSTimeInterval now = NSProcessInfo.processInfo.systemUptime;
+    if (!cachedDisplays || now - cachedAt >= 0.2) {
+        CFArrayRef raw = copyDisplaySpaces(connection);
+        dp_invalidate_space_cache();
+        if (raw) cachedDisplays = (NSArray *)raw;
+        cachedAt = now;
+    }
+    return cachedDisplays ?: @[];
+}
+static NSArray *spaces(void) {
     NSMutableArray *result = [NSMutableArray array];
-    for (NSDictionary *display in (NSArray *)raw) {
+    for (NSDictionary *display in display_spaces()) {
         NSArray *items = display[@"Spaces"];
         if ([items isKindOfClass:NSArray.class]) [result addObjectsFromArray:items];
     }
-    CFRelease(raw);
     return result;
 }
 
@@ -60,6 +74,7 @@ NSString *dp_window_space(NSWindow *window) {
 
 BOOL dp_move_to_space(NSWindow *window, NSString *uuid) {
     if (!dp_spaces_available() || window.windowNumber <= 0 || uuid.length == 0) return NO;
+    dp_invalidate_space_cache();
     uint64_t sid = 0;
     for (NSDictionary *space in spaces()) {
         if ([space[@"uuid"] isEqual:uuid]) { sid = [space[@"ManagedSpaceID"] unsignedLongLongValue]; break; }
@@ -86,17 +101,13 @@ char *devjay_desktop_position(void *pointer) {
     NSString *uuid = dp_window_space(window);
     NSInteger rank = -1;
     if (uuid && dp_spaces_available()) {
-        CFArrayRef raw = copyDisplaySpaces(connection);
-        if (raw) {
-            for (NSDictionary *display in (NSArray *)raw) {
-                NSInteger index = 0;
-                for (NSDictionary *space in display[@"Spaces"]) {
-                    if ([space[@"type"] integerValue] != 0) continue;
-                    if ([space[@"uuid"] isEqual:uuid]) rank = index;
-                    index++;
-                }
+        for (NSDictionary *display in display_spaces()) {
+            NSInteger index = 0;
+            for (NSDictionary *space in display[@"Spaces"]) {
+                if ([space[@"type"] integerValue] != 0) continue;
+                if ([space[@"uuid"] isEqual:uuid]) rank = index;
+                index++;
             }
-            CFRelease(raw);
         }
     }
     NSDictionary *value = @{@"known": @(screen != nil && rank >= 0),
@@ -104,5 +115,6 @@ char *devjay_desktop_position(void *pointer) {
         @"desktop": @(rank), @"x": @(window.frame.origin.x), @"y": @(window.frame.origin.y),
         @"label": rank < 0 ? @"Desktop unknown" : [NSString stringWithFormat:@"%@ · Desktop %ld", screen.localizedName ?: @"Display", (long)rank + 1]};
     NSData *data = [NSJSONSerialization dataWithJSONObject:value options:0 error:nil];
-    return strdup([[[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] autorelease].UTF8String);
+    NSString *json = data ? [[[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] autorelease] : nil;
+    return json.UTF8String ? strdup(json.UTF8String) : NULL;
 }

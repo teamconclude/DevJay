@@ -42,5 +42,22 @@ int main(void) {
     check(dp_reanchor((DPRect){1499,151,300,200}, (DPRect){0,0,2000,1500}, (DPRect){0,0,3000,2000}), (DPRect){1499,651,300,200});
     check(dp_reanchor((DPRect){600,60,300,200}, (DPRect){0,0,1000,600}, (DPRect){0,0,1500,900}), (DPRect){1100,60,300,200});
     check(dp_reanchor((DPRect){599,61,300,200}, (DPRect){0,0,1000,600}, (DPRect){0,0,1500,900}), (DPRect){599,361,300,200});
-    puts("Window geometry: 30 checks passed");
+    // Restoration must preserve a bottom gap even when the Dock reserves 90pt.
+    DPRect display = {0,0,3200,1800};
+    DPRect withDock = dp_placement_bounds(display, (DPRect){0,90,3200,1680});
+    DPRect hiddenDock = dp_placement_bounds(display, (DPRect){0,0,3200,1770});
+    check(withDock, (DPRect){0,0,3200,1770});
+    check(withDock, hiddenDock);
+    check(dp_reanchor((DPRect){16,10,289,173}, withDock, withDock), (DPRect){16,10,289,173});
+    check(dp_reanchor((DPRect){16,10,289,173}, hiddenDock, withDock), (DPRect){16,10,289,173});
+    DPRect bigger = dp_placement_bounds((DPRect){0,0,3840,2160}, (DPRect){0,90,3840,2040});
+    check(dp_reanchor((DPRect){2895,10,289,173}, withDock, bigger), (DPRect){3535,10,289,173});
+    // Side Docks also leave placement bounds unchanged. Menu bar stays excluded.
+    check(dp_placement_bounds(display, (DPRect){90,0,3110,1770}), withDock);
+    check(dp_placement_bounds(display, (DPRect){0,0,3110,1770}), withDock);
+    check(dp_clamp((DPRect){16,1750,289,173}, withDock), (DPRect){16,1589,289,173});
+    DPRect negative = dp_placement_bounds((DPRect){-3840,-508,3840,2160}, (DPRect){-3840,-418,3840,2040});
+    check(dp_reanchor((DPRect){2895,10,289,173}, withDock, negative), (DPRect){-305,-498,289,173});
+    check(dp_clamp((DPRect){16,-100,289,173}, withDock), (DPRect){16,8,289,173});
+    puts("Window geometry: 40 checks passed");
 }

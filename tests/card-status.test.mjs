@@ -29,3 +29,61 @@ test('stale, unavailable, and special Git states never appear freshly synchroniz
  assert.equal(s.alert.text,'No upstream branch'); assert.equal(s.quiet,'');
  assert.equal(cardStatus({...clean,github:'PR #9 · Changes requested'}).prTone,'warning');
 });
+
+test('review findings replace the generic PR label with separate severity badges', () => {
+ const s = cardStatus({...clean,github:'PR #2812 · Review required',reviews:[{number:2812,blockers:1,warnings:7,detail:'Latest reported findings'}]});
+ assert.equal(s.pr,'');
+ assert.equal(s.reviews[0].label,'PR #2812');
+ assert.deepEqual(s.reviews[0].values.map(x=>[x.value,x.label,x.tone]),[[1,'blocker','error'],[7,'warnings','warning']]);
+ assert.match(s.reviews[0].title,/Review required/);
+});
+test('earlier reviews retain counts with an explicit changes-pushed note', () => {
+ const s = cardStatus({...clean,github:'PR #2812 · Review required',reviews:[{number:2812,blockers:0,warnings:3,earlier:true,detail:'Latest report on an earlier commit'}]});
+ assert.equal(s.pr,'');
+ assert.deepEqual(s.reviews[0].values.map(x=>[x.value,x.label,x.tone]),[[3,'warnings','warning']]);
+ assert.equal(s.reviews[0].note,'Changes pushed since review');
+ const blocker = cardStatus({...clean,github:'PR #2 · Approved',reviews:[{number:2,blockers:1,warnings:7,earlier:true}]});
+ assert.deepEqual(blocker.reviews[0].values.map(x=>x.value),[1,7]);
+ const noFindings = cardStatus({...clean,github:'PR #2 · Approved',reviews:[{number:2,blockers:0,warnings:0,earlier:true}]});
+ assert.equal(noFindings.reviews[0].note,'Changes pushed since review');
+ assert.equal(noFindings.reviews[0].values[0].label,'Approved');
+ assert.equal(noFindings.reviews[0].values[0].tone,'good');
+});
+test('unavailable reviews hide counts; current clean reports retain their clean indicator', () => {
+ const s = cardStatus({...clean,github:'PR #2 · Approved',reviews:[{number:2,blockers:1,warnings:7,unavailable:true,detail:'Report detail'}]});
+ assert.equal(s.reviews.length,0); assert.equal(s.prTone,'warning'); assert.match(s.pr,/Review unavailable/);
+ const cleanReview = cardStatus({...clean,github:'PR #2 · Review required',reviews:[{number:2,blockers:0,warnings:0,detail:'Explicit clean report'}]});
+ assert.equal(cleanReview.reviews[0].values[0].label,'No findings');
+ assert.equal(cleanReview.reviews[0].note,'');
+ assert.match(cleanReview.reviews[0].title,/Review required/);
+ assert.equal(cardStatus({...clean,github:'PR #2 · Review required'}).pr,'PR #2 · Review required');
+});
+
+test('failed local reads retain cached work and PR findings but never show In sync', () => {
+ const localNote = 'Status check timed out · cached';
+ const s = cardStatus({...clean,localNote,changes:2,github:'PR #4 · Approved',reviews:[{number:4,blockers:1,warnings:7,detail:'Last known report'}]});
+ assert.equal(s.quiet,''); assert.equal(s.alert.text,localNote); assert.equal(s.alert.tone,'warning');
+ assert.equal(s.local[0].value,2); assert.equal(s.reviews[0].values[0].value,1);
+ assert.equal(cardStatus({...clean,localNote}).quiet,'');
+});
+
+test('GitHub approval takes precedence over no findings and remains visible with warnings', () => {
+ const approved = {...clean,github:'PR #2812 · Approved'};
+ const report = {number:2812,blockers:0,warnings:0,detail:'Latest reported findings: 0 blockers, 0 warnings'};
+ const s = cardStatus({...approved,reviews:[report]});
+ assert.equal(s.pr,'');
+ assert.equal(s.reviews[0].values[0].label,'Approved');
+ assert.equal(s.reviews[0].values[0].tone,'good');
+ assert.equal(s.reviews[0].values[0].symbol,'✓');
+ const findings = cardStatus({...approved,reviews:[{...report,warnings:3,earlier:true}]});
+ assert.equal(findings.pr,'PR #2812 · Approved');
+ assert.equal(findings.prTone,'good');
+ assert.equal(findings.reviews[0].values[0].value,3);
+ assert.equal(findings.reviews[0].note,'Changes pushed since review');
+ const unavailable = cardStatus({...approved,reviews:[{...report,unavailable:true}]});
+ assert.match(unavailable.pr,/Approved/);
+ assert.match(unavailable.pr,/Review unavailable/);
+ const separate = cardStatus({...clean,github:'PR #1 · Approved; PR #2812 · Review required',reviews:[report]});
+ assert.equal(separate.pr,'PR #1 · Approved');
+ assert.equal(separate.reviews[0].values[0].label,'No findings');
+});

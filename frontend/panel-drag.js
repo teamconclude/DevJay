@@ -19,7 +19,8 @@ export function installPanelDrag(list, options) {
   list.addEventListener('pointerdown', e => {
     suppressClick = false;
     const card = e.target.closest('.card');
-    if (!card || e.button !== 0 || !e.isPrimary || !options.enabled() || e.target.closest('.copyable')) return;
+    const dragTarget = e.target.closest('.card-title, .card-move-handle');
+    if (!card || !dragTarget || e.button !== 0 || !e.isPrimary || !options.enabled()) return;
     e.preventDefault();
     const rect = card.getBoundingClientRect();
     const original = [...list.children];
@@ -42,7 +43,7 @@ export function installPanelDrag(list, options) {
     Object.assign(preview.style, {width: `${rect.width}px`, height: `${rect.height}px`, left: `${rect.left}px`, top: `${rect.top}px`});
     let moved = false, x = e.clientX, y = e.clientY, frame;
     options.busy(true);
-    card.setPointerCapture(e.pointerId);
+    dragTarget.setPointerCapture(e.pointerId);
     function position() {
       if (!moved) return;
       preview.style.left = `${rect.left + x - e.clientX}px`;
@@ -62,7 +63,7 @@ export function installPanelDrag(list, options) {
       const next = others[at] || null;
       if (card.nextElementSibling !== next) {
         list.insertBefore(card, next);
-        card.setPointerCapture(e.pointerId);
+        dragTarget.setPointerCapture(e.pointerId);
       }
     }
     function tick() {
@@ -85,10 +86,10 @@ export function installPanelDrag(list, options) {
     function finish(commit) {
       cancelDrag = null;
       cancelAnimationFrame(frame); preview.remove(); card.classList.remove('panel-dragging');
-      card.removeEventListener('pointermove', move); card.removeEventListener('pointerup', up);
-      card.removeEventListener('pointercancel', cancel); card.removeEventListener('lostpointercapture', cancel);
+      dragTarget.removeEventListener('pointermove', move); dragTarget.removeEventListener('pointerup', up);
+      dragTarget.removeEventListener('pointercancel', cancel); dragTarget.removeEventListener('lostpointercapture', cancel);
       window.removeEventListener('blur', cancel); document.removeEventListener('keydown', key, true);
-      if (card.hasPointerCapture(e.pointerId)) card.releasePointerCapture(e.pointerId);
+      if (dragTarget.hasPointerCapture(e.pointerId)) dragTarget.releasePointerCapture(e.pointerId);
       const bounds = list.getBoundingClientRect();
       if (commit && moved && options.enabled() && x >= bounds.left && x <= bounds.right && y >= bounds.top && y <= bounds.bottom) {
         if (free) {
@@ -109,8 +110,8 @@ export function installPanelDrag(list, options) {
     const cancel = () => finish(false);
     const key = event => { if (event.key === 'Escape') { event.preventDefault(); event.stopImmediatePropagation(); cancel(); } };
     cancelDrag = cancel;
-    card.addEventListener('pointermove', move); card.addEventListener('pointerup', up);
-    card.addEventListener('pointercancel', cancel); card.addEventListener('lostpointercapture', cancel);
+    dragTarget.addEventListener('pointermove', move); dragTarget.addEventListener('pointerup', up);
+    dragTarget.addEventListener('pointercancel', cancel); dragTarget.addEventListener('lostpointercapture', cancel);
     window.addEventListener('blur', cancel); document.addEventListener('keydown', key, true);
     frame = requestAnimationFrame(tick);
   });
