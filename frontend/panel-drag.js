@@ -19,7 +19,7 @@ export function installPanelDrag(list, options) {
   list.addEventListener('pointerdown', e => {
     suppressClick = false;
     const card = e.target.closest('.card');
-    const dragTarget = e.target.closest('.card-title, .card-move-handle');
+    const dragTarget = e.target.closest('.card-title');
     if (!card || !dragTarget || e.button !== 0 || !e.isPrimary || !options.enabled()) return;
     e.preventDefault();
     const rect = card.getBoundingClientRect();

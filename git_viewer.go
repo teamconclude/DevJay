@@ -35,6 +35,7 @@ type ViewFile struct {
 	Group      string `json:"group"`
 }
 type GitView struct {
+	Editor        *EditorState `json:"editor,omitempty"`
 	IncomingCount int          `json:"incomingCount"` // -1 when the comparison is unavailable.
 	HistoryNote   string       `json:"historyNote"`
 	Version       uint64       `json:"version"`

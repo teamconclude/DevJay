@@ -152,15 +152,6 @@ h2 {
   font-size:15px}
 .site-row .help {
   margin:4px 0 0}
-.handle {
-  color: #8998ad;
-  cursor: grab;
-  font-size: 22px;
-  margin-right: 3px;
-  user-select: none;
-  touch-action: none;
-  padding: 8px 2px;
-}
 .dragging {
   opacity:.4}
 .done {
@@ -229,7 +220,6 @@ h2 {
 .settings .site-list.file-drop-target-active { border-color: #8ab5ff; background: #8ab5ff12; }
 .settings .site-row { margin: 0; border: 0; border-radius: 4px; background: transparent; }
 .settings .site-row + .site-row { border-top: 1px solid #ffffff12; }
-.settings .handle { background: transparent; border: 0; padding: 4px; }
 .sorting { display: flex; align-items: center; gap: 22px; margin: 14px 0; }
 .sorting label { display: flex; align-items: center; gap: 6px; }
 .remove-site { background: transparent; border: 0; color: #939fb2; font-size: 20px; width: 28px; height: 28px; padding: 0; line-height: 28px; flex-shrink: 0; }
@@ -248,7 +238,7 @@ h2 {
 /* One shared grid keeps every folder, detail cell, and remove button aligned. */
 .settings .site-list {
   display: grid;
-  grid-template-columns: 24px fit-content(45%) minmax(0, 1fr) 28px;
+  grid-template-columns: fit-content(45%) minmax(0, 1fr) 28px;
   column-gap: 12px;
   align-content: start;
   width: 100%;
@@ -302,17 +292,12 @@ html:not([data-local-drag-press]) .strip *, html:not([data-local-drag-press]) .w
 .strip .panel-dragging { opacity: .3; border-style: dashed; }
 .strip .panel-drag-preview { position: fixed; z-index: 100000; margin: 0; pointer-events: none; opacity: .95; box-shadow: 0 8px 24px #0008; }
 .reset-card-positions { align-self: flex-start; margin-top: 10px; }
-.strip .card-move-handle { position: absolute; top: 4px; right: 33px; width: 24px; height: 24px; display: grid; place-items: center; border-radius: 5px; color: #b5c7df; background: #ffffff0c; font-size: 20px; line-height: 1; cursor: grab; pointer-events: auto; --wails-draggable: no-drag; }
-.strip .card-move-handle:hover { color: #edf1f7; background: #ffffff20; }
-.strip .card-move-handle:active { cursor: grabbing; }
-.strip .card-move-handle[hidden] { display: none; }
 .card-heading { position: relative; }
 .card-title { display: block; width: 100%; min-width: 0; padding: 0 28px 0 0; border: 0; border-radius: 3px; background: transparent; text-align: left; color: inherit; --wails-draggable: drag; cursor: grab; }
 .card-title > * { pointer-events: none; }
 .card-title { -webkit-user-select: none; user-select: none; }
 .card-title:hover { background: transparent; }
 .strip[data-card-drag="true"] .card-title { --wails-draggable: no-drag; }
-.strip[data-settings-open="true"] .card-title { padding-right: 56px; }
 .card-settings { position: absolute; top: -3px; right: -5px; width: 26px; height: 26px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: #aebdd2; font-size: 22px; line-height: 26px; opacity: 0; --wails-draggable: no-drag; }
 .pointer-hover .card-settings, .card:focus-within .card-settings, .workspace #app:focus-within .card-settings { opacity: 1; }
 .card-settings:hover { color: #edf1f7; background: #ffffff12; }
@@ -441,3 +426,19 @@ button.status-line.status-link { padding: 2px 0; margin: -2px 0; width: 100%; fl
 .git-suggestion-buttons .suggestion-secondary { color: #a7b2c3; background: transparent; border-color: #435066; }
 .git-suggestion-buttons .suggestion-secondary:hover { color: #edf1f7; background: #ffffff0c; }
 .git-suggestion-warning { margin: 8px 0 0; font-size: 11px; }
+
+.git-diff-header { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.git-diff-title { min-width: 100px; flex: 1; overflow-wrap: anywhere; }
+.file-editor-controls { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px; margin-left: auto; }
+
+.file-editor-controls button { font-size: 11px; padding: 5px 9px; }
+.file-editor-message { flex-basis: 100%; max-width: 420px; font-size: 11px; font-weight: 400; }
+
+.editor-settings-row { display: flex; flex-wrap: wrap; gap: 12px; }
+.editor-settings-row label { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.editor-settings-row select { max-width: 280px; min-width: 130px; padding: 6px; color: #c4cede; background: #252d3b; border: 1px solid #3c485c; border-radius: 5px; font: inherit; }
+.editor-settings-error { margin: 8px 0 0; }
+
+.settings .site-row { cursor: grab; touch-action: none; }
+.settings .site-row:focus-visible { outline: 1px solid #8ab5ff; outline-offset: -1px; }
+.editor-settings-auto { margin-top: 12px; }

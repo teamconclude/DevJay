@@ -1,3 +1,4 @@
+import { mountFileEditor } from './file-editor.js';
 // Diff contents are always text nodes, never HTML. Line numbers remain aligned
 // with unified hunks; combined conflict hunks are displayed verbatim.
 export function diffRows(text) {
@@ -73,16 +74,20 @@ export function mountGitViewer(root, request, suggestions) {
   const content=el('section','git-view-content');
   const commitDetail=el('div','git-commit-detail');
   const diffHeader=el('div','git-diff-header');
+  const diffTitle=el('span','git-diff-title'),editorControls=el('div','file-editor-controls');
+  diffHeader.append(diffTitle,editorControls);
+  const renderEditor=mountFileEditor(editorControls,request);
   const note=el('p','git-diff-note');
   const diff=el('div','git-diff');diff.tabIndex=0;diff.setAttribute('aria-label','File diff');
   content.append(commitDetail,diffHeader,note,diff);panes.append(commits,files,content);root.append(header,context,...(suggestions?[suggestions]:[]),error,panes);
   return v=>{
     const changedContext=state?.siteID!==v.siteID||state?.kind!==v.kind;
     state=v;
+    renderEditor(v);
     commits.hidden=v.kind==='edits';panes.classList.toggle('edits-only',v.kind==='edits');
     if(changedContext&&v.loading){
       commitList.replaceChildren();fileList.replaceChildren();commitDetail.replaceChildren();diff.replaceChildren();
-      diffHeader.textContent='';note.hidden=true;fileHeading.textContent='Files';
+      diffTitle.textContent='';note.hidden=true;fileHeading.textContent='Files';
       previous.disabled=true;next.disabled=true;pageLabel.textContent='';
     }
     name.textContent=v.name||'Changes';name.title=v.path;
@@ -142,8 +147,8 @@ export function mountGitViewer(root, request, suggestions) {
       else if(!v.parent)commitDetail.append(el('p','muted','Initial commit · compared with an empty tree'));
     }
     const file=v.files?.[v.file];
-    diffHeader.textContent=file?(file.oldPath?`${file.oldPath} → ${file.path}`:file.path):'Select a file to view its diff';
-    diffHeader.title=diffHeader.textContent;
+    diffTitle.textContent=file?(file.oldPath?`${file.oldPath} → ${file.path}`:file.path):'Select a file to view its diff';
+    diffTitle.title=diffTitle.textContent;
     note.hidden=!v.diffNote;note.textContent=v.diffNote||'';
     const fragment=document.createDocumentFragment();
     for(const row of diffRows(v.diff||'')){

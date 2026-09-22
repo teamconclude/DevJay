@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
-const source=await readFile(new URL('../frontend/git-viewer.js',import.meta.url),'utf8');
+let source=await readFile(new URL('../frontend/git-viewer.js',import.meta.url),'utf8');
+const editorSource=await readFile(new URL('../frontend/file-editor.js',import.meta.url),'utf8');
+source=source.replace('./file-editor.js',`data:text/javascript;base64,${Buffer.from(editorSource).toString('base64')}`);
 const {diffRows,summarizeFiles,remoteHistoryContext,commitPresenceLabel}=await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
 test('unified diff rows retain independent old and new line numbers',()=>{
  const rows=diffRows('--- a/file\n+++ b/file\n@@ -3,2 +3,3 @@\n context\n-old\n+new\n+added\n\\ No newline at end of file');

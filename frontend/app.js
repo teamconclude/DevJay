@@ -1,5 +1,6 @@
 import { Events, Window } from '/wails/runtime.js';
 import { installCardSizing } from './card-sizing.js';
+import { mountEditorSettings } from './editor-settings.js';
 import { mountGitViewer } from './git-viewer.js';
 import { cardStatus } from './card-status.js';
 import { mountSuggestedActions, mountViewerSuggestions } from './suggested-actions.js';
@@ -14,7 +15,7 @@ const siteID = params.get('site');
 const settings = params.has('settings');
 const actions = params.has('actions');
 const viewer = params.has('viewer');
-let renderSuggestedActions, renderViewerSnapshot;
+let renderSuggestedActions, renderViewerSnapshot, editorSettings;
 const root = document.querySelector('#app');
 let snapshot = {sites: []}, dragging = null, panelDragging = false;
 const el = (tag, cls, text) => { const n = document.createElement(tag); n.className = cls || ''; if (text !== undefined) n.textContent = text; return n; };
@@ -112,6 +113,8 @@ if (viewer) {
     label.append(radio, document.createTextNode(title)); sorting.append(label);
   }
   root.append(sorting);
+  editorSettings = mountEditorSettings(root, data => emit('editor-settings-request', data));
+  Events.On('devjay:editor-settings-state', event => editorSettings.renderEditor(event.data));
   root.append(el('h2', '', 'View settings'));
   for (const [key, title] of [['allDesktops', 'Control panel always visible'], ['onTop', 'Show all windows on top']]) {
     const label = el('label', 'preference'); const box = el('input'); box.type = 'checkbox'; box.dataset.pref = key; box.onchange = () => emit(key, box.checked);
@@ -139,7 +142,7 @@ if (viewer) {
 } else if (siteID) {
   document.body.className = 'workspace'; document.body.dataset.decoration = 'none'; root.title = 'Drag to move this Site';
   const header = el('header');
-  const grip = el('span', 'grip', '⠿'); grip.title = 'Drag to move this Site';
+  const grip = el('span', 'grip'); grip.title = 'Drag to move this Site';
   const gear = button('⚙', () => emit('settings-open'), 'gear'); gear.setAttribute('aria-label', 'Settings'); gear.title = 'Settings';
   const minimise = button('−', () => Window.Minimise(), 'minimise-window'); minimise.setAttribute('aria-label', 'Minimize Site'); minimise.title = 'Minimize Site';
   header.append(grip, gear, minimise);
@@ -148,7 +151,7 @@ if (viewer) {
   document.body.className = 'strip'; document.body.dataset.decoration = 'none';
   const header = el('header');
   const gear = button('⚙', () => emit('settings-open'), 'gear'); gear.setAttribute('aria-label', 'Settings'); gear.title = 'Settings';
-  const grip = el('span', 'grip', '⠿'); grip.title = 'DevJay · Drag to move';
+  const grip = el('span', 'grip'); grip.title = 'DevJay · Drag to move';
   const close = button('×', () => Window.Close(), 'close-window'); close.setAttribute('aria-label', 'Quit DevJay'); close.title = 'Quit DevJay';
   header.append(grip, gear, close); list = el('nav', 'cards'); list.setAttribute('aria-label', 'Sites'); root.append(header, list, notice);
   installPanelDrag(list, {
@@ -187,7 +190,7 @@ function startSiteDrag(event, row, handle) {
   preview.classList.add('site-drag-preview'); preview.setAttribute('aria-hidden', 'true'); preview.inert = true;
   Object.assign(preview.style, {width: `${rect.width}px`, left: `${rect.left}px`, top: `${rect.top}px`});
   // The floating row is outside the shared grid; preserve its measured columns.
-  preview.style.gridTemplateColumns = ['.handle', '.path', '.row-status', '.remove-site'].map(selector => `${row.querySelector(selector).getBoundingClientRect().width}px`).join(' ');
+  preview.style.gridTemplateColumns = ['.path', '.row-status', '.remove-site'].map(selector => `${row.querySelector(selector).getBoundingClientRect().width}px`).join(' ');
   const marker = el('div', 'site-drop-marker'); marker.setAttribute('aria-hidden', 'true');
   document.body.append(preview, marker);
   dragging = row.dataset.id; row.classList.add('dragging'); document.body.classList.add('sorting-sites');
@@ -277,12 +280,12 @@ function render(state) {
       list.dataset.signature = signature; list.replaceChildren();
       state.sites.forEach((site, index) => {
         const row = el('div', 'site-row'); row.dataset.id = site.id;
-        const description = el('div', 'row-description'); description.append(pathLabel(site), el('div', 'row-status help')); row.append(button('⠿', () => {}, 'handle'), description);
+        const description = el('div', 'row-description'); description.append(pathLabel(site), el('div', 'row-status help')); row.append(description);
         const remove = button('×', () => emit('remove', site.id), 'remove-site');
         remove.setAttribute('aria-label', `Remove ${site.name}`); remove.title = 'Remove Site'; row.append(remove);
-        const handle = row.querySelector('.handle'); handle.setAttribute('aria-label', `Reorder ${site.name}`); handle.title = 'Drag to reorder, or use Up and Down arrow keys';
-        handle.onkeydown = e => { if (e.key === 'ArrowUp' || e.key === 'ArrowDown') { e.preventDefault(); reorder(site.id, index + (e.key === 'ArrowUp' ? -1 : 1)); } };
-        handle.onpointerdown = e => startSiteDrag(e, row, handle);
+        row.tabIndex = 0; row.setAttribute('aria-label', `Reorder ${site.name}`); row.title = 'Drag to reorder, or use Up and Down arrow keys';
+        row.onkeydown = e => { if (e.target === row && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) { e.preventDefault(); reorder(site.id, index + (e.key === 'ArrowUp' ? -1 : 1)); } };
+        row.onpointerdown = e => { if (!e.target.closest('button')) { row.focus(); startSiteDrag(e, row, row); } };
         list.append(row);
       });
     }
@@ -306,15 +309,6 @@ function render(state) {
       card.classList.toggle('visible', site.window.onDesktop);
       card.setAttribute('aria-label', `Activate ${site.path}, ${site.git.branch || 'folder'}, ${site.git.localNote || site.git.summary}${site.window.onDesktop ? ', visible on current desktop' : ''}`);
       details(site, card);
-      let handle = card.querySelector('.card-move-handle');
-      if (!handle) {
-        handle = el('span', 'card-move-handle', '⠿');
-        handle.title = 'Drag to move this card';
-        handle.setAttribute('aria-label', 'Drag to move this card');
-        handle.onclick = e => e.stopPropagation();
-        card.append(handle);
-      }
-      handle.hidden = !state.settingsOpen;
       card.title = [site.window.onDesktop ? 'Visible on current desktop' : '', site.path, site.git.branch, site.git.summary, site.git.localNote, site.git.github, site.git.remoteNote, site.position.label, site.git.tracking ? `Tracking ${site.git.tracking}` : '', site.git.remoteChecked ? `Remote checked ${new Date(site.git.remoteChecked).toLocaleString()}` : ''].filter(Boolean).join('\n');
       if (list.children[index] !== card) list.insertBefore(card, list.children[index] || null);
     });
@@ -330,3 +324,4 @@ Events.On('devjay:snapshot', event => render(event.data));
 emit('hello');
 
 if (viewer) emit('viewer-hello');
+if (settings) emit('editor-settings-request', {operation: 'refresh'});

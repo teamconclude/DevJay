@@ -23,12 +23,14 @@ type viewerRequest struct {
 // Each window owns its snapshot, selections, and cancellable read. UI events
 // are routed by Wails' sender, never by a client-supplied Site identifier.
 type gitViewerWindow struct {
-	window     *application.WebviewWindow
-	parent     *application.WebviewWindow
-	ready      bool
-	state      *GitView
-	cancel     context.CancelFunc
-	generation uint64
+	editorGeneration uint64
+	editorOpening    bool
+	window           *application.WebviewWindow
+	parent           *application.WebviewWindow
+	ready            bool
+	state            *GitView
+	cancel           context.CancelFunc
+	generation       uint64
 }
 
 func (m *siteManager) emitViewer(id string) {
@@ -49,6 +51,7 @@ func (m *siteManager) viewerLoad(id string, work func(context.Context, *GitView)
 	version := r.generation
 	v := *r.state
 	v.Version, v.Loading, v.Error = version, true, ""
+	v.Editor = nil
 	r.state = &v
 	m.emitViewer(id)
 	ctx, cancel := context.WithCancel(m.app.Context())
@@ -68,6 +71,7 @@ func (m *siteManager) viewerLoad(id string, work func(context.Context, *GitView)
 			r.state = &next
 			r.cancel = nil
 			m.emitViewer(id)
+			m.refreshViewerEditor(id)
 		})
 	}()
 }
@@ -156,6 +160,11 @@ func (m *siteManager) registerViewerEvents() {
 			}
 			if req.Version != r.state.Version {
 				m.emitViewer(id)
+				return
+			}
+			switch req.Operation {
+			case "file-open":
+				m.openViewerFile(id)
 				return
 			}
 			m.viewerLoad(id, func(ctx context.Context, v *GitView) error {

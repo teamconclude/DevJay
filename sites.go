@@ -28,14 +28,19 @@ type CardPlacement struct {
 	Z int `json:"z"`
 }
 type SiteConfig struct {
-	Layout     string                   `json:"layout,omitempty"`
-	Placements map[string]CardPlacement `json:"placements,omitempty"`
-	Decoration string                   `json:"decoration,omitempty"`
-	Version    int                      `json:"version"`
-	Sites      []Site                   `json:"sites"`
-	Manual     bool                     `json:"manual"`
-	Order      []string                 `json:"order"`
+	PreferredEditor  string                   `json:"preferredEditor,omitempty"`
+	UseProjectEditor *bool                    `json:"useProjectEditor,omitempty"`
+	Layout           string                   `json:"layout,omitempty"`
+	Placements       map[string]CardPlacement `json:"placements,omitempty"`
+	Decoration       string                   `json:"decoration,omitempty"`
+	Version          int                      `json:"version"`
+	Sites            []Site                   `json:"sites"`
+	Manual           bool                     `json:"manual"`
+	Order            []string                 `json:"order"`
 }
+
+func (c SiteConfig) useProjectEditor() bool { return c.UseProjectEditor == nil || *c.UseProjectEditor }
+
 type DesktopPosition struct {
 	Known    bool    `json:"known"`
 	MonitorX float64 `json:"monitorX"`
@@ -94,6 +99,28 @@ func loadSites(path string) (SiteConfig, error) {
 	}
 	if err = json.Unmarshal(data, &c); err != nil {
 		return c, fmt.Errorf("invalid Site configuration: %w", err)
+	}
+	// Preserve a shared preference from the experimental per-Site setting only
+	// when all explicit choices agree. Conflicting choices need a new selection.
+	if c.PreferredEditor == "" {
+		var legacy struct {
+			Editors map[string]string `json:"editors"`
+		}
+		if json.Unmarshal(data, &legacy) == nil {
+			choice, conflict := "", false
+			for _, editor := range legacy.Editors {
+				if editor == "" {
+					continue
+				}
+				if choice != "" && choice != editor {
+					conflict = true
+				}
+				choice = editor
+			}
+			if !conflict {
+				c.PreferredEditor = choice
+			}
+		}
 	}
 	if c.Version != 1 {
 		return c, errors.New("unsupported Site configuration version")

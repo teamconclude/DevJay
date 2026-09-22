@@ -42,6 +42,9 @@ type appSnapshot struct {
 	Error         string                   `json:"error"`
 }
 type siteManager struct {
+	editorState                                              *EditorState
+	editorGeneration                                         uint64
+	editorBrowsing                                           bool
 	viewers                                                  map[string]*gitViewerWindow
 	viewerSequence                                           uint64
 	suggestions, suggestionsParent                           *application.WebviewWindow
@@ -112,6 +115,7 @@ func (m *siteManager) openSettings() {
 	}
 	m.openSettingsPending = false
 	showSettingsWindow(m.settings, m.panel)
+	m.refreshSettingsEditor()
 	m.broadcast()
 }
 func (m *siteManager) createWindow(site Site) {
@@ -301,6 +305,7 @@ func (m *siteManager) browse() {
 	}()
 }
 func (m *siteManager) registerEvents() {
+	m.registerEditorSettingsEvents()
 	m.app.Event.On("devjay:fit-cards", func(e *application.CustomEvent) {
 		var size struct{ Height, ViewportWidth, ViewportHeight float64 }
 		data, err := json.Marshal(e.Data)
