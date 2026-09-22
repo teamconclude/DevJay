@@ -21,3 +21,21 @@ test('native hover selects the card under an inactive pointer and clears on exit
   handlers.pointermove({clientX:100,clientY:100}); assert.ok(classes[0].has('pointer-hover'));
   handlers.pointerleave(); assert.equal(classes[0].size,0);
 });
+
+test('moving between statuses in one inactive card updates just the hovered status',()=>{
+ const handlers={}, makeNode=()=>{const classes=new Set();return {classes,classList:{add:c=>classes.add(c),remove:c=>classes.delete(c)}};};
+ const card=makeNode(),statuses=[makeNode(),makeNode()];
+ const target={innerWidth:200,innerHeight:100,addEventListener:(name,fn)=>handlers[name]=fn};
+ const document={addEventListener:(name,fn)=>handlers[name]=fn,elementFromPoint(x,y){
+  if(x<0||y<0)return null;
+  return {closest:selector=>selector==='.status-link'?(y<50?statuses[x<100?0:1]:null):card};
+ }};
+ installCardHover(target,document);
+ handlers['devjay:native-hover']({detail:{x:.25,y:.25}});
+ assert.ok(card.classes.has('pointer-hover'));assert.ok(statuses[0].classes.has('status-hover'));
+ handlers['devjay:native-hover']({detail:{x:.75,y:.25}});
+ assert.equal(statuses[0].classes.size,0);assert.ok(statuses[1].classes.has('status-hover'));
+ handlers.pointermove({clientX:150,clientY:75});
+ assert.equal(statuses[1].classes.size,0);assert.ok(card.classes.has('pointer-hover'));
+ handlers.pointerleave();assert.equal(card.classes.size,0);
+});

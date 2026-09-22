@@ -31,7 +31,7 @@ func main() {
 		Mac:              application.MacWindow{CornerType: application.MacWindowCornerTypeRounded, WindowClass: application.MacWindowClassPanel, PanelPreferences: application.MacPanelPreferences{NonActivating: true, FloatingPanel: true}, CollectionBehavior: application.MacWindowCollectionBehaviorCanJoinAllSpaces | application.MacWindowCollectionBehaviorFullScreenNone, TabbingMode: application.MacWindowTabbingModeDisallowed},
 	})
 	manager.panel = panel
-	settings := app.Window.NewWithOptions(application.WebviewWindowOptions{Name: "settings", EnableFileDrop: true, Title: "DevJay Settings", URL: "/?settings", Width: 700, Height: 570, MinWidth: 540, MinHeight: 400, Hidden: true, MaximiseButtonState: application.ButtonDisabled, BackgroundColour: application.NewRGB(20, 24, 32), Mac: application.MacWindow{CollectionBehavior: application.MacWindowCollectionBehaviorMoveToActiveSpace | application.MacWindowCollectionBehaviorFullScreenNone, TabbingMode: application.MacWindowTabbingModeDisallowed}})
+	settings := app.Window.NewWithOptions(application.WebviewWindowOptions{Name: "settings", EnableFileDrop: true, Title: "DevJay Settings", URL: "/?settings", Width: 700, Height: 570, MinWidth: 540, MinHeight: 400, Hidden: true, MaximiseButtonState: application.ButtonDisabled, BackgroundColour: application.NewRGB(20, 24, 32), Mac: application.MacWindow{CornerType: application.MacWindowCornerTypeRounded, CollectionBehavior: application.MacWindowCollectionBehaviorMoveToActiveSpace | application.MacWindowCollectionBehaviorFullScreenNone, TabbingMode: application.MacWindowTabbingModeDisallowed}})
 	manager.settings = settings
 	settings.OnWindowEvent(events.Common.WindowFilesDropped, func(e *application.WindowEvent) {
 		target := e.Context().DropTargetDetails()
@@ -84,6 +84,8 @@ func main() {
 			manager.broadcast()
 		})
 	})
+	manager.createSuggestionsWindow()
+	manager.registerViewerEvents()
 	manager.registerEvents()
 	menu := app.Menu.New()
 	menu.AddRole(application.AppMenu)

@@ -29,16 +29,32 @@ type SiteView struct {
 	Git      GitStatus       `json:"git"`
 }
 type appSnapshot struct {
-	Layout       string                   `json:"layout"`
-	Placements   map[string]CardPlacement `json:"placements"`
-	SettingsOpen bool                     `json:"settingsOpen"`
-	Decoration   string                   `json:"decoration"`
-	Sites        []SiteView               `json:"sites"`
-	Manual       bool                     `json:"manual"`
-	Preferences  map[string]bool          `json:"preferences"`
-	Error        string                   `json:"error"`
+	Action        *CheckoutAction          `json:"action,omitempty"`
+	RebaseCheck   *RebaseCheck             `json:"rebaseCheck,omitempty"`
+	SuggestedSite string                   `json:"suggestedSite,omitempty"`
+	Layout        string                   `json:"layout"`
+	Placements    map[string]CardPlacement `json:"placements"`
+	SettingsOpen  bool                     `json:"settingsOpen"`
+	Decoration    string                   `json:"decoration"`
+	Sites         []SiteView               `json:"sites"`
+	Manual        bool                     `json:"manual"`
+	Preferences   map[string]bool          `json:"preferences"`
+	Error         string                   `json:"error"`
 }
 type siteManager struct {
+	viewers                                                  map[string]*gitViewerWindow
+	viewerSequence                                           uint64
+	suggestions, suggestionsParent                           *application.WebviewWindow
+	suggestionsReady                                         bool
+	suggestedSite                                            string
+	rebaseCheck                                              *RebaseCheck
+	rebaseCancel                                             context.CancelFunc
+	rebaseGeneration                                         uint64
+	action                                                   *CheckoutAction
+	actionCancel                                             context.CancelFunc
+	actionGeneration                                         uint64
+	actionWG                                                 sync.WaitGroup
+	shuttingDown                                             bool
 	app                                                      *application.App
 	panel, settings                                          *application.WebviewWindow
 	panelReady, settingsReady, openSettingsPending, browsing bool
@@ -146,7 +162,7 @@ func (m *siteManager) snapshot() appSnapshot {
 		settings = m.settings
 	}
 	positions, states, preferences, settingsOpen := readWindowSnapshot(items, panel, settings)
-	result := appSnapshot{Layout: m.config.layout(), Placements: m.config.Placements, SettingsOpen: settingsOpen, Decoration: m.config.decoration(), Sites: []SiteView{}, Manual: m.config.Manual, Preferences: preferences}
+	result := appSnapshot{Action: m.action, RebaseCheck: m.rebaseCheck, SuggestedSite: m.suggestedSite, Layout: m.config.layout(), Placements: m.config.Placements, SettingsOpen: settingsOpen, Decoration: m.config.decoration(), Sites: []SiteView{}, Manual: m.config.Manual, Preferences: preferences}
 	if m.configError != nil {
 		result.Error = "Cannot read saved Sites. Configuration has not been overwritten: " + m.configError.Error()
 	}
@@ -225,6 +241,18 @@ func (m *siteManager) add(path string) {
 	m.broadcast()
 }
 func (m *siteManager) remove(id string) {
+	for viewerID, viewer := range m.viewers {
+		if viewer.state.SiteID == id {
+			m.closeViewer(viewerID)
+		}
+	}
+	if m.actionBusy() {
+		m.siteError("Wait for the checkout action to finish before removing a Site.")
+		return
+	}
+	if m.suggestedSite == id {
+		m.closeSuggestions()
+	}
 	r := m.runtime[id]
 	if r == nil {
 		return
@@ -273,6 +301,25 @@ func (m *siteManager) browse() {
 	}()
 }
 func (m *siteManager) registerEvents() {
+	m.app.Event.On("devjay:fit-cards", func(e *application.CustomEvent) {
+		var size struct{ Height, ViewportWidth, ViewportHeight float64 }
+		data, err := json.Marshal(e.Data)
+		if err != nil || json.Unmarshal(data, &size) != nil {
+			return
+		}
+		m.send(func() {
+			if e.Sender == "control-panel" && m.panelReady {
+				growCardWindow(m.panel, size.Height, size.ViewportWidth, size.ViewportHeight)
+				return
+			}
+			for id, r := range m.runtime {
+				if e.Sender == "site-"+id && r.Ready {
+					growCardWindow(r.Window, size.Height, size.ViewportWidth, size.ViewportHeight)
+					return
+				}
+			}
+		})
+	})
 	m.app.Event.On("devjay:reset-placements", func(e *application.CustomEvent) {
 		if e.Sender != "settings" {
 			return
@@ -477,11 +524,13 @@ func (m *siteManager) registerEvents() {
 }
 func (m *siteManager) shutdown() {
 	m.mu.Lock()
+	m.shuttingDown = true
 	items := make([]siteRuntime, 0, len(m.runtime))
 	for _, r := range m.runtime {
 		items = append(items, *r)
 	}
 	m.mu.Unlock()
+	m.actionWG.Wait()
 	saveWindowLayout(m.panel)
 	for _, r := range items {
 		if r.Cancel != nil {

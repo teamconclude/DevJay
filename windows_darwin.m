@@ -98,7 +98,7 @@ void devjay_all_windows_on_top(int enabled) {
     NSInteger level = enabled ? NSFloatingWindowLevel : NSNormalWindowLevel;
     NSUInteger updated = 0;
     for (NSWindow *window in NSApp.windows) {
-        if (![window.identifier isEqual:@"control-panel"] && ![window.identifier isEqual:@"settings"] && ![window.identifier hasPrefix:@"site-"]) continue;
+        if (![window.identifier isEqual:@"control-panel"] && ![window.identifier isEqual:@"settings"] && ![window.identifier isEqual:@"git-viewer"] && ![window.identifier isEqual:@"suggested-actions"] && ![window.identifier hasPrefix:@"site-"]) continue;
         if ([window isKindOfClass:NSPanel.class]) [(NSPanel *)window setFloatingPanel:enabled];
         window.level = level;
         if (window.level == level) updated++;
@@ -144,10 +144,9 @@ void devjay_focus_site(void *pointer) {
     [NSApp activateIgnoringOtherApps:YES];
 }
 
-void devjay_show_settings(void *pointer, void *parentPointer) {
+void devjay_show_popup(void *pointer, void *parentPointer) {
     NSWindow *window = (NSWindow *)pointer;
     NSWindow *parent = (NSWindow *)parentPointer;
-    window.identifier = @"settings";
     window.collectionBehavior = NSWindowCollectionBehaviorMoveToActiveSpace | NSWindowCollectionBehaviorFullScreenNone;
     NSRect frame = window.frame;
     NSRect area = (parent.screen ?: NSScreen.mainScreen).visibleFrame;
@@ -164,4 +163,44 @@ void devjay_show_settings(void *pointer, void *parentPointer) {
 void devjay_apply_top_preference(void) {
     NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
     devjay_all_windows_on_top([defaults objectForKey:@"DevJay.View.OnTop"] == nil || [defaults boolForKey:@"DevJay.View.OnTop"]);
+}
+
+void devjay_show_settings(void *pointer, void *parentPointer) {
+    NSWindow *window = (NSWindow *)pointer;
+    NSWindow *parent = (NSWindow *)parentPointer;
+    window.identifier = @"settings";
+    WKWebView *view = devjay_webview(window.contentView);
+    if (!view) { devjay_show_popup(window, parent); return; }
+    // Measure natural content height, excluding the viewport minimum and the
+    // footer's spare space. This also respects the user's current window width.
+    NSString *script = @"(() => { const root = document.querySelector('#app'); if (!root) return 0; const saved = root.style.minHeight; root.style.minHeight = '0'; const height = Math.ceil(root.getBoundingClientRect().height); root.style.minHeight = saved; window.scrollTo(0, 0); return height; })()";
+    [view evaluateJavaScript:script completionHandler:^(id result, NSError *error) {
+        if (!error && [result isKindOfClass:NSNumber.class]) {
+            CGFloat height = [result doubleValue];
+            NSRect area = (parent.screen ?: NSScreen.mainScreen).visibleFrame;
+            if (isfinite(height) && height > 0) {
+                NSRect frame = window.frame;
+                NSRect fitted = [window frameRectForContentRect:NSMakeRect(0, 0, view.bounds.size.width, height + 2)];
+                frame.size.height = MIN(MAX(fitted.size.height, window.minSize.height), MAX(1, area.size.height - 16));
+                [window setFrame:frame display:NO];
+            }
+        }
+        devjay_show_popup(window, parent);
+    }];
+}
+void devjay_show_suggestions(void *pointer, void *parentPointer) {
+    ((NSWindow *)pointer).identifier = @"suggested-actions";
+    devjay_show_popup(pointer, parentPointer);
+}
+
+void devjay_show_viewer(void *pointer, void *parentPointer) {
+    NSWindow *window = (NSWindow *)pointer;
+    NSWindow *parent = (NSWindow *)parentPointer;
+    window.identifier = @"git-viewer";
+    NSRect frame = window.frame;
+    NSRect area = (parent.screen ?: NSScreen.mainScreen).visibleFrame;
+    frame.size.width = MIN(frame.size.width, area.size.width - 16);
+    frame.size.height = MIN(frame.size.height, area.size.height - 16);
+    [window setFrame:frame display:NO];
+    devjay_show_popup(pointer, parentPointer);
 }

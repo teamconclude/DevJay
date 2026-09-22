@@ -152,6 +152,9 @@ func TestMainBranchDetection(t *testing.T) {
 		}
 	}
 	check(true) // A nonstandard default branch is authoritative.
+	if s, _ := inspectLocal(ctx, checkout); s.DefaultBranch != "trunk" {
+		t.Fatalf("wrong suggested return branch: %q", s.DefaultBranch)
+	}
 	fixtureGit(t, checkout, "checkout", "-b", "develop")
 	check(false) // Conventional names do not override a known remote default.
 	fixtureGit(t, checkout, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/develop")

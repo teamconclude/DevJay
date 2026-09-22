@@ -117,16 +117,16 @@ Acceptance: tests cover fork matching, multiple candidate PRs, changed review de
 
 ## 5. Add guarded checkout updates as a separate milestone
 
-The original goal includes replacing the manual branch-delete/recheckout workflow. This remains planned, but the later instruction to omit status action buttons governs the current UI. Introduce update controls only in a separately agreed implementation milestone after the preservation checks below are designed and tested.
+Implemented with explicit Review action and confirmation: fast-forward updates, return to the default branch after a merged PR, optional guarded local branch deletion, and conflict-checked rebases. Monitoring remains read-only apart from remote-tracking fetches. Rewritten review-branch replacement remains deferred.
 
 ### Fast-forward first
 
-- [ ] Permit an explicit update only for a clean checkout that is solely behind a freshly fetched, pinned upstream commit.
-- [ ] Recheck checkout identity, branch, upstream, HEAD, index, files, conflicts, and in-progress Git operations immediately before mutation.
-- [ ] Block staged/unstaged edits, untracked files, local commits, divergence, and incoming collisions with ignored files. Clean `git status` alone is not sufficient evidence.
-- [ ] Serialize app-owned operations by common Git directory. Account for external editors and Git clients; do not promise atomic protection from arbitrary external writes or unsaved editor buffers.
-- [ ] Keep unsupported/uncertain configurations disabled, including unverified sparse-checkout, submodule, and index-flag cases.
-- [ ] Verify actual resulting state after success, error, timeout, cancellation, or hook failure. Never retry or roll back blindly.
+- [x] Permit an explicit update only for a clean checkout that is solely behind a freshly fetched, pinned upstream commit.
+- [x] Recheck checkout identity, branch, upstream, HEAD, index, files, conflicts, and in-progress Git operations immediately before mutation.
+- [x] Block staged/unstaged edits, untracked files, local commits, divergence, and incoming collisions with ignored files. Clean `git status` alone is not sufficient evidence.
+- [x] Serialize app-owned operations by common Git directory. Account for external editors and Git clients; do not promise atomic protection from arbitrary external writes or unsaved editor buffers.
+- [x] Keep unsupported/uncertain configurations disabled, including unverified sparse-checkout, submodule, and index-flag cases.
+- [x] Verify actual resulting state after success, error, timeout, cancellation, or hook failure. Never retry or roll back blindly.
 
 ### Refresh rewritten review branches later
 
@@ -135,7 +135,7 @@ The original goal includes replacing the manual branch-delete/recheckout workflo
 - [ ] Show the exact checkout and source/target commits and require confirmation. Create and verify a unique recovery reference before any branch change.
 - [ ] Preserve upstream configuration and make recovery references discoverable after restart. Recovery must refuse to overwrite work added after the update.
 
-No force-update override, automatic stash/pop, `git clean`, destructive hard-reset fallback, automatic merge/rebase, or automatic push. A backup of committed history is not protection for uncommitted or ignored files.
+No force-update override, automatic stash/pop, `git clean`, destructive hard-reset fallback, unprompted merge/rebase, or automatic push. A backup of committed history is not protection for uncommitted or ignored files.
 
 Acceptance: use disposable repositories to assert preservation of branch/HEAD, index contents, working files, untracked/ignored files, symlink/file-directory collisions, and existing stashes. Cover normal and repeated force pushes, dirty states, failed backups, hooks, timeouts, disk errors, and external changes. Keep any update path disabled if its safety cannot be demonstrated.
 

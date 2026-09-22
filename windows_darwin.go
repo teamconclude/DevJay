@@ -14,7 +14,10 @@ void devjay_restore_layout(void *window, const char *identifier);
 void devjay_save_layout(void *window);
 char *devjay_desktop_position(void *window);
 void devjay_show_settings(void *window, void *parent);
+void devjay_show_suggestions(void *window, void *parent);
+void devjay_show_viewer(void *window, void *parent);
 void devjay_apply_top_preference(void);
+void devjay_grow_card_window(void *window, double height, double viewportWidth, double viewportHeight);
 void devjay_fit_panel(void *window, int mode, int count, int header, double extentWidth, double extentHeight);
 */
 import "C"
@@ -103,6 +106,9 @@ func saveWindowLayout(window *application.WebviewWindow) {
 }
 
 func showSettingsWindow(window, parent *application.WebviewWindow) {
+	// Native ordering alone leaves Wails' Hidden flag set, which suppresses
+	// windowShouldClose. Show through Wails before native sizing/placement.
+	window.Show()
 	application.InvokeSync(func() { C.devjay_show_settings(window.NativeWindow(), parent.NativeWindow()) })
 }
 func applyTopPreference() { application.InvokeSync(func() { C.devjay_apply_top_preference() }) }
@@ -132,5 +138,21 @@ func fitControlPanel(window *application.WebviewWindow, config SiteConfig) {
 	}
 	application.InvokeSync(func() {
 		C.devjay_fit_panel(window.NativeWindow(), C.int(mode), C.int(len(config.Sites)), C.int(header), C.double(width), C.double(height))
+	})
+}
+
+func showSuggestionsWindow(window, parent *application.WebviewWindow) {
+	window.Show()
+	application.InvokeSync(func() { C.devjay_show_suggestions(window.NativeWindow(), parent.NativeWindow()) })
+}
+
+func showViewerWindow(window, parent *application.WebviewWindow) {
+	window.Show()
+	application.InvokeSync(func() { C.devjay_show_viewer(window.NativeWindow(), parent.NativeWindow()) })
+}
+
+func growCardWindow(window *application.WebviewWindow, height, viewportWidth, viewportHeight float64) {
+	application.InvokeSync(func() {
+		C.devjay_grow_card_window(window.NativeWindow(), C.double(height), C.double(viewportWidth), C.double(viewportHeight))
 	})
 }

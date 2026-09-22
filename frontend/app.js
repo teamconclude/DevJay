@@ -1,6 +1,10 @@
 import { Events, Window } from '/wails/runtime.js';
+import { installCardSizing } from './card-sizing.js';
+import { mountGitViewer } from './git-viewer.js';
 import { cardStatus } from './card-status.js';
+import { mountSuggestedActions, mountViewerSuggestions } from './suggested-actions.js';
 import { installPanelDrag } from './panel-drag.js';
+import { installCardActivation } from './card-interaction.js';
 import { installDragOriginGuard } from './drag-origin.js';
 import { installCardHover } from './card-hover.js';
 installCardHover(window, document);
@@ -8,6 +12,9 @@ installDragOriginGuard(window, document.documentElement);
 const params = new URLSearchParams(location.search);
 const siteID = params.get('site');
 const settings = params.has('settings');
+const actions = params.has('actions');
+const viewer = params.has('viewer');
+let renderSuggestedActions, renderViewerSnapshot;
 const root = document.querySelector('#app');
 let snapshot = {sites: []}, dragging = null, panelDragging = false;
 const el = (tag, cls, text) => { const n = document.createElement(tag); n.className = cls || ''; if (text !== undefined) n.textContent = text; return n; };
@@ -32,8 +39,16 @@ function details(site, parent) {
   heading.append(title, gear); parent.append(heading);
   const status = cardStatus(site.git);
   const body = el('div', 'card-status');
-  function line(text, tone, symbol, title = text) {
-    const row = el('div', `status-line copyable ${tone}`);
+  function statusButton(view, cls) {
+    const node = button('', () => {
+      const selection = window.getSelection();
+      if (selection && !selection.isCollapsed && (node.contains(selection.anchorNode) || node.contains(selection.focusNode))) return;
+      emit('viewer-open', {siteID:site.id,kind:view || 'edits'});
+    }, `${cls} status-link copyable`);
+    return node;
+  }
+  function line(text, tone, symbol, title = text, view = 'edits') {
+    const row = statusButton(view, `status-line ${tone}`);
     const icon = el('span', 'status-symbol', symbol); icon.setAttribute('aria-hidden', 'true');
     row.append(icon, el('span', '', text)); row.title = title; body.append(row);
   }
@@ -42,7 +57,7 @@ function details(site, parent) {
     const row = el('div', 'metric-row copyable'); row.append(el('span', 'metric-label', label));
     if (title) { row.classList.add('review-row'); row.title = title; row.setAttribute('aria-label', `${label}: ${title}`); }
     for (const item of values) {
-      const badge = el('span', `metric ${item.tone}`); badge.title = item.title; badge.setAttribute('aria-label', item.title);
+      const badge = statusButton(item.view, `metric ${item.tone}`); badge.title = item.title; badge.setAttribute('aria-label', `View ${item.title}`);
       const symbol = el('span', 'metric-symbol', item.symbol); symbol.setAttribute('aria-hidden', 'true');
       if (item.symbol) badge.append(symbol);
       if (item.value !== '') badge.append(el('strong', '', item.value));
@@ -50,20 +65,39 @@ function details(site, parent) {
     }
     body.append(row);
   }
-  if (status.alert) line(status.alert.text, status.alert.tone, status.alert.symbol, site.git.localNote || site.git.summary);
-  if (status.quiet) line(status.quiet, 'good quiet-status', '✓');
   metrics('Local', status.local); metrics('Remote', status.remote);
+  if (status.alert) line(status.alert.text, status.alert.tone, status.alert.symbol, status.alert.title || site.git.localNote || site.git.summary, status.alert.view);
+  if (status.quiet) line(status.quiet, 'good quiet-status', '✓');
+  if (status.base) line(status.base, 'warning', '↳', status.baseTitle);
   if (status.pr) line(status.pr, `pr-status ${status.prTone}`, status.prTone === 'good' ? '✓' : '⑂', status.prTitle);
+  if (status.prNote) line(status.prNote, 'freshness muted', '·', status.prTitle);
   for (const review of status.reviews) {
     metrics(review.label, review.values, review.title);
     if (review.note) line(review.note, 'freshness warning', '◷', review.title);
   }
-  if (status.freshness) line(status.freshness, 'freshness muted', '◷', [site.git.remoteNote, site.git.remoteChecked ? `Last checked ${new Date(site.git.remoteChecked).toLocaleString()}` : ''].filter(Boolean).join('\n'));
+  if (status.freshness) line(status.freshness, 'freshness muted', '◷', [site.git.remoteNote, site.git.remoteChecked ? `Last checked ${new Date(site.git.remoteChecked).toLocaleString()}` : ''].filter(Boolean).join('\n'), 'remote');
   parent.append(body);
+
 }
 
 let list, decoration, layout, siteError, siteErrorTimer;
-if (settings) {
+if (viewer) {
+  document.body.className = 'git-viewer';
+  let currentView = null, currentSnapshot = {sites:[]};
+  const suggestions = el('section', 'git-view-suggestions'); suggestions.hidden = true;
+  const updateSuggestions = mountViewerSuggestions(suggestions, request => emit('action-prepare', request));
+  const updateOverview = () => updateSuggestions(currentSnapshot.sites.find(site => site.id === currentView?.siteID), currentSnapshot.action);
+  renderViewerSnapshot = state => { currentSnapshot = state; updateOverview(); };
+  const renderViewer = mountGitViewer(root, data => emit('viewer-request', data), suggestions);
+  Events.On(`devjay:viewer-state:${params.get('viewer')}`, event => {
+    currentView = event.data; renderViewer(currentView); updateOverview();
+  });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') emit('viewer-close'); });
+} else if (actions) {
+  document.body.className = 'suggestions';
+  renderSuggestedActions = mountSuggestedActions(root, () => emit('suggestions-close'), (name, data) => emit(name, data));
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') emit('suggestions-close'); });
+} else if (settings) {
   document.body.className = 'settings';
   const sitesHeading = el('div', 'sites-heading'); sitesHeading.append(el('h2', '', 'Sites'), button('Add', () => emit('browse'))); root.append(sitesHeading);
   root.append(el('p', 'help', 'Drop a folder below to add a site.'));
@@ -120,11 +154,12 @@ if (settings) {
   installPanelDrag(list, {
     enabled: () => snapshot.settingsOpen,
     layout: () => snapshot.layout || 'horizontal',
-    busy: value => { panelDragging = value; },
+    busy: value => { panelDragging = value; if (!value) fitCards(); },
     commit: ids => emit('order', ids),
     placements: () => cardPlacements(snapshot),
     place: positions => emit('placements', positions),
   });
+  installCardActivation(list, id => emit('activate', id));
   // Wails starts native window dragging on mouse movement. Suppress the
   // subsequent click as well, even if the native drag has already ended.
   let press = null;
@@ -140,6 +175,8 @@ if (settings) {
   }, true);
 
 }
+const fitCards = !settings && !actions && !viewer ? installCardSizing(root, list, size => emit('fit-cards', size), () => panelDragging) : () => {};
+
 function startSiteDrag(event, row, handle) {
   if (event.button !== 0 || dragging) return;
   event.preventDefault();
@@ -216,7 +253,9 @@ function cardPlacements(state) {
   return positions;
 }
 function render(state) {
+  if (viewer) { renderViewerSnapshot(state); return; }
   snapshot = state;
+  if (actions) { renderSuggestedActions(state); return; }
   if (panelDragging) return;
   document.body.dataset.layout = state.layout || 'horizontal';
   document.body.dataset.settingsOpen = String(!!state.settingsOpen);
@@ -289,3 +328,5 @@ if (settings) Events.On('devjay:site-error', event => {
 });
 Events.On('devjay:snapshot', event => render(event.data));
 emit('hello');
+
+if (viewer) emit('viewer-hello');

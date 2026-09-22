@@ -87,3 +87,41 @@ test('GitHub approval takes precedence over no findings and remains visible with
  assert.equal(separate.pr,'PR #1 · Approved');
  assert.equal(separate.reviews[0].values[0].label,'No findings');
 });
+
+test('merged PRs replace review state while preserving local work', () => {
+ const mergedPR = {number:2812,sameHead:true,mergedAt:'2026-09-21T19:43:32Z',url:'https://github.com/teamconclude/project/pull/2812'};
+ const s = cardStatus({...clean,changes:2,github:'PR #2812 · Merged',mergedPR,reviews:[{number:2812,blockers:0,warnings:0}]});
+ assert.equal(s.pr,'PR #2812 · Merged');
+ assert.equal(s.prTone,'merged');
+ assert.equal(s.prNote,'Branch left over after merge');
+ assert.equal(s.local[0].value,2);
+ assert.equal(s.quiet,''); assert.equal(s.reviews.length,0);
+ assert.match(s.prTitle,/https:\/\/github.com/);
+ const changed = cardStatus({...clean,mergedPR:{...mergedPR,sameHead:false}});
+ assert.equal(changed.pr,'No open PR');
+ assert.equal(changed.prNote,'');
+ assert.equal(changed.prTone,'muted');
+});
+
+test('new default-branch commits are distinct from upstream sync and marked when cached', () => {
+ const git={summary:'Up to date',isMainBranch:false,base:{branch:'develop',tracking:'origin/develop',behind:6}};
+ const result=cardStatus(git);
+ assert.equal(result.quiet,''); assert.equal(result.remote.length,0);
+ assert.equal(result.base,'develop · 6 newer commits');
+ assert.match(cardStatus({...git,base:{...git.base,note:'Default branch unavailable'}}).base,/cached/);
+ assert.equal(cardStatus({...git,mergedPR:{number:1,sameHead:true}}).base,undefined);
+});
+
+test('recognized rebases replace raw divergence counts while retaining edits and freshness', () => {
+ const git={rebased:true,ahead:11,behind:5,changes:2,summary:'Rebased · ready to publish',tone:'info'};
+ const result=cardStatus(git);
+ assert.equal(result.alert.text,'Rebased · ready to publish');
+ assert.equal(result.remote.length,0);
+ assert.equal(result.local.length,1);assert.equal(result.local[0].label,'edits');
+ assert.match(result.alert.title,/11 local and 5 remote/);
+ assert.match(result.alert.title,/force-with-lease/);
+ assert.equal(cardStatus({...git,remoteNote:'Offline'}).alert.text,'Rebased · remote not verified');
+ assert.notEqual(cardStatus({...git,localNote:'Status unavailable · cached'}).alert.text,'Rebased · ready to publish');
+ const divergent=cardStatus({...git,rebased:false,summary:'Diverged · 11 ahead / 5 behind'});
+ assert.equal(divergent.remote[0].value,5);assert.equal(divergent.local[0].value,11);
+});

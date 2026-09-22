@@ -1,8 +1,15 @@
 // Native tracking keeps inactive windows responsive without focus or clicks.
 export function installCardHover(target, document) {
-  let hovered = null;
+  let hovered = null, hoveredStatus = null;
   function update(x, y) {
-    const next = document.elementFromPoint(x, y)?.closest('.card, .site-detail') || null;
+    const hit = document.elementFromPoint(x, y);
+    const nextStatus = hit?.closest('.status-link') || null;
+    if(nextStatus !== hoveredStatus){
+      hoveredStatus?.classList.remove('status-hover');
+      nextStatus?.classList.add('status-hover');
+      hoveredStatus = nextStatus;
+    }
+    const next = hit?.closest('.card, .site-detail') || null;
     if (next === hovered) return;
     hovered?.classList.remove('pointer-hover');
     next?.classList.add('pointer-hover');

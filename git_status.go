@@ -16,42 +16,54 @@ import (
 )
 
 type GitStatus struct {
-	Branch        string           `json:"branch"`
-	IsMainBranch  bool             `json:"isMainBranch"`
-	Summary       string           `json:"summary"`
-	Tone          string           `json:"tone"`
-	Changes       int              `json:"changes"`
-	Conflicts     int              `json:"conflicts"`
-	Ahead         int              `json:"ahead"`
-	Behind        int              `json:"behind"`
-	Tracking      string           `json:"tracking"`
-	RemoteNote    string           `json:"remoteNote"`
-	RemoteChecked string           `json:"remoteChecked"`
-	Rewritten     bool             `json:"rewritten"`
-	GitHub        string           `json:"github"`
-	Reviews       []ReviewFindings `json:"reviews,omitempty"`
-	Checked       string           `json:"checked"`
-	LocalNote     string           `json:"localNote,omitempty"`
+	PushTarget    string             `json:"pushTarget,omitempty"`
+	Rebased       bool               `json:"rebased,omitempty"`
+	Branch        string             `json:"branch"`
+	Head          string             `json:"head,omitempty"`
+	Base          *BranchBase        `json:"base,omitempty"`
+	DefaultBranch string             `json:"defaultBranch,omitempty"`
+	IsMainBranch  bool               `json:"isMainBranch"`
+	Summary       string             `json:"summary"`
+	Tone          string             `json:"tone"`
+	Changes       int                `json:"changes"`
+	Conflicts     int                `json:"conflicts"`
+	Ahead         int                `json:"ahead"`
+	Behind        int                `json:"behind"`
+	Tracking      string             `json:"tracking"`
+	RemoteNote    string             `json:"remoteNote"`
+	RemoteChecked string             `json:"remoteChecked"`
+	Rewritten     bool               `json:"rewritten"`
+	GitHub        string             `json:"github"`
+	Reviews       []ReviewFindings   `json:"reviews,omitempty"`
+	MergedPR      *MergedPullRequest `json:"mergedPR,omitempty"`
+	Checked       string             `json:"checked"`
+	LocalNote     string             `json:"localNote,omitempty"`
 }
 type gitMeta struct {
+	BranchGeneration                                  string
+	BranchCreated                                     time.Time
 	Path, Branch, OID, Ref, Remote, Merge, GitHubRepo string
+	DefaultBranch, DefaultRemote, DefaultRef          string
 	Initial, Comparable                               bool
 	ReadError                                         error
 }
 
 func (m gitMeta) key() string {
-	return m.Branch + "\x00" + m.Remote + "\x00" + m.Merge + "\x00" + m.GitHubRepo
+	return m.Branch + "\x00" + m.Remote + "\x00" + m.Merge + "\x00" + m.GitHubRepo + "\x00" + m.DefaultRef + "\x00" + m.BranchGeneration
 }
 
 type remoteCache struct {
-	Key       string
-	Checked   time.Time
-	Attempted time.Time
-	Error     string
-	Missing   bool
-	Rewritten bool
-	GitHub    string
-	Reviews   []ReviewFindings
+	Key         string
+	BaseChecked time.Time
+	BaseError   string
+	Checked     time.Time
+	Attempted   time.Time
+	Error       string
+	Missing     bool
+	Rewritten   bool
+	GitHub      string
+	Reviews     []ReviewFindings
+	MergedPR    *MergedPullRequest
 }
 
 // Bound subprocess output as well as time; a huge working tree must not hang the UI.
@@ -113,6 +125,10 @@ func runCommand(ctx context.Context, timeout time.Duration, name string, args ..
 	return runCommandWithSlots(ctx, remoteCommandSlots, timeout, name, args...)
 }
 func runCommandWithSlots(ctx context.Context, slots chan struct{}, timeout time.Duration, name string, args ...string) ([]byte, error) {
+	return runCommandWithEnv(ctx, slots, timeout, nil, name, args...)
+}
+
+func runCommandWithEnv(ctx context.Context, slots chan struct{}, timeout time.Duration, extraEnv []string, name string, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	select {
@@ -123,8 +139,16 @@ func runCommandWithSlots(ctx context.Context, slots chan struct{}, timeout time.
 	}
 	cmd := exec.CommandContext(ctx, toolPath(name), args...)
 	cmd.WaitDelay = time.Second
+	overridden := map[string]bool{}
+	for _, v := range extraEnv {
+		k, _, _ := strings.Cut(v, "=")
+		overridden[k] = true
+	}
 	for _, v := range os.Environ() {
 		k, _, _ := strings.Cut(v, "=")
+		if overridden[k] || (extraEnv != nil && strings.HasPrefix(k, "GIT_")) {
+			continue
+		}
 		switch k {
 		case "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_TERMINAL_PROMPT", "GIT_ASKPASS", "SSH_ASKPASS", "GIT_SSH_COMMAND", "GIT_OPTIONAL_LOCKS", "GH_PROMPT_DISABLED", "LC_ALL":
 			continue
@@ -132,6 +156,7 @@ func runCommandWithSlots(ctx context.Context, slots chan struct{}, timeout time.
 		cmd.Env = append(cmd.Env, v)
 	}
 	cmd.Env = append(cmd.Env, "GIT_TERMINAL_PROMPT=0", "GIT_ASKPASS=/usr/bin/false", "SSH_ASKPASS=/usr/bin/false", "GIT_SSH_COMMAND=/usr/bin/ssh -oBatchMode=yes -oStrictHostKeyChecking=yes", "GIT_OPTIONAL_LOCKS=0", "GH_PROMPT_DISABLED=1", "LC_ALL=C")
+	cmd.Env = append(cmd.Env, extraEnv...)
 	var out limitedOutput
 	cmd.Stdout = &out
 	var stderr limitedOutput
@@ -249,6 +274,7 @@ func inspectLocal(ctx context.Context, path string) (GitStatus, gitMeta) {
 			return failedLocalRead(path, errors.New("incomplete upstream response"), "")
 		}
 		m.Ref, m.Remote, m.Merge = parts[0], parts[1], parts[2]
+		m.BranchGeneration, m.BranchCreated = branchCreation(ctx, path, m.Branch)
 		// A checkout change during the reading must not publish a mixed identity.
 		if s.Tracking != strings.TrimPrefix(strings.TrimPrefix(m.Ref, "refs/remotes/"), "refs/heads/") {
 			return failedLocalRead(path, errors.New("upstream changed during reading"), "")
@@ -258,10 +284,20 @@ func inspectLocal(ctx context.Context, path string) (GitStatus, gitMeta) {
 	if remote == "" || remote == "." {
 		remote = "origin"
 	}
-	s.IsMainBranch, err = isMainBranch(ctx, path, m.Branch, remote)
+	s.DefaultBranch, err = defaultBranch(ctx, path, remote)
 	if err != nil {
 		return failedLocalRead(path, err, "")
 	}
+	if m.Remote == "origin" && m.Merge == "refs/heads/"+m.Branch && m.Ref == "refs/remotes/origin/"+m.Branch {
+		s.PushTarget = "origin/" + m.Branch
+	}
+	s.Head = m.OID
+	m.DefaultBranch, m.DefaultRemote = s.DefaultBranch, remote
+	if s.DefaultBranch != "" {
+		m.DefaultRef = "refs/remotes/" + remote + "/" + s.DefaultBranch
+	}
+	s.IsMainBranch = m.Branch == s.DefaultBranch || (s.DefaultBranch == "" && (m.Branch == "main" || m.Branch == "master" || m.Branch == "develop"))
+	s.Base = inspectBranchBase(ctx, s, m)
 	remoteURL, err := git(ctx, path, "remote", "get-url", remote)
 	if err != nil && !(exitedWith(err, 2) && gitDiagnostic(err, "error: No such remote ")) {
 		return failedLocalRead(path, err, "")
@@ -274,20 +310,17 @@ func inspectLocal(ctx context.Context, path string) (GitStatus, gitMeta) {
 }
 
 // Prefer the remote's cached default branch without requiring a network request.
-func isMainBranch(ctx context.Context, path, branch, remote string) (bool, error) {
-	if branch == "" || branch == "(detached)" {
-		return false, nil
-	}
+func defaultBranch(ctx context.Context, path, remote string) (string, error) {
 	prefix := "refs/remotes/" + remote + "/"
 	raw, err := git(ctx, path, "symbolic-ref", "--quiet", prefix+"HEAD")
 	if err != nil && !exitedWith(err, 1) {
-		return false, err
+		return "", err
 	}
 	defaultRef := strings.TrimSpace(string(raw))
 	if strings.HasPrefix(defaultRef, prefix) {
-		return branch == strings.TrimPrefix(defaultRef, prefix), nil
+		return strings.TrimPrefix(defaultRef, prefix), nil
 	}
-	return branch == "main" || branch == "master" || branch == "develop", nil
+	return "", nil
 }
 
 // Only complete local readings may replace the cache identity or saved status.
@@ -362,9 +395,39 @@ func describeGit(s GitStatus, m gitMeta, c remoteCache) GitStatus {
 	if s.Changes > 0 && s.Tone == "good" {
 		s.Tone = "info"
 	}
+	if s.Base != nil {
+		base := *s.Base
+		if base.Note == "" {
+			switch {
+			case c.BaseError != "":
+				base.Note = c.BaseError
+			case c.BaseChecked.IsZero():
+				base.Note = "Default branch not checked yet"
+			case time.Since(c.BaseChecked) > 2*time.Minute:
+				base.Note = "Default branch status is stale"
+			}
+		}
+		s.Base = &base
+	}
+	if c.Missing {
+		s.Rebased = false
+	}
+	if s.Rebased && s.Conflicts == 0 {
+		s.Summary, s.Tone = "Rebased · ready to publish", "info"
+		if s.RemoteNote != "" {
+			s.Summary = "Rebased · remote not verified"
+		}
+	}
 	s.Rewritten = c.Rewritten && (s.Ahead > 0 || s.Behind > 0)
 	s.GitHub = c.GitHub
 	s.Reviews = c.Reviews
+	if mergedPRMatchesBranch(c.MergedPR, m) && !s.IsMainBranch {
+		merged := *c.MergedPR
+		merged.SameHead = m.OID != "" && m.OID == merged.Head
+		s.MergedPR = &merged
+		s.GitHub = fmt.Sprintf("PR #%d · Merged", merged.Number)
+		s.Reviews = nil
+	}
 	return s
 }
 func refreshRemote(ctx context.Context, m gitMeta, c *remoteCache) {
@@ -397,8 +460,10 @@ func refreshRemote(ctx context.Context, m gitMeta, c *remoteCache) {
 	} else if m.Remote == "." {
 		c.Checked = time.Now()
 	}
+	refreshDefaultBranch(ctx, m, c)
 	c.GitHub = ""
 	c.Reviews = nil
+	c.MergedPR = nil
 	if m.GitHubRepo != "" && m.Branch != "(detached)" && !m.Initial {
 		out, err := runCommand(ctx, 15*time.Second, "gh", "pr", "list", "--repo", m.GitHubRepo, "--head", m.Branch, "--state", "open", "--limit", "20", "--json", "number,isDraft,reviewDecision,headRepositoryOwner,headRefOid")
 		if err != nil {
@@ -406,6 +471,16 @@ func refreshRemote(ctx context.Context, m gitMeta, c *remoteCache) {
 		} else {
 			owner := strings.Split(m.GitHubRepo, "/")[0]
 			c.GitHub = prSummary(out, owner)
+			if c.GitHub == "No open pull request" {
+				merged, err := runCommand(ctx, 15*time.Second, "gh", "pr", "list", "--repo", m.GitHubRepo, "--head", m.Branch, "--state", "merged", "--limit", "20", "--json", "number,state,headRefName,headRefOid,baseRefName,headRepository,mergedAt,url")
+				if err == nil {
+					c.MergedPR, err = latestMergedPR(merged, m.GitHubRepo, m.Branch)
+				}
+				if err != nil {
+					c.GitHub = "GitHub unavailable"
+				}
+				return
+			}
 			reviewCtx, cancel := context.WithTimeout(ctx, 25*time.Second)
 			defer cancel()
 			var prs []pullRequest
@@ -469,6 +544,7 @@ func prSummary(data []byte, owner string) string {
 func watchGit(ctx context.Context, path string, publish func(GitStatus)) {
 	cache := remoteCache{}
 	var last GitStatus
+	var rebased rebaseComparison
 	results := make(chan remoteCache, 1)
 	active := false
 	tick := time.NewTicker(3 * time.Second)
@@ -478,6 +554,7 @@ func watchGit(ctx context.Context, path string, publish func(GitStatus)) {
 		if ctx.Err() != nil {
 			return
 		}
+		s.Rebased = rebased.check(ctx, s, m)
 		status, valid := applyLocalReading(s, m, &cache, &last)
 		publish(status)
 		if !valid {

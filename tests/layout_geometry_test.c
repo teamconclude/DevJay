@@ -59,5 +59,11 @@ int main(void) {
     DPRect negative = dp_placement_bounds((DPRect){-3840,-508,3840,2160}, (DPRect){-3840,-418,3840,2040});
     check(dp_reanchor((DPRect){2895,10,289,173}, withDock, negative), (DPRect){-305,-498,289,173});
     check(dp_clamp((DPRect){16,-100,289,173}, withDock), (DPRect){16,8,289,173});
-    puts("Window geometry: 40 checks passed");
+    check(dp_grow_height((DPRect){100,10,300,174}, old, 260), (DPRect){100,10,300,260});
+    check(dp_grow_height((DPRect){100,600,300,174}, old, 260), (DPRect){100,514,300,260});
+    check(dp_grow_height((DPRect){100,10,300,260}, old, 174), (DPRect){100,10,300,260});
+    check(dp_grow_height((DPRect){100,10,300,174}, old, 2000), (DPRect){100,8,300,884});
+    check(dp_grow_height((DPRect){-310,-498,300,174}, negative, 260), (DPRect){-310,-498,300,260});
+    check(dp_grow_height((DPRect){100,10,300,174}, old, NAN), (DPRect){100,10,300,174});
+    puts("Window geometry: 46 checks passed");
 }
