@@ -360,8 +360,13 @@ button.status-line:hover { text-decoration: underline; }
 .git-view-title strong { font-size: 17px; }
 .git-view-title span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .git-view-tabs { display: flex; gap: 4px; }
-.git-view-tabs button { white-space: nowrap; padding: 7px 9px; background: transparent; border-color: transparent; }
+.git-view-tabs button { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; padding: 7px 9px; background: transparent; border-color: transparent; }
 .git-view-tabs button.selected { background: #294363; border-color: #6081a8; }
+.git-tab-count { padding: 1px 5px; border-radius: 5px; background: #ffffff0d; color: #b8c6d8; font-size: 11px; font-variant-numeric: tabular-nums; }
+.git-view-tabs button.empty-category { color: #909eb1; }
+.git-view-tabs button.empty-category .git-tab-count { color: inherit; }
+.git-view-tabs button.empty-category.selected { color: #b8c6d8; }
+.git-view-tabs button.empty-category:hover, .git-view-tabs button.empty-category:focus-visible { color: #edf1f7; }
 .git-view-context { padding: 9px 18px; color: #9aa7ba; font-size: 11px; border-bottom: 1px solid #303a49; flex-shrink: 0; }
 .git-view-error { margin: 10px 18px; color: #edb894; overflow-wrap: anywhere; }
 .git-view-panes { display: grid; grid-template-columns: minmax(190px, 23%) minmax(175px, 23%) minmax(0, 1fr); flex: 1; min-height: 0; }

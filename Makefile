@@ -5,13 +5,16 @@ CGO_CFLAGS ?= -O2 -g
 export CGO_CFLAGS := $(CGO_CFLAGS) -mmacosx-version-min=$(MACOS_MIN)
 GO_LINK_FLAGS := -extldflags=-mmacosx-version-min=$(MACOS_MIN)
 
-.PHONY: build run check
+.PHONY: build run check installer
 build:
 	mkdir -p "$(APP)/Contents/MacOS" "$(APP)/Contents/Resources"
 	CGO_ENABLED=1 go build -ldflags="$(GO_LINK_FLAGS)" -o "$(APP)/Contents/MacOS/DevJay" .
 	cp build/DevJay.icns "$(APP)/Contents/Resources/DevJay.icns"
 	cp build/Info.plist "$(APP)/Contents/Info.plist"
 	codesign --force --sign - "$(APP)"
+
+installer:
+	./scripts/create-installer.sh
 
 run: build
 	open "$(APP)"
@@ -21,6 +24,10 @@ check:
 	trap 'rm -f "$$geometry_bin"' EXIT; \
 	clang -Wall -Wextra -Werror tests/layout_geometry_test.c -o "$$geometry_bin"; \
 	"$$geometry_bin"
+	@set -e; power_bin=$$(mktemp "$${TMPDIR:-/tmp}/devjay-power.XXXXXX"); \
+	trap 'rm -f "$$power_bin"' EXIT; \
+	clang -Wall -Wextra -Werror -fblocks -framework AppKit tests/ui_power_test.m -o "$$power_bin"; \
+	"$$power_bin"
 	go test -ldflags="$(GO_LINK_FLAGS)" ./...
 	go vet ./...
 	node --input-type=module --check < frontend/app.js

@@ -35,7 +35,7 @@ type gitViewerWindow struct {
 
 func (m *siteManager) emitViewer(id string) {
 	r := m.viewers[id]
-	if r != nil && r.ready && r.state != nil {
+	if r != nil && r.ready && r.state != nil && !m.recovery.paused {
 		m.app.Event.Emit("devjay:viewer-state:"+id, r.state)
 	}
 }
@@ -80,6 +80,7 @@ func (m *siteManager) forgetViewer(id string) {
 		if r.cancel != nil {
 			r.cancel()
 		}
+		m.forgetView(id)
 		delete(m.viewers, id)
 	}
 }
@@ -99,11 +100,14 @@ func (m *siteManager) openViewer(req viewerRequest, parent *application.WebviewW
 		Mac:              application.MacWindow{CollectionBehavior: application.MacWindowCollectionBehaviorMoveToActiveSpace | application.MacWindowCollectionBehaviorFullScreenNone, TabbingMode: application.MacWindowTabbingModeDisallowed},
 	})
 	m.viewers[id] = &gitViewerWindow{window: w, parent: parent, state: &GitView{SiteID: req.SiteID, Name: filepath.Base(site.Site.Path), Path: site.Site.Path, Kind: req.Kind, File: -1, RemoteNote: site.Git.RemoteNote, Rebased: site.Git.Rebased}}
+	m.watchView(id, w)
 	w.OnWindowEvent(events.Common.WindowRuntimeReady, func(*application.WindowEvent) {
 		m.send(func() {
 			if r := m.viewers[id]; r != nil {
-				r.ready = true
-				showViewerWindow(w, r.parent)
+				if !r.ready {
+					r.ready = true
+					showViewerWindow(w, r.parent)
+				}
 				m.emitViewer(id)
 			}
 		})

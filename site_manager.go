@@ -42,6 +42,8 @@ type appSnapshot struct {
 	Error         string                   `json:"error"`
 }
 type siteManager struct {
+	recovery                                                 uiRecovery
+	recoveryWindows                                          map[string]*application.WebviewWindow
 	editorState                                              *EditorState
 	editorGeneration                                         uint64
 	editorBrowsing                                           bool
@@ -84,6 +86,7 @@ func (m *siteManager) send(fn func()) {
 	}
 }
 func (m *siteManager) run() {
+	m.recoverViews()
 	tick := time.NewTicker(time.Second)
 	defer tick.Stop()
 	for {
@@ -95,6 +98,7 @@ func (m *siteManager) run() {
 				fn()
 			}
 		case <-tick.C:
+			m.recoverViews()
 			m.publishSnapshot(false)
 		}
 	}
@@ -120,6 +124,7 @@ func (m *siteManager) openSettings() {
 }
 func (m *siteManager) createWindow(site Site) {
 	window := m.app.Window.NewWithOptions(application.WebviewWindowOptions{Name: "site-" + site.ID, Title: "DevJay Site · " + filepath.Base(site.Path), URL: "/?site=" + site.ID, Width: 290, Height: 174, Frameless: m.config.decoration() != "normal", X: 160, Y: 260, InitialPosition: application.WindowXY, DisableResize: true, CloseButtonState: application.ButtonDisabled, MaximiseButtonState: application.ButtonDisabled, BackgroundColour: application.NewRGB(20, 24, 32), Mac: application.MacWindow{CornerType: application.MacWindowCornerTypeRounded, CollectionBehavior: application.MacWindowCollectionBehaviorManaged | application.MacWindowCollectionBehaviorFullScreenNone, TabbingMode: application.MacWindowTabbingModeDisallowed}})
+	m.watchView("site-"+site.ID, window)
 	m.mu.Lock()
 	m.runtime[site.ID] = &siteRuntime{Site: site, Window: window, Git: GitStatus{Summary: "Checking repository…", Tone: "muted"}}
 	m.mu.Unlock()
@@ -190,7 +195,7 @@ func snapshotSignature(snapshot appSnapshot) string {
 }
 func (m *siteManager) broadcast() { m.publishSnapshot(true) }
 func (m *siteManager) publishSnapshot(force bool) {
-	if !m.panelReady {
+	if !m.panelReady || m.recovery.paused {
 		return
 	}
 	snapshot := m.snapshot()
@@ -281,6 +286,7 @@ func (m *siteManager) remove(id string) {
 	if r.Ready {
 		saveWindowLayout(r.Window)
 	}
+	m.forgetView("site-" + id)
 	r.Window.Close()
 	m.siteError("")
 	m.broadcast()

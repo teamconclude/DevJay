@@ -8,6 +8,7 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/events"
 	"log"
 	"sync"
+	"time"
 )
 
 //go:embed frontend
@@ -31,8 +32,10 @@ func main() {
 		Mac:              application.MacWindow{CornerType: application.MacWindowCornerTypeRounded, WindowClass: application.MacWindowClassPanel, PanelPreferences: application.MacPanelPreferences{NonActivating: true, FloatingPanel: true}, CollectionBehavior: application.MacWindowCollectionBehaviorCanJoinAllSpaces | application.MacWindowCollectionBehaviorFullScreenNone, TabbingMode: application.MacWindowTabbingModeDisallowed},
 	})
 	manager.panel = panel
+	manager.watchView("control-panel", panel)
 	settings := app.Window.NewWithOptions(application.WebviewWindowOptions{Name: "settings", EnableFileDrop: true, Title: "DevJay Settings", URL: "/?settings", Width: 700, Height: 570, MinWidth: 540, MinHeight: 400, Hidden: true, MaximiseButtonState: application.ButtonDisabled, BackgroundColour: application.NewRGB(20, 24, 32), Mac: application.MacWindow{CornerType: application.MacWindowCornerTypeRounded, CollectionBehavior: application.MacWindowCollectionBehaviorMoveToActiveSpace | application.MacWindowCollectionBehaviorFullScreenNone, TabbingMode: application.MacWindowTabbingModeDisallowed}})
 	manager.settings = settings
+	manager.watchView("settings", settings)
 	settings.OnWindowEvent(events.Common.WindowFilesDropped, func(e *application.WindowEvent) {
 		target := e.Context().DropTargetDetails()
 		if target == nil || target.ElementID != "site-drop-zone" {
@@ -63,11 +66,13 @@ func main() {
 	})
 	panel.OnWindowEvent(events.Common.WindowRuntimeReady, func(*application.WindowEvent) {
 		manager.send(func() {
-			restoreWindowLayout(panel, "control-panel")
-			if !prepareControlPanel(panel) {
-				log.Print("Control Panel click handling unavailable")
+			if !manager.panelReady {
+				restoreWindowLayout(panel, "control-panel")
+				if !prepareControlPanel(panel) {
+					log.Print("Control Panel click handling unavailable")
+				}
+				manager.panelReady = true
 			}
-			manager.panelReady = true
 			if manager.openSettingsPending {
 				manager.openSettings()
 			}
@@ -87,6 +92,7 @@ func main() {
 	manager.createSuggestionsWindow()
 	manager.registerViewerEvents()
 	manager.registerEvents()
+	manager.registerRecoveryEvents()
 	menu := app.Menu.New()
 	menu.AddRole(application.AppMenu)
 	menu.AddRole(application.EditMenu)
@@ -98,6 +104,9 @@ func main() {
 		manager.send(func() { setPanelPreference(panel, "onTop", ctx.IsChecked()); manager.syncSettings() })
 	})
 	view.Add("Settings…").SetAccelerator("CmdOrCtrl+,").OnClick(func(*application.Context) { manager.send(manager.openSettings) })
+	view.Add("Reload windows").OnClick(func(*application.Context) {
+		manager.send(func() { manager.recovery.manual(time.Now()) })
+	})
 	sites := menu.AddSubmenu("Sites")
 	sites.Add("Show DevJay").SetAccelerator("CmdOrCtrl+0").OnClick(func(*application.Context) {
 		if panel.IsMinimised() {

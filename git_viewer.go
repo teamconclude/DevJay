@@ -34,7 +34,15 @@ type ViewFile struct {
 	Status     string `json:"status"`
 	Group      string `json:"group"`
 }
+
+// Nil commit counts mean the comparison/history could not be read, not zero.
+type ViewCounts struct {
+	Edits  int  `json:"edits"`
+	Local  *int `json:"local"`
+	Remote *int `json:"remote"`
+}
 type GitView struct {
+	Counts        *ViewCounts  `json:"counts"`
 	Editor        *EditorState `json:"editor,omitempty"`
 	IncomingCount int          `json:"incomingCount"` // -1 when the comparison is unavailable.
 	HistoryNote   string       `json:"historyNote"`
@@ -110,6 +118,7 @@ func loadGitView(ctx context.Context, v *GitView, refresh bool) error {
 	v.Merge = false
 	v.FilesLimited = false
 	if refresh {
+		v.Counts = nil
 		root, err := viewerGit(ctx, v.Path, "rev-parse", "--show-toplevel")
 		if err != nil {
 			return errors.New("This Site is not an available Git checkout.")
@@ -128,6 +137,7 @@ func loadGitView(ctx context.Context, v *GitView, refresh bool) error {
 		if m.Ref != "" {
 			v.Upstream = gitString(ctx, v.root, "rev-parse", "--verify", m.Ref+"^{commit}")
 		}
+		v.Counts = countViewCategories(ctx, v, s.Changes)
 		v.Captured = time.Now().Format(time.RFC3339)
 		v.Page = 0
 	}
@@ -155,6 +165,14 @@ func loadGitView(ctx context.Context, v *GitView, refresh bool) error {
 			if len(path) > 0 {
 				v.Files = append(v.Files, ViewFile{Path: string(path), Status: "?", Group: "Untracked"})
 			}
+		}
+		// Count each path once, even when it has both staged and unstaged edits.
+		paths := make(map[string]bool)
+		for _, file := range v.Files {
+			paths[file.Path] = true
+		}
+		if v.Counts != nil {
+			v.Counts.Edits = len(paths)
 		}
 		limitViewFiles(v)
 		populateViewStats(ctx, v)
@@ -195,6 +213,30 @@ func loadGitView(ctx context.Context, v *GitView, refresh bool) error {
 		return selectViewCommit(ctx, v, v.Commits[0].ID)
 	}
 	return nil
+}
+
+// Counts cover the entire captured category, not just its current page. These
+// local reads use the same pinned revisions as the commit list and never fetch.
+func countViewCategories(ctx context.Context, v *GitView, edits int) *ViewCounts {
+	counts := &ViewCounts{Edits: edits}
+	count := func(revision string) *int {
+		out, err := viewerGit(ctx, v.root, "rev-list", "--count", revision, "--")
+		if err != nil {
+			return nil
+		}
+		n, err := strconv.Atoi(strings.TrimSpace(string(out)))
+		if err != nil || n < 0 {
+			return nil
+		}
+		return &n
+	}
+	if v.Upstream != "" {
+		if v.Head != "" {
+			counts.Local = count(v.Upstream + ".." + v.Head)
+		}
+		counts.Remote = count(v.Upstream)
+	}
+	return counts
 }
 
 // Use the same pinned revisions as the history page. Reading the incoming set

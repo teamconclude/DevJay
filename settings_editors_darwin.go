@@ -9,6 +9,9 @@ import (
 )
 
 func (m *siteManager) emitEditorSettings() {
+	if m.recovery.paused {
+		return
+	}
 	m.app.Event.Emit("devjay:editor-settings-state", struct {
 		Editor *EditorState `json:"editor"`
 	}{m.editorState})

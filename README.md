@@ -27,11 +27,25 @@ Although it grew out of Conclude’s workflow, DevJay is a general-purpose tool.
 
 ## Get started
 
-1. Build and run DevJay using the instructions below.
+1. Install DevJay from a disk image, or build and run it using the instructions below.
 2. Open Settings with **⌘,**. Click **Add**, or drop a folder into the Sites list.
 3. Place the Site window on the desktop where you work on that checkout.
 4. Repeat for your other development contexts.
 5. Use the control panel to check branch status and switch between Sites.
+
+## Install
+
+Open the DevJay `.dmg`, quit any running copy, and drag **DevJay.app** onto **Applications**. Launch it from Applications, then eject the disk image. Replacing an older app preserves your Sites and preferences. macOS 13 or newer is required; the universal installer supports Apple Silicon and Intel Macs. Go and Node are not needed to run the installed app. Git is required for repository status; GitHub PR information also requires `gh` and your existing sign-in.
+
+To create an installer locally:
+
+```sh
+make installer
+```
+
+This builds both architectures in a temporary directory, leaving the development app in `bin/` untouched, and produces `dist/DevJay-0.1.0-macos-universal.dmg` with a SHA-256 checksum. The version comes from `build/Info.plist`. To build for one architecture, use `make installer ARCH=arm64` or `make installer ARCH=amd64`. Packaging verifies the disk image, mounts it read-only, and checks its application signature, architectures, and Applications link.
+
+These development installers use an ad-hoc signature and are not Apple-notarized. macOS may block downloaded copies. Public distribution still requires Developer ID signing and Apple notarization.
 
 ## Run
 
@@ -97,6 +111,12 @@ For GitHub.com remotes, `gh pr list` supplies open PR number, draft state, and r
 Sites and custom order are stored atomically in `~/Library/Application Support/DevJay/sites.json`. A malformed configuration is reported and never silently overwritten. Window positions, display identity, desktop UUID, and appearance preferences are stored in macOS preferences under the `io.teamconclude.devjay` bundle identifier. Each folder has a stable identifier, so removing and re-adding it recovers its previous placement.
 
 The control panel remembers its size. Windows within 10% of the usable screen width or height of the nearer right or bottom edge preserve their gap in points when the resolution changes. Restored windows are clamped 8 points inside the usable display area. Missing displays fall back to the nearest available screen. Desktop identification and restoration use runtime-loaded private SkyLight APIs. Failed restores preserve the saved desktop assignment until the Site is moved; removed desktops or unavailable APIs leave windows accessible. These undocumented APIs may change with macOS updates. The main window skips desktop restoration when shown on all desktops.
+
+## Recovering blank windows
+
+After display/system wake or returning to the login session, DevJay reloads its web views once the display has settled. WebContent process termination also triggers recovery if WebKit's own reload does not restore a rendered snapshot. Reloads preserve native window positions, visibility, and backend Git operations; they do not repeat or confirm an action. Transient UI state such as text selection and scroll position may reset.
+
+Recovery waits for fresh frontend state and retries at most three times per incident, with a rate limit for repeated crashes. Regular snapshots are paused while the display or session sleeps. If windows remain blank, use **View → Reload windows** to retry without quitting. Recovery events are logged with the prefix `UI recovery:`. A persistent macOS GPU failure can still require restarting DevJay or macOS.
 
 ## Checks
 

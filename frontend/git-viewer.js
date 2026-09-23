@@ -36,6 +36,18 @@ export function commitPresenceLabel(presence) {
   return {incoming:'↓ Incoming',local:'✓ Already local',unknown:'Local status unknown'}[presence] || '';
 }
 
+export function viewCategory(v, kind) {
+  const count = v.counts?.[kind];
+  const known = Number.isInteger(count) && count >= 0;
+  const label = {edits:'Local edits',local:'Local commits',remote:'Remote commits'}[kind];
+  const unit = kind === 'edits' ? `changed ${count === 1 ? 'file' : 'files'}` : kind === 'local' ? `local-only ${count === 1 ? 'commit' : 'commits'}` : `${count === 1 ? 'commit' : 'commits'} in remote history`;
+  return {
+    label, count:known ? count.toLocaleString() : v.loading ? '…' : '—', empty:known && count === 0,
+    description:known ? `${count.toLocaleString()} ${unit} at the last refresh${kind === 'remote' ? ', including commits already present locally' : ''}.` :
+      v.loading ? 'Loading count…' : kind !== 'edits' && !v.upstream ? 'No upstream history available for comparison.' : 'Count unavailable. Refresh to retry.',
+  };
+}
+
 export function mountGitViewer(root, request, suggestions) {
   const el=(tag,cls,text)=>{const node=document.createElement(tag);node.className=cls;if(text!==undefined)node.textContent=text;return node;};
   const button=(text,run,cls='')=>{const node=el('button',cls,text);node.type='button';node.onclick=run;return node;};
@@ -56,7 +68,8 @@ export function mountGitViewer(root, request, suggestions) {
   const name=el('strong',''),branch=el('span','muted');title.append(name,branch);
   const tabs=el('nav','git-view-tabs');tabs.setAttribute('aria-label','Changes to inspect');
   for(const [kind,label] of [['edits','Local edits'],['local','Local commits'],['remote','Remote commits']]) {
-    const tab=button(label,()=>send('mode',{kind}));tab.dataset.kind=kind;tabs.append(tab);
+    const tab=button('',()=>send('mode',{kind}));tab.dataset.kind=kind;
+    tab.append(el('span','',label),el('span','git-tab-count','…'));tabs.append(tab);
   }
   const refresh=button('Refresh',()=>send('refresh'));
   header.append(title,tabs,refresh);
@@ -92,7 +105,15 @@ export function mountGitViewer(root, request, suggestions) {
     }
     name.textContent=v.name||'Changes';name.title=v.path;
     branch.textContent=v.branch||'';
-    tabs.querySelectorAll('button').forEach(tab=>{tab.classList.toggle('selected',tab.dataset.kind===v.kind);tab.setAttribute('aria-pressed',String(tab.dataset.kind===v.kind));});
+    tabs.querySelectorAll('button').forEach(tab=>{
+      const category=viewCategory(v,tab.dataset.kind);
+      tab.classList.toggle('selected',tab.dataset.kind===v.kind);
+      tab.classList.toggle('empty-category',category.empty);
+      tab.setAttribute('aria-pressed',String(tab.dataset.kind===v.kind));
+      tab.setAttribute('aria-label',`${category.label}, ${category.count}`);
+      tab.querySelector('.git-tab-count').textContent=category.count;
+      tab.title=category.description;
+    });
     root.setAttribute('aria-busy',String(v.loading));panes.inert=v.loading;refresh.disabled=v.loading;
     error.hidden=!v.error;error.textContent=v.error||'';
     const capture=v.captured?new Date(v.captured).toLocaleTimeString():'';

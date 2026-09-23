@@ -16,10 +16,12 @@ func (m *siteManager) createSuggestionsWindow() {
 		Mac:                 application.MacWindow{CornerType: application.MacWindowCornerTypeRounded, CollectionBehavior: application.MacWindowCollectionBehaviorMoveToActiveSpace | application.MacWindowCollectionBehaviorFullScreenNone, TabbingMode: application.MacWindowTabbingModeDisallowed},
 	})
 	m.suggestions = w
+	m.watchView("suggested-actions", w)
 	w.OnWindowEvent(events.Common.WindowRuntimeReady, func(*application.WindowEvent) {
 		m.send(func() {
+			first := !m.suggestionsReady
 			m.suggestionsReady = true
-			if m.suggestionsParent != nil {
+			if first && m.suggestionsParent != nil {
 				showSuggestionsWindow(w, m.suggestionsParent)
 			}
 			m.broadcast()

@@ -1,4 +1,5 @@
 import { Events, Window } from '/wails/runtime.js';
+import { uiReady } from './ui-ready.js';
 import { installCardSizing } from './card-sizing.js';
 import { mountEditorSettings } from './editor-settings.js';
 import { mountGitViewer } from './git-viewer.js';
@@ -10,6 +11,7 @@ import { installDragOriginGuard } from './drag-origin.js';
 import { installCardHover } from './card-hover.js';
 installCardHover(window, document);
 installDragOriginGuard(window, document.documentElement);
+const reportUIReady = uiReady(id => Events.Emit('devjay:ui-ready', id));
 const params = new URLSearchParams(location.search);
 const siteID = params.get('site');
 const settings = params.has('settings');
@@ -91,7 +93,7 @@ if (viewer) {
   renderViewerSnapshot = state => { currentSnapshot = state; updateOverview(); };
   const renderViewer = mountGitViewer(root, data => emit('viewer-request', data), suggestions);
   Events.On(`devjay:viewer-state:${params.get('viewer')}`, event => {
-    currentView = event.data; renderViewer(currentView); updateOverview();
+    currentView = event.data; renderViewer(currentView); updateOverview(); reportUIReady();
   });
   document.addEventListener('keydown', e => { if (e.key === 'Escape') emit('viewer-close'); });
 } else if (actions) {
@@ -320,7 +322,10 @@ if (settings) Events.On('devjay:site-error', event => {
   siteError.hidden = !event.data;
   siteErrorTimer = setTimeout(() => { siteError.hidden = true; siteError.textContent = ''; }, 5000);
 });
-Events.On('devjay:snapshot', event => render(event.data));
+Events.On('devjay:snapshot', event => {
+  render(event.data);
+  if (!viewer) reportUIReady();
+});
 emit('hello');
 
 if (viewer) emit('viewer-hello');

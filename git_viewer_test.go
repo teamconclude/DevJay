@@ -32,6 +32,9 @@ func TestViewerShowsStagedUnstagedAndUntrackedWithoutWrites(t *testing.T) {
 	if err := loadGitView(context.Background(), &v, true); err != nil {
 		t.Fatal(err)
 	}
+	if v.Counts == nil || v.Counts.Edits != 6 {
+		t.Fatalf("distinct edited paths: %+v", v.Counts)
+	}
 	seen := map[string]bool{}
 	for i, f := range v.Files {
 		selectViewFile(context.Background(), &v, i)
@@ -92,10 +95,13 @@ func TestViewerCommitRangesAndPinnedSelection(t *testing.T) {
 	fixtureGit(t, seed, "push", "origin", "feature")
 	fixtureGit(t, repo, "fetch", "origin")
 	remote := fixtureGit(t, repo, "rev-parse", "origin/feature")
-	for _, kind := range []string{"local", "remote"} {
+	for index, kind := range []string{"local", "remote"} {
 		v := GitView{Path: repo, Kind: kind}
 		if err := loadGitView(context.Background(), &v, true); err != nil {
 			t.Fatal(err)
+		}
+		if v.Counts == nil || v.Counts.Local == nil || *v.Counts.Local != index+1 || v.Counts.Remote == nil || *v.Counts.Remote != 3 {
+			t.Fatalf("divergent category counts: %+v", v.Counts)
 		}
 		want, subject := local, "local subject"
 		if kind == "remote" {
@@ -193,6 +199,9 @@ func TestViewerRemoteHistoryWhenSyncedAndAcrossPages(t *testing.T) {
 	if err := loadGitView(context.Background(), &v, true); err != nil {
 		t.Fatal(err)
 	}
+	if v.Counts == nil || v.Counts.Edits != 0 || v.Counts.Local == nil || *v.Counts.Local != 0 || v.Counts.Remote == nil || *v.Counts.Remote != 2 {
+		t.Fatalf("synced category counts: %+v", v.Counts)
+	}
 	if len(v.Commits) != 2 || v.IncomingCount != 0 {
 		t.Fatalf("synced history: %+v", v)
 	}
@@ -225,6 +234,9 @@ func TestViewerRemoteHistoryWhenSyncedAndAcrossPages(t *testing.T) {
 	if err := loadGitView(context.Background(), &v, false); err != nil {
 		t.Fatal(err)
 	}
+	if v.Counts.Remote == nil || *v.Counts.Remote != viewerPageSize+2 {
+		t.Fatalf("count changed with page/ref: %+v", v.Counts)
+	}
 	if len(v.Commits) != 2 || v.More || v.Upstream != tip || v.IncomingCount != viewerPageSize {
 		t.Fatalf("second page: %+v", v)
 	}
@@ -243,5 +255,26 @@ func TestViewerRemoteHistoryWhenSyncedAndAcrossPages(t *testing.T) {
 		if commit.Presence != "unknown" {
 			t.Fatal("failed comparison reported a commit as local")
 		}
+	}
+}
+
+func TestViewerCategoryCountsUnavailableAreNotZero(t *testing.T) {
+	repo, _ := rebaseFixture(t, false)
+	fixtureGit(t, repo, "branch", "--unset-upstream")
+	v := GitView{Path: repo, Kind: "edits"}
+	if err := loadGitView(context.Background(), &v, true); err != nil {
+		t.Fatal(err)
+	}
+	if v.Counts == nil || v.Counts.Edits != 0 || v.Counts.Local != nil || v.Counts.Remote != nil {
+		t.Fatalf("missing upstream: %+v", v.Counts)
+	}
+	v.Head, v.Upstream = "missing-head", "missing-upstream"
+	counts := countViewCategories(context.Background(), &v, 2)
+	if counts.Local != nil || counts.Remote != nil || counts.Edits != 2 {
+		t.Fatalf("failed counts: %+v", counts)
+	}
+	v.Path = t.TempDir()
+	if err := loadGitView(context.Background(), &v, true); err == nil || v.Counts != nil {
+		t.Fatal("failed refresh retained stale counts")
 	}
 }

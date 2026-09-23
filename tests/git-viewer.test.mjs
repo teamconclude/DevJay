@@ -4,7 +4,7 @@ import {readFile} from 'node:fs/promises';
 let source=await readFile(new URL('../frontend/git-viewer.js',import.meta.url),'utf8');
 const editorSource=await readFile(new URL('../frontend/file-editor.js',import.meta.url),'utf8');
 source=source.replace('./file-editor.js',`data:text/javascript;base64,${Buffer.from(editorSource).toString('base64')}`);
-const {diffRows,summarizeFiles,remoteHistoryContext,commitPresenceLabel}=await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
+const {diffRows,summarizeFiles,remoteHistoryContext,commitPresenceLabel,viewCategory}=await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
 test('unified diff rows retain independent old and new line numbers',()=>{
  const rows=diffRows('--- a/file\n+++ b/file\n@@ -3,2 +3,3 @@\n context\n-old\n+new\n+added\n\\ No newline at end of file');
  assert.deepEqual(rows.slice(3,7).map(r=>[r.kind,r.old,r.current]),[['context',3,3],['delete',4,''],['add','',4],['add','',5]]);
@@ -35,4 +35,20 @@ test('remote history distinguishes already-local commits from incoming changes',
  assert.equal(commitPresenceLabel('unknown'),'Local status unknown');
  assert.match(remoteHistoryContext({tracking:'origin/main',incomingCount:0}),/Remote history · origin\/main · 0 incoming commits/);
  assert.match(remoteHistoryContext({incomingCount:-1}),/comparison unavailable/);
+});
+
+test('category counts distinguish empty, unavailable, and full remote history',()=>{
+ const v={counts:{edits:0,local:0,remote:248},upstream:'captured-upstream'};
+ assert.equal(viewCategory(v,'edits').count,'0');
+ assert.equal(viewCategory(v,'local').empty,true);
+ assert.equal(viewCategory(v,'remote').empty,false);
+ assert.equal(viewCategory(v,'remote').count,'248');
+ assert.match(viewCategory(v,'remote').description,/including commits already present locally/);
+ assert.equal(viewCategory({loading:true},'edits').count,'…');
+ const missing=viewCategory({counts:{edits:2,local:null}},'local');
+ assert.equal(missing.count,'—');assert.equal(missing.empty,false);
+ assert.match(missing.description,/No upstream/);
+ assert.match(viewCategory({upstream:'abc',counts:{remote:null}},'remote').description,/unavailable/);
+ // A failed load or absent data must never imply a known empty category.
+ assert.equal(viewCategory({error:'Checkout unavailable'},'edits').empty,false);
 });
