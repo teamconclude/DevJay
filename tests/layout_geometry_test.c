@@ -1,4 +1,4 @@
-#include "../layout_geometry.h"
+#include "../cmd/devjay/layout_geometry.h"
 #include <assert.h>
 #include <stdio.h>
 static void check(DPRect a, DPRect b) {

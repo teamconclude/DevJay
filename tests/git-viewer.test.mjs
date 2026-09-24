@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
-let source=await readFile(new URL('../frontend/git-viewer.js',import.meta.url),'utf8');
-const editorSource=await readFile(new URL('../frontend/file-editor.js',import.meta.url),'utf8');
+let source=await readFile(new URL('../cmd/devjay/frontend/git-viewer.js',import.meta.url),'utf8');
+const editorSource=await readFile(new URL('../cmd/devjay/frontend/file-editor.js',import.meta.url),'utf8');
 source=source.replace('./file-editor.js',`data:text/javascript;base64,${Buffer.from(editorSource).toString('base64')}`);
-const {diffRows,summarizeFiles,remoteHistoryContext,commitPresenceLabel,viewCategory}=await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
+const {diffRows,summarizeFiles,remoteHistoryContext,localHistoryContext,commitPresenceLabel,viewCategory}=await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
 test('unified diff rows retain independent old and new line numbers',()=>{
  const rows=diffRows('--- a/file\n+++ b/file\n@@ -3,2 +3,3 @@\n context\n-old\n+new\n+added\n\\ No newline at end of file');
  assert.deepEqual(rows.slice(3,7).map(r=>[r.kind,r.old,r.current]),[['context',3,3],['delete',4,''],['add','',4],['add','',5]]);
@@ -35,6 +35,18 @@ test('remote history distinguishes already-local commits from incoming changes',
  assert.equal(commitPresenceLabel('unknown'),'Local status unknown');
  assert.match(remoteHistoryContext({tracking:'origin/main',incomingCount:0}),/Remote history · origin\/main · 0 incoming commits/);
  assert.match(remoteHistoryContext({incomingCount:-1}),/comparison unavailable/);
+});
+
+test('unpublished branch history names the cached comparison without claiming an upstream',()=>{
+ const v={comparisonOnly:true,tracking:'origin/main',incomingCount:0,counts:{local:3,remote:18}};
+ assert.match(localHistoryContext(v),/Local-only commits compared with origin\/main/);
+ assert.match(localHistoryContext(v),/No upstream configured; cached comparison/);
+ assert.match(remoteHistoryContext(v),/origin\/main · 0 incoming commits/);
+ assert.match(remoteHistoryContext(v),/No upstream configured; cached comparison/);
+ assert.equal(viewCategory(v,'local').count,'3');
+ assert.match(viewCategory(v,'local').description,/compared with origin\/main/);
+ assert.equal(viewCategory(v,'remote').count,'18');
+ assert.doesNotMatch(localHistoryContext({...v,comparisonOnly:false}),/No upstream/);
 });
 
 test('category counts distinguish empty, unavailable, and full remote history',()=>{

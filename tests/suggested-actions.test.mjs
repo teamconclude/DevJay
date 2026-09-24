@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
-const source = await readFile(new URL('../frontend/suggested-actions.js', import.meta.url), 'utf8');
+const source = await readFile(new URL('../cmd/devjay/frontend/suggested-actions.js', import.meta.url), 'utf8');
 const {postMergeSuggestion} = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
 const git = {branch:'feature',defaultBranch:'trunk',mergedPR:{number:4,sameHead:true,base:'trunk'}};
 test('suggestions require a merged PR and use the repository default', () => {
@@ -18,7 +18,7 @@ test('return suggestion is absent for changed, conflicted, stale, reused or wron
  }
 });
 
-const {siteSuggestions, rebaseCheckForSite, suggestionSteps, mountSuggestedActions, mountViewerSuggestions, recommendedActions} = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
+const {siteSuggestions, suggestionSteps, mountSuggestedActions, mountViewerSuggestions, recommendedActions} = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
 test('default branch behind upstream suggests a fast-forward update', () => {
  const [s] = siteSuggestions({git:{branch:'develop',isMainBranch:true,tracking:'origin/develop',behind:3}});
  assert.equal(s.kind,'update'); assert.equal(s.blocked,false);
@@ -39,18 +39,6 @@ test('feature upstream and default-branch comparisons are independent', () => {
  assert.equal(siteSuggestions({git:{...feature,defaultBranch:'develop',mergedPR:{number:1,sameHead:true,base:'develop'}}}).length,1);
  assert.equal(siteSuggestions({git:{...feature,defaultBranch:'develop',mergedPR:{number:1,sameHead:true,base:'develop'}}})[0].kind,'merged');
 });
-test('rebase checks are bound to the site, branch and tested commits', () => {
- const site={id:'c3',git:{branch:'feature',head:'abc',base:{branch:'develop',head:'old'}}};
- const check={siteID:'c3',branch:'feature',head:'abc',target:'develop',baseHead:'old',targetHead:'new',status:'clean'};
- assert.equal(rebaseCheckForSite(check,site).status,'clean');
- assert.equal(rebaseCheckForSite(check,{...site,id:'c2'}),null);
- for(const patch of [{head:'changed'},{branch:'other'},{changes:1},{conflicts:1},{localNote:'cached'},{base:{branch:'develop',head:'newer'}}]) {
-  assert.equal(rebaseCheckForSite(check,{...site,git:{...site.git,...patch}}).status,'stale');
- }
- assert.equal(rebaseCheckForSite(check,{...site,git:{...site.git,base:{branch:'develop',head:'new'}}}).status,'clean');
- assert.equal(rebaseCheckForSite({...check,status:'conflicts'},site).status,'conflicts');
-});
-
 class Element {
  constructor(tag) {this.tag=tag;this.children=[];this.hidden=false;this.disabled=false;}
  append(...nodes){this.children.push(...nodes);}
@@ -95,7 +83,7 @@ test('viewer action buttons follow live checkout, preserve warnings and prepare 
  render({...site,git:{...site.git,changes:0,head:'new-current'}});
  button=nodes(root).find(n=>n.tag==='button');button.onclick();button.onclick();
  assert.deepEqual(calls,[{siteID:'c2',kind:'update',branch:'develop',head:'new-current',deleteBranch:false}]);
- render(site,{status:'running'});assert.equal(nodes(root).find(n=>n.tag==='button').disabled,true);
+ render({...site,git:{...site.git,changes:0}},{status:'running'});assert.equal(nodes(root).find(n=>n.tag==='button').disabled,true);
  render({...site,git:{...site.git,behind:0}});assert.equal(root.hidden,true);
  render(undefined);assert.equal(root.hidden,true);
 }));
@@ -111,7 +99,7 @@ test('local-only commits suggest an explicit normal push to origin', () => {
  for(const patch of [{changes:1},{conflicts:1},{localNote:'cached'}]) {
   assert.equal(siteSuggestions({git:{...git,...patch}})[0].blocked,true);
  }
- // Offline status can be refreshed by Review action; backend checks it afresh.
+ // Offline status can be refreshed during push preparation; backend checks it afresh.
  assert.equal(siteSuggestions({git:{...git,remoteNote:'offline'}})[0].blocked,false);
 });
 
@@ -165,3 +153,54 @@ test('optional merged-branch deletion requires a newly prepared confirmation',()
  render({...state,action:{...state.action,plan:{...plan,id:'new',deleteBranch:true}}});
  nodes(root).find(n=>n.tag==='button'&&n.textContent==='Return to develop').onclick();assert.deepEqual(calls[1],['action-confirm','new']);
 }));
+
+test('verified remote rewrites offer replacement instead of an unsafe update or push',()=>{
+ const git={branch:'solo',head:'old',tracking:'origin/solo',ahead:3,behind:10,canReplaceRemote:true,base:{branch:'develop',behind:4}};
+ const [s]=siteSuggestions({git});
+ assert.equal(s.kind,'replace');assert.equal(s.blocked,false);assert.equal(siteSuggestions({git}).length,1);
+ assert.match(suggestionSteps(s).join(' '),/exact local tip/);
+ assert.match(suggestionSteps(s).join(' '),/recovery reference/);
+ assert.equal(siteSuggestions({git:{...git,canReplaceRemote:false}}).some(s=>s.kind==='replace'),false);
+ for(const change of [{changes:1},{conflicts:1},{localNote:'cached'}]) assert.equal(siteSuggestions({git:{...git,...change}})[0].blocked,true);
+ // A remote rewind can have zero incoming commits, but is still a replacement.
+ assert.equal(siteSuggestions({git:{...git,behind:0,pushTarget:'origin/solo'}})[0].kind,'replace');
+});
+
+test('replacement requires explicit confirmation and never starts from rendering',()=>withDocument(()=>{
+ const viewer=new Element('section'),root=new Element('root'),calls=[];
+ const site={id:'site',name:'checkout',git:{branch:'solo',head:'oldtip123',tracking:'origin/solo',ahead:3,behind:10,canReplaceRemote:true}};
+ mountViewerSuggestions(viewer,req=>calls.push(['prepare',req]))(site);
+ const button=nodes(viewer).find(n=>n.tag==='button');assert.equal(button.textContent,'Replace from remote');
+ assert.equal(calls.length,0);button.onclick();assert.equal(calls[0][1].kind,'replace');
+ const render=mountSuggestedActions(root,()=>calls.push(['cancel']),(...args)=>calls.push(args));
+ const plan={id:'replacement-token',kind:'replace',branch:'solo',head:'oldtip123',target:'origin/solo',targetHead:'newtip123'};
+ const state={suggestedSite:'site',sites:[site],action:{siteID:'site',kind:'replace',status:'ready',plan}};
+ render(state);render(state);
+ assert.equal(calls.length,1);assert.ok(nodes(root).some(n=>n.textContent==='Confirm branch replacement'));
+ assert.ok(nodes(root).some(n=>n.textContent?.includes('old commits will be kept')));
+ const confirm=nodes(root).find(n=>n.tag==='button'&&n.textContent==='Replace branch');confirm.onclick();confirm.onclick();
+ assert.deepEqual(calls[1],['action-confirm','replacement-token']);assert.equal(calls.length,2);
+}));
+
+test('a feature tracking the default branch can rebase when diverged',()=>{
+ const suggestions=siteSuggestions({git:{branch:'feature',ahead:1,behind:2,tracking:'origin/main',base:{branch:'main',tracking:'origin/main',behind:2}}});
+ assert.equal(suggestions.find(s=>s.kind==='rebase').blocked,false);
+ assert.equal(suggestions.find(s=>s.kind==='update').blocked,true);
+});
+
+test('failed prepare and confirm delivery re-enable the same rendered buttons',async()=>{
+ const previous=globalThis.document;
+ globalThis.document={createElement:tag=>new Element(tag)};
+ try {
+  const site={id:'site',git:{branch:'main',head:'old',tracking:'origin/main',behind:1}};
+  const viewer=new Element('section');
+  mountViewerSuggestions(viewer,async()=>false)(site);
+  const prepare=nodes(viewer).find(n=>n.tag==='button');
+  const preparing=prepare.onclick();assert.equal(prepare.disabled,true);await preparing;assert.equal(prepare.disabled,false);
+  const popup=new Element('section');
+  const render=mountSuggestedActions(popup,()=>{},async()=>{throw new Error('bridge failed');});
+  render({suggestedSite:'site',sites:[site],action:{siteID:'site',status:'ready',plan:{id:'token',kind:'update',branch:'main',target:'origin/main',head:'old',targetHead:'new'}}});
+  const confirm=nodes(popup).find(n=>n.textContent==='Update branch');
+  const confirming=confirm.onclick();assert.equal(confirm.disabled,true);await confirming;assert.equal(confirm.disabled,false);
+ } finally {globalThis.document=previous;}
+});

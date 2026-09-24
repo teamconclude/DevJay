@@ -1,7 +1,7 @@
 #import <AppKit/AppKit.h>
 #include <assert.h>
 #include <stdio.h>
-#include "../ui_recovery_darwin.m"
+#include "../cmd/devjay/ui_recovery_darwin.m"
 
 int main(void) {
     @autoreleasepool {

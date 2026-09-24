@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-const source = await readFile(new URL('../frontend/drag-origin.js', import.meta.url), 'utf8');
+const source = await readFile(new URL('../cmd/devjay/frontend/drag-origin.js', import.meta.url), 'utf8');
 const { installDragOriginGuard } = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
 function windowFixture() {
   const handlers = new Map(), attributes = new Set();

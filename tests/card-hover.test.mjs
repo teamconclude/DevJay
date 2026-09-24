@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
-const source = await readFile(new URL('../frontend/card-hover.js', import.meta.url), 'utf8');
+const source = await readFile(new URL('../cmd/devjay/frontend/card-hover.js', import.meta.url), 'utf8');
 const {installCardHover} = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
 test('native hover selects the card under an inactive pointer and clears on exit', () => {
   const handlers = {}, classes = [new Set(), new Set()];
@@ -19,7 +19,7 @@ test('native hover selects the card under an inactive pointer and clears on exit
   handlers['devjay:native-hover']({detail:{x:-1,y:-1}});
   assert.equal(classes[1].size,0);
   handlers.pointermove({clientX:100,clientY:100}); assert.ok(classes[0].has('pointer-hover'));
-  handlers.pointerleave(); assert.equal(classes[0].size,0);
+  handlers['devjay:native-hover']({detail:{x:-1,y:-1}}); assert.equal(classes[0].size,0);
 });
 
 test('moving between statuses in one inactive card updates just the hovered status',()=>{
@@ -37,5 +37,5 @@ test('moving between statuses in one inactive card updates just the hovered stat
  assert.equal(statuses[0].classes.size,0);assert.ok(statuses[1].classes.has('status-hover'));
  handlers.pointermove({clientX:150,clientY:75});
  assert.equal(statuses[1].classes.size,0);assert.ok(card.classes.has('pointer-hover'));
- handlers.pointerleave();assert.equal(card.classes.size,0);
+ handlers['devjay:native-hover']({detail:{x:-1,y:-1}});assert.equal(card.classes.size,0);
 });

@@ -2,6 +2,8 @@
 
 `devjay-icon.png` is the selected DevJay artwork: a stylized blue jay with curved wing feathers, pale-blue accents, and a dark eye. It has a white background. `../DevJay.icns` contains the macOS icon sizes generated from this PNG.
 
+Both development and installer builds copy `build/DevJay.icns` into the app's `Contents/Resources/`. At startup, DevJay also reads that bundled file and sets its application icon explicitly, so the running app does not rely on a cached Dock icon. Launch the intended `.app` by its full path when older DevJay checkouts are present.
+
 Created with the built-in imagegen tool. Design iterations and their prompts are retained here:
 
 - `devjay-logo-simple.png`: initial minimal mark; see `devjay-logo-simple-prompt.md`.

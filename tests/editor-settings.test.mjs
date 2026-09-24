@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
-const source=await readFile(new URL('../frontend/editor-settings.js',import.meta.url),'utf8');
+const source=await readFile(new URL('../cmd/devjay/frontend/editor-settings.js',import.meta.url),'utf8');
 const {mountEditorSettings}=await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
 class Element {
  constructor(tag){this.tag=tag;this.children=[];this.disabled=false;this.value='';}

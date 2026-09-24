@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
-const source = await readFile(new URL('../frontend/ui-ready.js', import.meta.url), 'utf8');
+const source = await readFile(new URL('../cmd/devjay/frontend/ui-ready.js', import.meta.url), 'utf8');
 const {uiReady} = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
 
 test('each document acknowledges its first rendered snapshot only once', async () => {

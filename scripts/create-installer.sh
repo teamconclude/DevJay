@@ -42,7 +42,7 @@ for arch in "${architectures[@]}"; do
     echo "Building DevJay $version for ${arch}..."
     CGO_ENABLED=1 GOOS=darwin GOARCH="$arch" go build -trimpath \
         -ldflags="-s -w -extldflags=-mmacosx-version-min=$minimum" \
-        -o "$work/DevJay-$arch" .
+        -o "$work/DevJay-$arch" ./cmd/devjay
 done
 if [[ "$architecture" == universal ]]; then
     lipo -create "$work/DevJay-arm64" "$work/DevJay-amd64" -output "$app/Contents/MacOS/DevJay"
@@ -67,8 +67,13 @@ Go and Node are not needed to run DevJay. Git is needed for repository status.
 GitHub PR information additionally requires GitHub CLI (gh) and an existing login.
 
 This development build is ad-hoc signed and has not been notarized by Apple.
-macOS may block a copy downloaded from the internet. Public distribution will
-require a Developer ID signature and Apple notarization.
+If macOS 15 or later blocks a downloaded copy, attempt to open it, then use
+System Settings > Privacy & Security > Open Anyway. Control-click > Open no
+longer overrides Gatekeeper. See https://developer.apple.com/news/?id=saqachfa.
+Ad-hoc signatures change with the build, so an update may require granting
+privacy permissions again, including access to Documents or Desktop folders.
+Public distribution requires Developer ID signing, hardened runtime, and
+Apple notarization.
 
 DevJay is made by the Conclude team and licensed under MIT (see LICENSE.txt).
 INSTALL

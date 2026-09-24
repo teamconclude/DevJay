@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-const source = await readFile(new URL('../frontend/card-status.js', import.meta.url), 'utf8');
+const source = await readFile(new URL('../cmd/devjay/frontend/card-status.js', import.meta.url), 'utf8');
 const { cardStatus } = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
 const clean = {summary:'Up to date', ahead:0, behind:0, changes:0, github:'No open pull request'};
 test('clean default branches are quiet; feature branches show the short no-PR label', () => {
@@ -15,6 +15,16 @@ test('local edits, outgoing and incoming commits stay distinct without duplicate
  assert.deepEqual(s.local.map(n => n.value),[8,2]);
  assert.deepEqual(s.remote.map(n => n.value),[4]);
  assert.equal(s.alert,null); assert.equal(s.quiet,'');
+});
+test('branches without an upstream show counts against an explicit remote comparison', () => {
+ const s=cardStatus({...clean,summary:'No upstream branch',changes:1,comparison:{tracking:'origin/main',ahead:3,behind:2},base:{tracking:'origin/main',branch:'main',behind:2}});
+ assert.deepEqual(s.local.map(n=>n.value),[3,1]);
+ assert.equal(s.local[0].view,'local');
+ assert.match(s.local[0].title,/origin\/main/);
+ assert.deepEqual(s.remote.map(n=>n.value),[2]);
+ assert.equal(s.base,undefined);
+ assert.equal(s.alert.text,'No upstream branch');
+ assert.equal(s.quiet,'');
 });
 test('conflicts and rewritten history retain prominent warnings', () => {
  const s=cardStatus({...clean,summary:'Merge conflicts',conflicts:2,changes:4,rewritten:true,behind:1});
@@ -37,17 +47,28 @@ test('review findings replace the generic PR label with separate severity badges
  assert.deepEqual(s.reviews[0].values.map(x=>[x.value,x.label,x.tone]),[[1,'blocker','error'],[7,'warnings','warning']]);
  assert.match(s.reviews[0].title,/Review required/);
 });
-test('earlier reviews retain counts with an explicit changes-pushed note', () => {
+test('earlier reviews retain counts with an explicit changes-since-review note', () => {
  const s = cardStatus({...clean,github:'PR #2812 · Review required',reviews:[{number:2812,blockers:0,warnings:3,earlier:true,detail:'Latest report on an earlier commit'}]});
  assert.equal(s.pr,'');
  assert.deepEqual(s.reviews[0].values.map(x=>[x.value,x.label,x.tone]),[[3,'warnings','warning']]);
- assert.equal(s.reviews[0].note,'Changes pushed since review');
+ assert.equal(s.reviews[0].note,'Changes since review');
  const blocker = cardStatus({...clean,github:'PR #2 · Approved',reviews:[{number:2,blockers:1,warnings:7,earlier:true}]});
  assert.deepEqual(blocker.reviews[0].values.map(x=>x.value),[1,7]);
  const noFindings = cardStatus({...clean,github:'PR #2 · Approved',reviews:[{number:2,blockers:0,warnings:0,earlier:true}]});
- assert.equal(noFindings.reviews[0].note,'Changes pushed since review');
+ assert.equal(noFindings.reviews[0].note,'Changes since review');
  assert.equal(noFindings.reviews[0].values[0].label,'Approved');
  assert.equal(noFindings.reviews[0].values[0].tone,'good');
+});
+test('unavailable review freshness preserves findings without claiming a current clean review', () => {
+ const review={number:2,blockers:0,warnings:0,freshnessUnavailable:true,detail:'PR changes could not be checked'};
+ const s=cardStatus({...clean,github:'PR #2 · Review required',reviews:[review]});
+ assert.equal(s.reviews[0].note,'Review freshness unavailable');
+ assert.equal(s.reviews[0].values[0].label,'No findings reported');
+ assert.equal(s.reviews[0].values[0].symbol,'');
+ const findings=cardStatus({...clean,github:'PR #2 · Review required',reviews:[{...review,blockers:1,warnings:3}]});
+ assert.deepEqual(findings.reviews[0].values.map(n=>n.value),[1,3]);
+ const changed=cardStatus({...clean,github:'PR #2 · Review required',reviews:[{...review,earlier:true}]});
+ assert.equal(changed.reviews[0].note,'Changes since review');
 });
 test('unavailable reviews hide counts; current clean reports retain their clean indicator', () => {
  const s = cardStatus({...clean,github:'PR #2 · Approved',reviews:[{number:2,blockers:1,warnings:7,unavailable:true,detail:'Report detail'}]});
@@ -79,7 +100,7 @@ test('GitHub approval takes precedence over no findings and remains visible with
  assert.equal(findings.pr,'PR #2812 · Approved');
  assert.equal(findings.prTone,'good');
  assert.equal(findings.reviews[0].values[0].value,3);
- assert.equal(findings.reviews[0].note,'Changes pushed since review');
+ assert.equal(findings.reviews[0].note,'Changes since review');
  const unavailable = cardStatus({...approved,reviews:[{...report,unavailable:true}]});
  assert.match(unavailable.pr,/Approved/);
  assert.match(unavailable.pr,/Review unavailable/);
