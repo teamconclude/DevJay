@@ -20,7 +20,7 @@ If you have a DevJay `.dmg`, quit any running copy and drag **DevJay.app** into 
 
 Current installers are ad-hoc signed and not Apple-notarized. If macOS blocks a downloaded copy, attempt to launch it, then use **System Settings → Privacy & Security → Open Anyway**. Updates may ask for folder permissions again. See [Apple’s guidance](https://developer.apple.com/news/?id=saqachfa).
 
-To build from a checkout, install **Go 1.25+** and **Xcode Command Line Tools**, then run:
+To build from a checkout, install **Go 1.27.1+** and **Xcode Command Line Tools**, then run:
 
 ```sh
 make run
@@ -30,7 +30,7 @@ This builds and opens `bin/DevJay.app`. Development builds use separate Sites an
 
 ## Get started
 
-1. Open **Settings** with **⌘,** or a card’s cog button.
+1. Open **Settings** with **⌘,**, or right-click a card and choose **DevJay settings…**.
 2. Click **Add**, or drop a folder into the Sites list.
 3. Use Mission Control to place its Site window on the desktop where you work.
 4. Repeat for your other folders, then click control-panel cards to move between them.
@@ -39,7 +39,9 @@ In Settings, choose a horizontal, vertical, or custom layout, adjust window appe
 
 ## Check your work
 
-Click a card’s status or change count to inspect file diffs and commit history. From the changes window, open a file in your editor or review an available Git action: update, rebase, push, return after a merge, or replace verified rewritten remote history. Each action checks the checkout and requires a separate confirmation.
+Click a card’s status or change count to inspect file diffs and commit history in its existing changes window. Right-click for a new window or Settings. Changes windows refresh automatically. From the changes window, open a file in your editor or review an available Git action: update, rebase, push, return after a merge, or replace verified rewritten remote history. Each action checks the checkout and requires a separate confirmation.
+
+Click the colored PR tag in a card’s upper-right corner to open its pull request. DevJay can reuse tabs in Safari, Chrome, Edge, and Brave with macOS Automation permission; right-click the tag to open a new tab alongside existing PRs.
 
 Background monitoring fetches remote information without changing your local branches or working files. Offline or failed checks show cached/unavailable status. GitHub support currently covers GitHub.com; fork PRs targeting another repository and GitHub Enterprise are not yet resolved.
 

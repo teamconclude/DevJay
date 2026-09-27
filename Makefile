@@ -33,6 +33,10 @@ check:
 	trap 'rm -f "$$review_bin"' EXIT; \
 	clang -fblocks -framework AppKit -framework WebKit tests/native_review_test.m -o "$$review_bin"; \
 	"$$review_bin"
+	@set -e; menu_bin=$$(mktemp "$${TMPDIR:-/tmp}/devjay-card-menu.XXXXXX"); \
+	trap 'rm -f "$$menu_bin"' EXIT; \
+	clang -Wall -Wextra -Werror -fblocks -framework AppKit -framework WebKit tests/card_menu_test.m -o "$$menu_bin"; \
+	"$$menu_bin"
 	go test -ldflags="$(GO_LINK_FLAGS)" ./...
 	go vet ./...
 	node --input-type=module --check < cmd/devjay/frontend/app.js

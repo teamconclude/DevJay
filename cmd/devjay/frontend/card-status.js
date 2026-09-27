@@ -28,7 +28,7 @@ export function cardStatus(git) {
   }
   if (git.localNote) result.alert = {text: git.localNote, tone: 'warning', symbol: '◷'};
   result.pr = git.github || '';
-  if (result.pr === 'No open pull request') result.pr = git.isMainBranch ? '' : 'No open PR';
+  if (result.pr === 'No open pull request') result.pr = '';
   if (result.pr.includes('Changes requested')) result.prTone = 'warning';
   else if (result.pr.includes('Approved')) result.prTone = 'good';
   else if (result.pr.startsWith('PR #')) result.prTone = 'info';
@@ -53,7 +53,7 @@ export function cardStatus(git) {
       if (approved) values.push(metric('✓', '', 'Approved', 'good', title));
       else values.push(metric(review.earlier || freshnessUnknown ? '' : '✓', '', review.earlier || freshnessUnknown ? 'No findings reported' : 'No findings', review.earlier || freshnessUnknown ? 'muted' : 'good', title));
     }
-    result.reviews.push({label: prefix, values, title, note: review.earlier ? 'Changes since review' : freshnessUnknown ? 'Review freshness unavailable' : ''});
+    result.reviews.push({label: prefix, values, title, note: review.earlier ? (review.changeNote || 'Changes since review') : freshnessUnknown ? 'Review freshness unavailable' : ''});
     // Keep approval above any reported findings; a clean report cannot hide it.
     if (!approved || !hasFindings) labels.splice(index, 1);
   }

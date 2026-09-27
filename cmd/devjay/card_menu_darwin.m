@@ -1,0 +1,60 @@
+#import <AppKit/AppKit.h>
+#import <WebKit/WebKit.h>
+#include <math.h>
+
+@interface DevJayCardMenuSelection : NSObject
+@property(nonatomic) NSInteger selected;
+- (void)selectItem:(NSMenuItem *)item;
+@end
+
+@implementation DevJayCardMenuSelection
+- (void)selectItem:(NSMenuItem *)item { self.selected = item.tag; }
+@end
+
+static WKWebView *card_menu_webview(NSView *view) {
+    if ([view isKindOfClass:WKWebView.class]) return (WKWebView *)view;
+    for (NSView *child in view.subviews) {
+        WKWebView *found = card_menu_webview(child);
+        if (found) return found;
+    }
+    return nil;
+}
+
+// Invoked on AppKit's main thread. The target and menu belong to this single
+// tracking loop; no registrations or callbacks survive its return.
+int devjay_card_menu(void *pointer, double x, double y, const char *first, const char *second, const char *settings, const char *quit) {
+    if (![NSThread isMainThread] || !pointer || !isfinite(x) || !isfinite(y)) return 0;
+    @autoreleasepool {
+        NSWindow *window = (NSWindow *)pointer;
+        WKWebView *view = card_menu_webview(window.contentView);
+        if (!view || !window.visible || x < 0 || y < 0 || x > NSWidth(view.bounds) || y > NSHeight(view.bounds)) return 0;
+        NSString *firstTitle = first ? [NSString stringWithUTF8String:first] : nil;
+        NSString *secondTitle = second ? [NSString stringWithUTF8String:second] : nil;
+        NSString *settingsTitle = settings ? [NSString stringWithUTF8String:settings] : nil;
+        NSString *quitTitle = quit ? [NSString stringWithUTF8String:quit] : nil;
+        if (!firstTitle.length || !secondTitle.length || !settingsTitle.length || !quitTitle.length) return 0;
+
+        DevJayCardMenuSelection *selection = [[[DevJayCardMenuSelection alloc] init] autorelease];
+        NSMenu *menu = [[[NSMenu alloc] initWithTitle:@""] autorelease];
+        menu.autoenablesItems = NO;
+        NSArray<NSString *> *titles = @[firstTitle, secondTitle, settingsTitle, quitTitle];
+        for (NSUInteger index = 0; index < titles.count; index++) {
+            if (index == 2) [menu addItem:[NSMenuItem separatorItem]];
+            NSMenuItem *item = [[[NSMenuItem alloc] initWithTitle:titles[index] action:@selector(selectItem:) keyEquivalent:@""] autorelease];
+            item.target = selection;
+            item.tag = index + 1;
+            [menu addItem:item];
+        }
+        NSPoint point = NSMakePoint(NSMinX(view.bounds) + x,
+            view.isFlipped ? NSMinY(view.bounds) + y : NSMaxY(view.bounds) - y);
+        // Keep the hosting view/window alive if the Site is removed while the
+        // native menu tracks; Go revalidates membership before acting.
+        [window retain];
+        [view retain];
+        [menu popUpMenuPositioningItem:nil atLocation:point inView:view];
+        NSInteger selected = selection.selected;
+        [view release];
+        [window release];
+        return (int)selected;
+    }
+}

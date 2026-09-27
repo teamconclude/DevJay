@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import vm from 'node:vm';
+import {cardStatus} from '../cmd/devjay/frontend/card-status.js';
 import {nextNotice} from '../cmd/devjay/frontend/notice.js';
 const source=(await readFile(new URL('../cmd/devjay/frontend/app.js',import.meta.url),'utf8')).replace(/^import .*;\n/gm,'');
 
@@ -10,7 +11,7 @@ function app(search='') {
  let document;
  class Element {
   constructor(tag){this.tag=tag;this.children=[];this.dataset={};this.style={};this.className='';this.attrs={};this.textContent='';
-   this.classList={contains:c=>this.className.split(' ').includes(c),toggle:(c,on)=>{const all=new Set(this.className.split(' '));on?all.add(c):all.delete(c);this.className=[...all].join(' ');}};
+   this.classList={add:c=>{this.className+=' '+c;},contains:c=>this.className.split(' ').includes(c),toggle:(c,on)=>{const all=new Set(this.className.split(' '));on?all.add(c):all.delete(c);this.className=[...all].join(' ');}};
   }
   append(...nodes){for(const n of nodes){n.remove();n.parent=this;this.children.push(n);}}
   remove(){if(this.parent){const a=this.parent.children;a.splice(a.indexOf(this),1);this.parent=null;}}
@@ -37,12 +38,12 @@ function app(search='') {
   Events:{On:(name,fn)=>events[name]=fn,Emit:(...args)=>{calls.push(args);return Promise.resolve();}},Window:{},
   createBridge:(send,report)=>{bridgeReport=report;return {emit:async(n,d)=>{await send(`devjay:${n}`,d);report('');},reply:noop};},
   uiReady:()=>noop,installCardSizing:()=>noop,mountEditorSettings:()=>({renderEditor:noop}),
-  mountGitViewer:()=>noop,cardStatus:()=>({local:[],remote:[],reviews:[]}),
+  mountGitViewer:()=>noop,cardStatus,
   mountSuggestedActions:()=>noop,mountViewerSuggestions:()=>noop,
-  installPanelDrag:(_list,options)=>{drag=options;},installCardActivation:noop,installDragOriginGuard:noop,installCardHover:noop,
+  installPanelDrag:(_list,options)=>{drag=options;},installCardActivation:noop,installDragOriginGuard:noop,installCardHover:noop,installCardMenu:noop,
  };
  vm.runInNewContext(source,context);
- return {document,root,calls,reportBridge:(text,error)=>bridgeReport(text,error),get drag(){return drag;},snapshot:s=>events['devjay:snapshot']({data:s})};
+ return {document,root,calls,reportBridge:(text,error)=>bridgeReport(text,error),event:(name,data)=>events[name]?.({data}),get drag(){return drag;},snapshot:s=>events['devjay:snapshot']({data:s})};
 }
 const site=(id,branch='main')=>({id,path:`/tmp/${id}`,prefix:'/tmp/',name:id,git:{branch},position:{label:'Desktop 1'},window:{}});
 const state=sites=>({sites,preferences:{},layout:'horizontal',settingsOpen:true});
@@ -108,4 +109,42 @@ test('successful bridge calls do not clear an active snapshot notice',()=>{
  view.snapshot({...state([site('a')]),quitMessage:'Finishing the action…'});
  view.reportBridge('',false);
  assert.equal(view.root.querySelector('.notice').textContent,'Finishing the action…');
+});
+
+
+test('PR tags live in card headers, open the PR, and disappear when the PR is gone',async()=>{
+ for(const search of ['', '?site=a']) {
+  const view=app(search), item=site('a');
+  item.git={branch:'feature',github:'PR #1234 · Approved',pullRequests:[{number:1234,url:'https://github.com/a/b/pull/1234',state:'OPEN'}]};
+  view.snapshot(state([item]));
+  const tag=view.root.querySelector('.card-heading').querySelector('.pr-tag');
+  assert.equal(tag.textContent,'#1234');assert.equal(tag.dataset.prNumber,'1234');
+  assert.equal(view.root.querySelector('.card-settings'),null);
+  await tag.onclick();
+  const request=view.calls.find(([name])=>name==='devjay:pr-open')[1];
+  assert.equal(request.siteID,'a');assert.equal(request.number,1234);
+  assert.equal(view.calls.some(([name])=>name==='devjay:activate'||name==='devjay:viewer-open'),false);
+  view.snapshot(state([{...item,git:{branch:'feature',github:'No open pull request'}}]));
+  assert.equal(view.root.querySelector('.pr-tag'),null);
+  assert.equal(view.root.querySelector('.pr-status'),null);
+ }
+});
+
+test('edit and commit badges retain their category for click and context menus',async()=>{
+ const view=app(),item=site('a');
+ item.git={branch:'feature',ahead:2,behind:3,changes:25};view.snapshot(state([item]));
+ const badges=view.root.querySelectorAll('.metric');
+ assert.deepEqual(badges.map(n=>n.dataset.viewKind),['local','edits','remote']);
+ for(const badge of badges)await badge.onclick();
+ assert.deepEqual(view.calls.filter(([name])=>name==='devjay:viewer-open').map(([,data])=>data.kind),['local','edits','remote']);
+});
+
+
+test('PR navigation errors appear only in the requesting card window',()=>{
+ const panel=app(),siteView=app('?site=a');
+ const result={siteID:'a',number:1234,sender:'control-panel',error:'Browser did not confirm opening the PR.'};
+ panel.event('devjay:pr-open-result',result);siteView.event('devjay:pr-open-result',result);
+ assert.equal(panel.root.querySelector('.notice').textContent,result.error);
+ assert.equal(panel.root.querySelector('.notice').classList.contains('error'),true);
+ assert.equal(siteView.root.querySelector('.notice').textContent,'');
 });

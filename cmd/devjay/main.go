@@ -61,7 +61,7 @@ func main() {
 		Name: "control-panel", Title: "DevJay", URL: "/", Width: 900, Height: 174, MinWidth: 234, MinHeight: 174, Frameless: manager.config.decoration() != "normal",
 		X: 120, Y: 80, InitialPosition: application.WindowXY, CloseButtonState: application.ButtonEnabled, MaximiseButtonState: application.ButtonDisabled,
 		BackgroundColour: application.NewRGB(20, 24, 32),
-		Mac:              application.MacWindow{CornerType: application.MacWindowCornerTypeRounded, WindowClass: application.MacWindowClassPanel, PanelPreferences: application.MacPanelPreferences{NonActivating: true, FloatingPanel: true}, CollectionBehavior: application.MacWindowCollectionBehaviorCanJoinAllSpaces | application.MacWindowCollectionBehaviorFullScreenNone, TabbingMode: application.MacWindowTabbingModeDisallowed},
+		Mac:              application.MacWindow{CornerType: application.MacWindowCornerTypeRounded, WindowClass: application.MacWindowClassPanel, PanelPreferences: application.MacPanelPreferences{NonActivating: true, FloatingPanel: true}, CollectionBehavior: application.MacWindowCollectionBehaviorCanJoinAllSpaces | application.MacWindowCollectionBehaviorStationary | application.MacWindowCollectionBehaviorIgnoresCycle | application.MacWindowCollectionBehaviorFullScreenNone, TabbingMode: application.MacWindowTabbingModeDisallowed},
 	})
 	manager.panel = panel
 	manager.watchView("control-panel", panel)
@@ -123,6 +123,8 @@ func main() {
 	})
 	manager.createSuggestionsWindow()
 	manager.registerViewerEvents()
+	manager.registerPREvents()
+	manager.registerCardMenuEvents()
 	manager.registerEvents()
 	manager.registerRecoveryEvents()
 	menu := app.Menu.New()

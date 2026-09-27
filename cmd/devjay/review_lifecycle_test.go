@@ -64,8 +64,8 @@ func TestViewerReuseAndClosedParentFallback(t *testing.T) {
 	if m.existingViewer(viewerRequest{SiteID: "site", Kind: "edits"}) != viewer {
 		t.Fatal("duplicate viewer")
 	}
-	if m.existingViewer(viewerRequest{SiteID: "site", Kind: "local"}) != nil {
-		t.Fatal("different mode reused")
+	if m.existingViewer(viewerRequest{SiteID: "site", Kind: "local"}) != viewer {
+		t.Fatal("different mode did not reuse the Site window")
 	}
 	// Forgetting a closed viewer also removes it from future reuse.
 	m.forgetViewer("viewer")

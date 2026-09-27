@@ -1,6 +1,7 @@
 #import <AppKit/AppKit.h>
 #import <objc/runtime.h>
 #import <WebKit/WebKit.h>
+#import "focus_trace_darwin.h"
 
 // WebKit's CSS hover tracking can stop when its window is inactive. An
 // always-active AppKit tracking area reports position without activating it.
@@ -134,11 +135,44 @@ static BOOL devjay_enable_first_mouse(NSView *view) {
     return YES;
 }
 
+// Wails' WebviewPanel permits keyboard focus by default. Override its public
+// eligibility method only for our marked strip; preserve the native class and
+// every other window's behavior. All setup and callbacks run on AppKit's thread.
+static const char stripNoKeyboardKey, stripKeyboardClassKey;
+static BOOL devjay_make_strip_mouse_only(NSPanel *panel) {
+    if (![panel isKindOfClass:NSPanel.class]) return NO;
+    Class cls = object_getClass(panel);
+    if (cls == NSPanel.class) return NO; // Do not alter the AppKit base class.
+    if (!objc_getAssociatedObject(cls, &stripKeyboardClassKey)) {
+        SEL selector = @selector(canBecomeKeyWindow);
+        Method method = class_getInstanceMethod(cls, selector);
+        if (!method) return NO;
+        BOOL (*original)(id, SEL) = (BOOL (*)(id, SEL))method_getImplementation(method);
+        IMP replacement = imp_implementationWithBlock(^BOOL(id candidate) {
+            if (objc_getAssociatedObject(candidate, &stripNoKeyboardKey)) return NO;
+            return original(candidate, selector);
+        });
+        // Add on this class if inherited, never replace NSPanel's base method.
+        class_replaceMethod(cls, selector, replacement, method_getTypeEncoding(method));
+        objc_setAssociatedObject(cls, &stripKeyboardClassKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    objc_setAssociatedObject(panel, &stripNoKeyboardKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    panel.becomesKeyOnlyIfNeeded = YES;
+    // The strip is an overlay, while ordinary Site windows stay managed by Spaces.
+    NSWindowCollectionBehavior behavior = panel.collectionBehavior;
+    behavior &= ~(NSWindowCollectionBehaviorManaged | NSWindowCollectionBehaviorTransient |
+                  NSWindowCollectionBehaviorParticipatesInCycle);
+    panel.collectionBehavior = behavior | NSWindowCollectionBehaviorStationary |
+                                         NSWindowCollectionBehaviorIgnoresCycle;
+    return YES;
+}
+
 int devjay_prepare_panel(void *pointer) {
+    devjay_start_focus_trace();
     NSPanel *window = (NSPanel *)pointer;
     if (window == nil) return 0;
     if (!devjay_enable_first_mouse(devjay_webview(window.contentView))) return 0;
-    window.becomesKeyOnlyIfNeeded = YES;
+    if (!devjay_make_strip_mouse_only(window)) return 0;
     NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
     // New View preferences start enabled; subsequent menu changes are retained.
     [defaults registerDefaults:@{@"DevJay.View.AllDesktops": @YES, @"DevJay.View.OnTop": @YES}];
@@ -157,17 +191,23 @@ unsigned int devjay_panel_preferences(void *pointer) {
 
 void devjay_focus_site(void *pointer) {
     NSWindow *window = (NSWindow *)pointer;
+    if (!window) return;
+    devjay_trace_focus(@"explicit-focus-request", window);
     if (window.isMiniaturized) [window deminiaturize:nil];
-    // Establish the destination before application activation chooses a Space.
+    if ([window.identifier isEqual:@"control-panel"]) {
+        // Showing the strip must not activate the app's remembered Site.
+        [window orderFrontRegardless];
+        return;
+    }
+    // Original Site navigation: establish the target before activating the app.
     [window makeKeyAndOrderFront:nil];
-    // Reopening the app also focuses its nonactivating control panel, which
-    // cannot become a main window. AppKit raises if asked to make it one.
     if (window.canBecomeMainWindow) [window makeMainWindow];
     [NSApp activateIgnoringOtherApps:YES];
 }
 
 void devjay_show_popup(void *pointer, void *parentPointer) {
     NSWindow *window = (NSWindow *)pointer;
+    devjay_trace_focus(@"explicit-popup-request", window);
     NSWindow *parent = (NSWindow *)parentPointer;
     window.collectionBehavior = NSWindowCollectionBehaviorMoveToActiveSpace | NSWindowCollectionBehaviorFullScreenNone;
     NSRect frame = window.frame;

@@ -11,6 +11,7 @@ import { installPanelDrag } from './panel-drag.js';
 import { installCardActivation } from './card-interaction.js';
 import { installDragOriginGuard } from './drag-origin.js';
 import { installCardHover } from './card-hover.js';
+import { installCardMenu } from './card-menu.js';
 installCardHover(window, document);
 installDragOriginGuard(window, document.documentElement);
 const reportUIReady = uiReady(id => Events.Emit('devjay:ui-ready', id));
@@ -34,6 +35,13 @@ function report(source, value) {
 const bridge = createBridge((name, data) => Events.Emit(name, data), (text, error) => report('bridge', {text, error}));
 const emit = bridge.emit;
 Events.On('devjay:request-result', event => bridge.reply(event.data));
+const senderName = siteID ? `site-${siteID}` : 'control-panel';
+Events.On('devjay:pr-open-result', event => {
+  if (!settings && !viewer && !actions && event.data.sender === senderName) {
+    report('bridge', {text:event.data.error || event.data.message || '', error:!!event.data.error});
+  }
+});
+if (!settings && !viewer && !actions) installCardMenu(root, data => emit('card-menu', data));
 function pathLabel(site) { const n = el('div', 'path'); n.title = site.path; n.append(el('span', 'prefix', site.prefix), el('strong', '', site.name)); return n; }
 function details(site, parent) {
   const {checked, ...displayGit} = site.git;
@@ -46,30 +54,45 @@ function details(site, parent) {
   title.append(pathLabel(site), el('div', 'branch', site.git.branch || 'Folder'));
   title.title = siteID ? 'Drag to move this Site' : 'Go to this Site · Drag to move the panel';
   if (!siteID) title.setAttribute('aria-label', `Activate ${site.path}, ${site.git.branch || 'folder'}`);
-  const gear = button('⚙', () => emit('settings-open'), 'card-settings');
-  gear.setAttribute('aria-label', `Settings for ${site.name}`); gear.title = 'Settings';
-  heading.append(title, gear); parent.append(heading);
+  heading.append(title);
+  const pullRequests = site.git.pullRequests || [];
+  const openPR = number => emit('pr-open', {siteID:site.id, number});
+  if (pullRequests.length) {
+    const tags = el('div', 'card-prs');
+    for (const pr of pullRequests) {
+      const tag = button(`#${pr.number}`, () => openPR(pr.number), 'pr-tag status-link');
+      tag.dataset.prNumber = String(pr.number);
+      tag.title = `Open PR #${pr.number}${pr.isDraft ? ' · Draft' : pr.state ? ` · ${pr.state}` : ''}`;
+      tag.setAttribute('aria-label', tag.title); tags.append(tag);
+    }
+    heading.append(tags);
+  }
+  parent.append(heading);
   const status = cardStatus(site.git);
   const body = el('div', 'card-status');
-  function statusButton(view, cls) {
+  function statusButton(view, cls, prNumber) {
     const node = button('', () => {
       const selection = window.getSelection();
       if (selection && !selection.isCollapsed && (node.contains(selection.anchorNode) || node.contains(selection.focusNode))) return;
-      emit('viewer-open', {siteID:site.id,kind:view || 'edits'});
+      if (prNumber) openPR(prNumber);
+      else emit('viewer-open', {siteID:site.id,kind:view || 'edits'});
     }, `${cls} status-link copyable`);
+    if (prNumber) node.dataset.prNumber = String(prNumber);
+    else node.dataset.viewKind = view || 'edits';
     return node;
   }
-  function line(text, tone, symbol, title = text, view = 'edits') {
-    const row = statusButton(view, `status-line ${tone}`);
+  function line(text, tone, symbol, title = text, view = 'edits', prNumber) {
+    const row = statusButton(view, `status-line ${tone}`, prNumber);
     const icon = el('span', 'status-symbol', symbol); icon.setAttribute('aria-hidden', 'true');
     row.append(icon, el('span', '', text)); row.title = title; body.append(row);
   }
-  function metrics(label, values, title) {
+  function metrics(label, values, title, prNumber) {
     if (!values.length) return;
     const row = el('div', 'metric-row copyable'); row.append(el('span', 'metric-label', label));
     if (title) { row.classList.add('review-row'); row.title = title; row.setAttribute('aria-label', `${label}: ${title}`); }
+    if (prNumber) row.dataset.prNumber = String(prNumber);
     for (const item of values) {
-      const badge = statusButton(item.view, `metric ${item.tone}`); badge.title = item.title; badge.setAttribute('aria-label', `View ${item.title}`);
+      const badge = statusButton(item.view, `metric ${item.tone}`, prNumber); badge.title = item.title; badge.setAttribute('aria-label', `View ${item.title}`);
       const symbol = el('span', 'metric-symbol', item.symbol); symbol.setAttribute('aria-hidden', 'true');
       if (item.symbol) badge.append(symbol);
       if (item.value !== '') badge.append(el('strong', '', item.value));
@@ -81,11 +104,20 @@ function details(site, parent) {
   if (status.alert) line(status.alert.text, status.alert.tone, status.alert.symbol, status.alert.title || site.git.localNote || site.git.summary, status.alert.view);
   if (status.quiet) line(status.quiet, 'good quiet-status', '✓');
   if (status.base) line(status.base, 'warning', '↳', status.baseTitle);
-  if (status.pr) line(status.pr, `pr-status ${status.prTone}`, status.prTone === 'good' ? '✓' : '⑂', status.prTitle);
-  if (status.prNote) line(status.prNote, 'freshness muted', '·', status.prTitle);
+  const singlePR = pullRequests.length === 1 ? pullRequests[0].number : null;
+  if (status.pr) {
+    for (const label of status.pr.split('; ')) {
+      const number = Number(/^PR #(\d+)/.exec(label)?.[1]);
+      const prNumber = pullRequests.some(pr => pr.number === number) ? number : null;
+      line(singlePR ? label.replace(/^PR #\d+ · /, '') : label, `pr-status ${status.prTone}`, status.prTone === 'good' ? '✓' : '⑂', status.prTitle, 'edits', prNumber);
+    }
+  }
+  if (status.prNote) line(status.prNote, 'freshness muted', '·', status.prTitle, 'edits', singlePR);
   for (const review of status.reviews) {
-    metrics(review.label, review.values, review.title);
-    if (review.note) line(review.note, 'freshness warning', '◷', review.title);
+    const number = Number(/^PR #(\d+)/.exec(review.label)?.[1]);
+    const prNumber = pullRequests.some(pr => pr.number === number) ? number : null;
+    metrics(singlePR ? 'Review' : review.label, review.values, review.title, prNumber);
+    if (review.note) line(review.note, 'freshness warning', '◷', review.title, 'edits', prNumber);
   }
   if (status.freshness) line(status.freshness, 'freshness muted', '◷', [site.git.remoteNote, site.git.remoteChecked ? `Last checked ${new Date(site.git.remoteChecked).toLocaleString()}` : ''].filter(Boolean).join('\n'), 'remote');
   parent.append(body);
@@ -154,17 +186,16 @@ if (viewer) {
   document.body.className = 'workspace'; document.body.dataset.decoration = 'none'; root.title = 'Drag to move this Site';
   const header = el('header');
   const grip = el('span', 'grip'); grip.title = 'Drag to move this Site';
-  const gear = button('⚙', () => emit('settings-open'), 'gear'); gear.setAttribute('aria-label', 'Settings'); gear.title = 'Settings';
   const minimise = button('−', () => Window.Minimise(), 'minimise-window'); minimise.setAttribute('aria-label', 'Minimize Site'); minimise.title = 'Minimize Site';
-  header.append(grip, gear, minimise);
+  header.append(grip, minimise);
   list = el('div', 'site-detail'); root.append(header, list, notice);
+  list.dataset.id = siteID;
 } else {
   document.body.className = 'strip'; document.body.dataset.decoration = 'none';
   const header = el('header');
-  const gear = button('⚙', () => emit('settings-open'), 'gear'); gear.setAttribute('aria-label', 'Settings'); gear.title = 'Settings';
   const grip = el('span', 'grip'); grip.title = 'DevJay · Drag to move';
   const close = button('×', () => Window.Close(), 'close-window'); close.setAttribute('aria-label', 'Quit DevJay'); close.title = 'Quit DevJay';
-  header.append(grip, gear, close); list = el('nav', 'cards'); list.setAttribute('aria-label', 'Sites'); root.append(header, list, notice);
+  header.append(grip, close); list = el('nav', 'cards'); list.setAttribute('aria-label', 'Sites'); root.append(header, list, notice);
   installPanelDrag(list, {
     enabled: () => snapshot.settingsOpen,
     layout: () => snapshot.layout || 'horizontal',

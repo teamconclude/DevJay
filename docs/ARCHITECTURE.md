@@ -12,6 +12,7 @@ DevJay is a macOS-only Go application with Wails v3 beta.23 and embedded HTML/CS
 | Git polling, command runner, caches, remote refresh | `git_status.go`, `git_execution.go` |
 | Comparison and branch identity | `git_comparison.go`, `git_branch_identity.go`, `git_rebased.go` |
 | GitHub reports and merged-branch recognition | `github_reviews.go`, `github_merged.go` |
+| Card menus and PR browser navigation | `card_menu*`, `pr_navigation*`, `native_scripts/pr_browser.js`, `frontend/card-menu.js` |
 | Diff/history data and native viewer lifecycle | `git_viewer*.go` |
 | Suggested actions and confirmation lifecycle | `git_suggestions.go`, `suggestions_darwin.go`, `checkout_actions*.go`, `action_lifetime.go` |
 | Rebase trials, pushes, rewritten-history replacement | `rebase_preview.go`, `git_push.go`, `git_replace.go` |
@@ -34,7 +35,9 @@ The manager combines configuration, Git state, and a batched native window snaps
 
 Each Site starts `watchGit` once its window is ready. Local status polls every three seconds. Remote/GitHub refreshes run independently, at least a minute apart after completed attempts. Cache identity and refresh generations reject obsolete results after checkout changes. Transient failures preserve the last complete reading with an explicit cached/unavailable label.
 
-Changes windows have their own snapshots, selection, cancellation, and generation checks. Reopening the same Site and mode focuses its existing viewer. Requests are routed using Wails' sending window, not just client-supplied Site IDs. Commit comparisons pin revisions; working-tree contents are read when a file is selected.
+Changes windows have their own snapshots, selection, cancellation, and generation checks. Opening a category reuses a viewer for that Site (preferring a matching category, then the most recently used); an explicit new-window request bypasses reuse. Requests are routed using Wails' sending window, not just client-supplied Site IDs. Each comparison pins revisions. Viewer refreshes run every ten seconds after completion and when Site Git data changes, with at most two background readers. Refreshes preserve selections by file path/group and commit ID, reject stale generations, and avoid emitting unchanged content. Commit recovery checks bounded ranges around the previous page and the position predicted by the commit-count change; an explanatory note appears if recovery fails. User requests, closure, and display/session pause cancel background reads.
+
+Card context menus use a small synchronous AppKit popup on the main thread, called off the manager queue. The selected action returns to the queue and revalidates Site/window/PR identity. PR links are derived from trusted repository identity; browser commands never accept a frontend URL. A fixed embedded JXA script inspects supported running browsers only on explicit PR actions, with Automation permission and a separate bounded command slot. Default-browser fallback occurs only when the script confirms that no navigation was attempted.
 
 ## Git safety boundaries
 
@@ -61,11 +64,19 @@ Each channel has a separate single-instance identity. Avoid changing production 
 
 Activation uses AppKit; desktop identification/restoration depends on runtime-loaded private SkyLight APIs. Missing APIs/displays/Spaces must leave windows reachable and must not erase a valid saved assignment after a failed restore. Geometry preserves nearby bottom/right edge gaps and clamps windows to usable screen bounds. Automated geometry checks do not certify real desktop switching.
 
+Site windows are ordinary Wails windows. Explicit Site navigation uses the original sequence: restore a minimized target, make it key/front and main if eligible, then activate DevJay. Background snapshots and Space notifications never invoke that navigation path.
+
+The control strip has separate focus behavior from Site windows. It remains a nonactivating Wails panel, but a marked-instance override of the public `canBecomeKeyWindow` method refuses keyboard focus. Other instances retain their original behavior; neither the native class identity nor the base AppKit window classes are changed. The strip uses stationary/ignore-cycle collection behavior and still joins all ordinary Spaces on its monitor when enabled. Showing the strip through the reopen handler orders it front without activating DevJay. Keyboard interaction remains available in ordinary Site, Settings, and viewer windows; the strip itself is mouse-only.
+
+On 27 September at 14:18, the user confirmed the original empty-desktop reproduction works with this change. The trace shows explicit card navigation switching to its target, then two entries onto an empty desktop with Finder frontmost, DevJay inactive, the strip present, and all Sites off-Space; neither entry caused a return switch. User testing also found the bounce absent with the strip on a side monitor. Native tests check strip-only focus refusal, unchanged Site navigation, class/method isolation, and collection-behavior flags. Broader mouse/keyboard interaction, dragging, window decorations, minimized windows, and multi-monitor/older-OS cases still require validation. The successful reproduction does not isolate whether focus refusal, stationary behavior, or their combination prevents the unwanted activation.
+
 UI recovery reloads web views after wake/session return or WebContent failures, with bounded retries. It preserves backend operations and native placement and must never replay a confirmation. `View → Reload windows` provides manual recovery.
+
+For unexpected desktop switches, quit the development app and launch its executable with `DEVJAY_TRACE_FOCUS=1 bin/DevJay.app/Contents/MacOS/DevJay`. The opt-in `DevJay focus:` unified log records explicit focus requests, web navigation completion, application activation, key/main-window changes, and window visibility on each active-Space change. The trace only observes state; it does not change focus policy. Use `log show --last 5m --style compact --predicate 'process == "DevJay" AND (eventMessage BEGINSWITH "DevJay focus:" OR eventMessage CONTAINS "UI recovery:")'` after reproducing. A card highlight reports Space visibility, not main-window ownership; correlate both before attributing a switch to navigation or recovery.
 
 ## Build and validation
 
-Use macOS 13+, Go 1.25+, Xcode Command Line Tools, Git, and Node for checks. `gh` with existing authentication is optional for live GitHub state. `go.mod` pins Wails; no Wails CLI or npm install is needed.
+Use macOS 13+, Go 1.27.1+, Xcode Command Line Tools, Git, and Node for checks. `gh` with existing authentication is optional for live GitHub state. `go.mod` pins Wails; no Wails CLI or npm install is needed.
 
 ```sh
 make check     # Go tests/vet, JS tests/syntax, native checks, plist validation

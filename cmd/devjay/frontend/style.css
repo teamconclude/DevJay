@@ -91,13 +91,6 @@ h2 {
   height:23px;
   flex-shrink:0}
 
-.gear {
-  font-size: 16px;
-  border: 0;
-  background: transparent;
-  padding: 0 5px;
-  line-height: 23px;
-}
 .cards {
   display: flex;
   gap: 8px;
@@ -206,7 +199,7 @@ h2 {
 .strip .path, .workspace .path { font-size: 16px; }
 .strip .branch, .workspace .branch { font-size: 13px; font-weight: 500; line-height: 17px; margin: 4px 0 10px; }
 
-/* None is content-only; each card still exposes Settings on hover or focus. */
+/* None is content-only; Settings remains available through card context menus. */
 .strip[data-decoration="none"] header { display: none; }
 .strip[data-decoration="normal"] .grip, .strip[data-decoration="normal"] .close-window { display: none; }
 .decoration-setting { display: flex; align-items: center; gap: 16px; margin-top: 18px; }
@@ -291,15 +284,16 @@ html:not([data-local-drag-press]) .strip *, html:not([data-local-drag-press]) .w
 .strip .panel-dragging { opacity: .3; border-style: dashed; }
 .strip .panel-drag-preview { position: fixed; z-index: 100000; margin: 0; pointer-events: none; opacity: .95; box-shadow: 0 8px 24px #0008; }
 .reset-card-positions { align-self: flex-start; margin-top: 10px; }
-.card-heading { position: relative; }
-.card-title { display: block; width: 100%; min-width: 0; padding: 0 28px 0 0; border: 0; border-radius: 3px; background: transparent; text-align: left; color: inherit; --wails-draggable: drag; cursor: grab; }
+.card-heading { position: relative; display: flex; align-items: flex-start; gap: 8px; }
+.card-title { display: block; flex: 1; min-width: 0; padding: 0; border: 0; border-radius: 3px; background: transparent; text-align: left; color: inherit; --wails-draggable: drag; cursor: grab; }
 .card-title > * { pointer-events: none; }
 .card-title { -webkit-user-select: none; user-select: none; }
 .card-title:hover { background: transparent; }
 .strip[data-card-drag="true"] .card-title { --wails-draggable: no-drag; }
-.card-settings { position: absolute; top: -3px; right: -5px; width: 26px; height: 26px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: #aebdd2; font-size: 22px; line-height: 26px; opacity: 0; --wails-draggable: no-drag; }
-.pointer-hover .card-settings, .card:focus-within .card-settings, .workspace #app:focus-within .card-settings { opacity: 1; }
-.card-settings:hover { color: #edf1f7; background: #ffffff12; }
+.card-prs { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; flex-shrink: 0; max-width: 45%; }
+.pr-tag { padding: 2px 6px; border: 1px solid #b39aff45; border-radius: 5px; background: #aa85ff1a; color: #d1baff; font-size: 13px; font-weight: 600; line-height: 17px; white-space: nowrap; --wails-draggable: no-drag; }
+.pr-tag:hover, .pr-tag.status-hover { background: #aa85ff33; border-color: #b39aff80; }
+
 /* Separate the branch heading from compact, independently readable status rows. */
 .card-status { border-top: 1px solid #ffffff12; padding-top: 7px; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .metric-row { display: flex; align-items: center; gap: 5px; min-width: 0; line-height: 19px; white-space: nowrap; flex-wrap: wrap; }

@@ -14,7 +14,7 @@ Rewritten-upstream replacement uses exact upstream reflog evidence plus confirma
 - [ ] Display explicit merge, rebase, cherry-pick, revert, and bisect state on cards. Actions already reject these operation states.
 - [ ] Add a deliberate remote refresh and bounded refresh after wake/network recovery, with backoff for repeated failures/rate limits. The viewer's Refresh rereads local Git data; UI wake recovery reloads web views.
 - [ ] Resolve fork PRs targeting another repository and GitHub Enterprise PRs by host/base/head identity, with overrides and ambiguous-match handling. Unrecognized SSH aliases currently show GitHub unavailable.
-- [ ] Add a directly usable PR link and fuller draft/open/merged/closed/head-inclusion details. Existing cards show PR/review summaries and report URLs in tooltips.
+- [ ] Add fuller closed-PR/head-inclusion details. Cards now have clickable PR tags, draft/review/merged status, and browser-tab reuse; live Automation-permission and cross-desktop browser behavior still need validation.
 - [ ] Track new feedback by durable review/comment IDs, with **Mark seen** and a persisted acknowledgment baseline. Existing report counts/freshness are not an unread inbox.
 - [ ] Deduplicate polling for shared PRs; extend coverage for changed/dismissed reviews, ambiguous matches, authentication failures, and rate limits.
 
@@ -25,6 +25,9 @@ Existing automated tests and prior smoke checks do not close these broader valid
 - [ ] Repeat the reported resolution case: place a Site near bottom-right at lower resolution, quit, increase resolution, relaunch, and verify both edge gaps, monitor, and desktop. Repeat for the panel and Dock overlap.
 - [ ] Exercise live resolution/scaling changes, negative monitor coordinates, rearrangement/disconnection, Dock position/auto-hide, sleep/reboot, removed Spaces, and unavailable private APIs. Keep windows reachable and valid saved placement intact.
 - [ ] Test all decorations/layouts, resized panels, inactive-app navigation, minimized Sites, and multi-monitor switching without changing unrelated monitors' desktops.
+- [ ] Complete broader validation of the mouse-only control strip: app reactivation, native Window-menu navigation, minimized Sites, separate monitor Spaces, all decorations, dragging, Settings/viewer open-close cycles, and supported older macOS versions.
+  - Validated on macOS 27 on 27 September: the user confirmed card navigation and the original empty-desktop reproduction work. At 14:18:31 and 14:18:49, the trace shows Finder frontmost and DevJay inactive on the empty desktop, with the strip present and all Sites off-Space; neither entry caused an automatic return switch. This does not isolate whether focus refusal, stationary behavior, or their combination is decisive.
+  - Full `make check` passed (Go tests/vet, 89 JavaScript tests, native checks and plist validation), and the development app built successfully. Ordinary Site windows and their original explicit activation sequence are preserved; the strip alone refuses keyboard focus and uses stationary/ignore-cycle collection behavior.
 - [ ] Complete live drag checks: overlap, snapping, scrolling, restart persistence, Settings closing mid-drag, add/remove/status updates during dragging, and no accidental Site activation.
 - [ ] Check Settings size/placement, reachable controls, copyable status during refresh, long names, many Sites, narrow windows, keyboard focus, VoiceOver, and color-independent status cues.
 - [ ] Extend repository checks for shared worktrees, shallow history, unusual upstream names, deleted branches, moved/inaccessible folders, and simultaneous external fetches/edits.

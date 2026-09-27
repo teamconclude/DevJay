@@ -4,9 +4,9 @@ import { readFile } from 'node:fs/promises';
 const source = await readFile(new URL('../cmd/devjay/frontend/card-status.js', import.meta.url), 'utf8');
 const { cardStatus } = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
 const clean = {summary:'Up to date', ahead:0, behind:0, changes:0, github:'No open pull request'};
-test('clean default branches are quiet; feature branches show the short no-PR label', () => {
+test('branches without a PR have no PR label', () => {
  assert.equal(cardStatus({...clean,isMainBranch:true}).pr,'');
- assert.equal(cardStatus(clean).pr,'No open PR');
+ assert.equal(cardStatus(clean).pr,'');
  assert.equal(cardStatus(clean).quiet,'In sync');
  assert.equal(cardStatus({...clean,isMainBranch:true,github:'PR #3 · Approved'}).pr,'PR #3 · Approved');
 });
@@ -70,6 +70,21 @@ test('unavailable review freshness preserves findings without claiming a current
  const changed=cardStatus({...clean,github:'PR #2 · Review required',reviews:[{...review,earlier:true}]});
  assert.equal(changed.reviews[0].note,'Changes since review');
 });
+test('review change notes distinguish PR edits from pushed commits', () => {
+ const report = {number:2822,blockers:0,warnings:0,earlier:true};
+ for (const changeNote of [
+  'Commits changed since review',
+  'PR title changed since review',
+  'PR description changed since review',
+  'PR title and description changed since review',
+  'Commits and PR details changed since review',
+ ]) {
+  const s = cardStatus({...clean,github:'PR #2822 · Open',reviews:[{...report,changeNote}]});
+  assert.equal(s.reviews[0].note,changeNote);
+  assert.equal(s.reviews[0].values[0].label,'No findings reported');
+  assert.equal(s.reviews[0].values[0].symbol,'');
+ }
+});
 test('unavailable reviews hide counts; current clean reports retain their clean indicator', () => {
  const s = cardStatus({...clean,github:'PR #2 · Approved',reviews:[{number:2,blockers:1,warnings:7,unavailable:true,detail:'Report detail'}]});
  assert.equal(s.reviews.length,0); assert.equal(s.prTone,'warning'); assert.match(s.pr,/Review unavailable/);
@@ -119,7 +134,7 @@ test('merged PRs replace review state while preserving local work', () => {
  assert.equal(s.quiet,''); assert.equal(s.reviews.length,0);
  assert.match(s.prTitle,/https:\/\/github.com/);
  const changed = cardStatus({...clean,mergedPR:{...mergedPR,sameHead:false}});
- assert.equal(changed.pr,'No open PR');
+ assert.equal(changed.pr,'');
  assert.equal(changed.prNote,'');
  assert.equal(changed.prTone,'muted');
 });

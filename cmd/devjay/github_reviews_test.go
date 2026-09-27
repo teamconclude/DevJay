@@ -93,20 +93,22 @@ func TestReviewChangesIncludeOnlyThisPRContent(t *testing.T) {
 	posted := time.Date(2026, 9, 22, 13, 42, 11, 0, time.UTC)
 	posts := []reviewPost{{Body: "<!-- review blockers=1 warnings=2 -->", Commit: "head", SubmittedAt: posted}}
 	for _, tt := range []struct {
-		name, head, detail string
-		title, body        time.Time
-		changed            bool
+		name, head, detail, note string
+		title, body              time.Time
+		changed                  bool
 	}{
 		{name: "current", head: "head"},
 		{name: "older edits", head: "head", title: posted.Add(-time.Minute), body: posted.Add(-time.Minute)},
 		{name: "same time", head: "head", title: posted, body: posted},
-		{name: "code", head: "new-head", changed: true, detail: "earlier commit"},
-		{name: "title", head: "head", title: posted.Add(time.Minute), changed: true, detail: "PR title changed"},
-		{name: "description", head: "head", body: posted.Add(time.Minute), changed: true, detail: "PR description changed"},
+		{name: "code", head: "new-head", changed: true, detail: "earlier commit", note: "Commits changed since review"},
+		{name: "title", head: "head", title: posted.Add(time.Minute), changed: true, detail: "PR title changed", note: "PR title changed since review"},
+		{name: "description", head: "head", body: posted.Add(time.Minute), changed: true, detail: "PR description changed", note: "PR description changed since review"},
+		{name: "title and description", head: "head", title: posted.Add(time.Minute), body: posted.Add(time.Minute), changed: true, note: "PR title and description changed since review"},
+		{name: "commits and title", head: "new-head", title: posted.Add(time.Minute), changed: true, note: "Commits and PR details changed since review"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			got := latestReviewFindings(posts, pullRequest{Number: 2817, HeadRefOid: tt.head, TitleEditedAt: tt.title, BodyEditedAt: tt.body})
-			if got == nil || got.Earlier != tt.changed || got.FreshnessUnavailable || got.Blockers != 1 || got.Warnings != 2 || (tt.detail != "" && !strings.Contains(got.Detail, tt.detail)) {
+			if got == nil || got.Earlier != tt.changed || got.ChangeNote != tt.note || got.FreshnessUnavailable || got.Blockers != 1 || got.Warnings != 2 || (tt.detail != "" && !strings.Contains(got.Detail, tt.detail)) {
 				t.Fatalf("incorrect review freshness: %+v", got)
 			}
 		})
@@ -116,10 +118,44 @@ func TestReviewChangesIncludeOnlyThisPRContent(t *testing.T) {
  {"__typename":"CrossReferencedEvent","createdAt":"2026-09-23T00:00:00Z"},
  {"__typename":"ReferencedEvent","createdAt":"2026-09-23T00:00:00Z"},
  {"__typename":"LabeledEvent","createdAt":"2026-09-23T00:00:00Z"},
+ {"__typename":"UnlabeledEvent","createdAt":"2026-09-23T00:00:00Z"},
+ {"__typename":"ReadyForReviewEvent","createdAt":"2026-09-23T00:00:00Z"},
  {"__typename":"IssueComment","createdAt":"2026-09-23T00:00:00Z"}
  ]}}`), pullRequest{Number: 2817})
 	if err != nil || latestReviewFindings(posts, pr).Earlier {
 		t.Fatalf("unrelated activity marked the review stale: %+v, %v", pr, err)
+	}
+}
+
+func TestReviewFreshnessAfterPR2822DescriptionEdit(t *testing.T) {
+	// The last push was at 13:34:38Z, before this report. The description was
+	// edited afterwards, followed by a label and references from other work.
+	posts, err := decodeReviewPosts([]byte(`[{"body":"<!-- review head=63e480898a blockers=0 warnings=0 -->","commit_id":"63e480898af06ebd1684488bd13fddfb349322a0","state":"COMMENTED","submitted_at":"2026-09-24T13:38:25Z"}]`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pr, err := decodeReviewChanges([]byte(`{"headRefOid":"63e480898af06ebd1684488bd13fddfb349322a0","lastEditedAt":"2026-09-24T13:41:01Z","updatedAt":"2026-09-24T13:42:09Z","timelineItems":{"nodes":[{"__typename":"LabeledEvent","createdAt":"2026-09-24T13:42:09Z"},{"__typename":"ReferencedEvent","createdAt":"2026-09-24T13:43:06Z"}]}}`), pullRequest{Number: 2822})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := latestReviewFindings(posts, pr)
+	if got == nil || !got.Earlier || got.ChangeNote != "PR description changed since review" || got.FreshnessUnavailable || got.Blockers != 0 || got.Warnings != 0 || strings.Contains(got.Detail, "earlier commit") {
+		t.Fatalf("description edit must be reported without claiming another push: %+v", got)
+	}
+}
+
+func TestReviewFreshnessNeedsBothCommitIDs(t *testing.T) {
+	for _, tt := range []struct{ name, reviewed, current string }{
+		{"missing reviewed commit", "", "head"},
+		{"missing PR head", "head", ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			posts := []reviewPost{{Body: "<!-- review blockers=1 warnings=2 -->", Commit: tt.reviewed, SubmittedAt: time.Now()}}
+			got := latestReviewFindings(posts, pullRequest{Number: 2817, HeadRefOid: tt.current})
+			if got == nil || got.Earlier || !got.FreshnessUnavailable || got.Blockers != 1 || got.Warnings != 2 {
+				t.Fatalf("missing commit identity must preserve findings with unknown freshness: %+v", got)
+			}
+		})
 	}
 }
 

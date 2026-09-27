@@ -16,7 +16,7 @@ test('panel body clicks activate once, while controls, drags, and text selection
   }},...extra});
   fire(); fire(false,true);
   assert.deepEqual(activations,['site','site']);
-  fire(true); // Heading, Settings cog, Suggested actions, or move handle.
+  fire(true); // Heading, PR tag, Suggested actions, or move handle.
   fire(false,false,{button:2}); fire(false,false,{defaultPrevented:true});
   selected=true; fire(false,true);
   assert.equal(activations.length,2);

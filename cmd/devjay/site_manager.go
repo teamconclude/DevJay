@@ -52,6 +52,7 @@ type siteManager struct {
 	editorBrowsing                                           bool
 	viewers                                                  map[string]*gitViewerWindow
 	viewerSequence                                           uint64
+	prOpening                                                bool
 	suggestions, suggestionsParent                           *application.WebviewWindow
 	suggestionsReady                                         bool
 	suggestedSite                                            string
@@ -97,6 +98,7 @@ func (m *siteManager) run() {
 			}
 		case <-tick.C:
 			m.recoverViews()
+			m.refreshViewers(time.Now())
 			m.publishSnapshot(false)
 		}
 	}
@@ -145,8 +147,10 @@ func (m *siteManager) createWindow(site Site) {
 				m.send(func() {
 					if current := m.runtime[site.ID]; current == r {
 						m.mu.Lock()
+						previous := current.Git
 						current.Git = status
 						m.mu.Unlock()
+						m.siteViewersChanged(site.ID, previous, status)
 					}
 				})
 			})

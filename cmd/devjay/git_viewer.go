@@ -110,6 +110,105 @@ func parseViewFiles(data []byte, group string) ([]ViewFile, error) {
 }
 
 func loadGitView(ctx context.Context, v *GitView, refresh bool) error {
+	return loadGitViewSelection(ctx, v, refresh, nil)
+}
+
+// Refresh keeps the selected change when it still exists in the refreshed
+// category. Indexes alone are not stable as files and commits are added.
+func refreshGitView(ctx context.Context, v *GitView) error {
+	selection := viewSelection{branch: v.Branch, commit: v.Commit, page: v.Page, count: -1}
+	if count := viewCategoryCount(v); count != nil {
+		selection.count = *count
+	}
+	for row, commit := range v.Commits {
+		if commit.ID == v.Commit {
+			selection.row = row
+			break
+		}
+	}
+	if v.File >= 0 && v.File < len(v.Files) {
+		selection.file = v.Files[v.File]
+		selection.hasFile = true
+	}
+	return loadGitViewSelection(ctx, v, true, &selection)
+}
+
+type viewSelection struct {
+	branch, commit string
+	page, row      int
+	count          int
+	file           ViewFile
+	hasFile        bool
+	pageSearched   bool
+}
+
+func viewCategoryCount(v *GitView) *int {
+	if v.Counts != nil {
+		switch v.Kind {
+		case "local":
+			return v.Counts.Local
+		case "remote":
+			return v.Counts.Remote
+		}
+	}
+	return nil
+}
+
+// New commits can move a selected row onto a different history page. Look
+// around both its old position and the position predicted by the count change.
+// At most two reads of 300 IDs keep recovery bounded even for very large repos.
+func findViewSelectionPage(ctx context.Context, v *GitView, comparison string, selection *viewSelection) (int, bool, error) {
+	starts := []int{max(0, selection.page-1)}
+	if count := viewCategoryCount(v); selection.count >= 0 && count != nil {
+		index := max(0, selection.page*viewerPageSize+selection.row+*count-selection.count)
+		predicted := max(0, index/viewerPageSize-1)
+		if predicted != starts[0] {
+			starts = append(starts, predicted)
+		}
+	}
+	for _, start := range starts {
+		out, err := viewerGit(ctx, v.root, "log", "--date-order", "--no-show-signature", "--format=%H",
+			"--max-count="+strconv.Itoa(3*viewerPageSize), "--skip="+strconv.Itoa(start*viewerPageSize), comparison, "--")
+		if err != nil {
+			return 0, false, errors.New("Could not locate the selected commit. Try Refresh.")
+		}
+		for row, id := range strings.Fields(string(out)) {
+			if id == selection.commit {
+				return start + row/viewerPageSize, true, nil
+			}
+		}
+	}
+	return 0, false, nil
+}
+
+func noteViewSelectionFallback(v *GitView, selection *viewSelection) {
+	if selection == nil || selection.commit == "" || selection.commit == v.Commit {
+		return
+	}
+	if v.HistoryNote != "" {
+		v.HistoryNote += " "
+	}
+	v.HistoryNote += "The previously selected commit was not found near its refreshed position."
+	if v.Commit != "" {
+		v.HistoryNote += " Showing the first available commit."
+	}
+}
+
+func restoreViewFile(ctx context.Context, v *GitView, selection *viewSelection) {
+	if selection == nil || !selection.hasFile {
+		return
+	}
+	for i, file := range v.Files {
+		if file.Path == selection.file.Path && file.Group == selection.file.Group {
+			if v.File != i {
+				selectViewFile(ctx, v, i)
+			}
+			return
+		}
+	}
+}
+
+func loadGitViewSelection(ctx context.Context, v *GitView, refresh bool, selection *viewSelection) error {
 	v.Error, v.Diff, v.DiffNote, v.Message, v.Commit, v.Parent = "", "", "", "", "", ""
 	v.File = -1
 	v.Files = []ViewFile{}
@@ -145,6 +244,13 @@ func loadGitView(ctx context.Context, v *GitView, refresh bool) error {
 		v.Counts = countViewCategories(ctx, v, s.Changes)
 		v.Captured = time.Now().Format(time.RFC3339)
 		v.Page = 0
+		if selection != nil {
+			if selection.branch == v.Branch {
+				v.Page = selection.page
+			} else {
+				selection = nil
+			}
+		}
 	}
 	if v.Kind == "edits" {
 		for _, group := range []string{"Staged", "Unstaged"} {
@@ -183,6 +289,7 @@ func loadGitView(ctx context.Context, v *GitView, refresh bool) error {
 		populateViewStats(ctx, v)
 		if len(v.Files) > 0 {
 			selectViewFile(ctx, v, 0)
+			restoreViewFile(ctx, v, selection)
 		}
 		return nil
 	}
@@ -211,12 +318,53 @@ func loadGitView(ctx context.Context, v *GitView, refresh bool) error {
 		v.More = true
 		v.Commits = v.Commits[:viewerPageSize]
 	}
+	if selection != nil && selection.commit != "" && !selection.pageSearched {
+		found := false
+		for _, commit := range v.Commits {
+			found = found || commit.ID == selection.commit
+		}
+		if !found {
+			selection.pageSearched = true
+			page, recovered, err := findViewSelectionPage(ctx, v, comparison, selection)
+			if err != nil {
+				return err
+			}
+			if recovered {
+				v.Page = page
+				return loadGitViewSelection(ctx, v, false, selection)
+			}
+		}
+	}
 	if v.Kind == "remote" {
 		markRemotePresence(ctx, v)
 	}
 	if len(v.Commits) > 0 {
-		return selectViewCommit(ctx, v, v.Commits[0].ID)
+		commit := v.Commits[0].ID
+		if selection != nil {
+			for _, candidate := range v.Commits {
+				if candidate.ID == selection.commit {
+					commit = candidate.ID
+					break
+				}
+			}
+		}
+		if err := selectViewCommit(ctx, v, commit); err != nil {
+			return err
+		}
+		if selection != nil && commit == selection.commit {
+			restoreViewFile(ctx, v, selection)
+		}
+		noteViewSelectionFallback(v, selection)
+		return nil
 	}
+	// A rewritten or shortened history can remove the old page entirely.
+	if selection != nil && v.Page > 0 {
+		v.Page = 0
+		err := loadGitViewSelection(ctx, v, false, nil)
+		noteViewSelectionFallback(v, selection)
+		return err
+	}
+	noteViewSelectionFallback(v, selection)
 	return nil
 }
 

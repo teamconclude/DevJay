@@ -6,6 +6,7 @@ package main
 #include <stdlib.h>
 void devjay_log_ui_recovery(const char *message);
 void devjay_ui_power_state(unsigned int *sleepReasons, uint64_t *wakeSerial);
+void devjay_trace_navigation(void *window);
 */
 import "C"
 
@@ -24,6 +25,11 @@ func (m *siteManager) watchView(id string, w *application.WebviewWindow) {
 	}
 	m.recoveryWindows[id] = w
 	m.recovery.add(id)
+	w.RegisterHook(events.Mac.WebViewDidFinishNavigation, func(*application.WindowEvent) {
+		application.InvokeSync(func() {
+			C.devjay_trace_navigation(w.NativeWindow())
+		})
+	})
 	w.OnWindowEvent(events.Mac.WebViewWebContentProcessDidTerminate, func(*application.WindowEvent) {
 		m.send(func() {
 			if m.recoveryWindows[id] != w {

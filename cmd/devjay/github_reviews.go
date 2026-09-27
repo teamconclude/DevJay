@@ -28,6 +28,7 @@ type ReviewFindings struct {
 	Blockers             int    `json:"blockers"`
 	Warnings             int    `json:"warnings"`
 	Earlier              bool   `json:"earlier"`
+	ChangeNote           string `json:"changeNote,omitempty"`
 	Unavailable          bool   `json:"unavailable"`
 	FreshnessUnavailable bool   `json:"freshnessUnavailable,omitempty"`
 	Detail               string `json:"detail"`
@@ -195,6 +196,19 @@ func latestReviewFindings(posts []reviewPost, pr pullRequest) *ReviewFindings {
 		if bodyChanged {
 			result.Detail += "\nPR description changed since review"
 		}
+		// Name what changed so a PR edit does not imply another push.
+		switch {
+		case codeChanged && (titleChanged || bodyChanged):
+			result.ChangeNote = "Commits and PR details changed since review"
+		case codeChanged:
+			result.ChangeNote = "Commits changed since review"
+		case titleChanged && bodyChanged:
+			result.ChangeNote = "PR title and description changed since review"
+		case titleChanged:
+			result.ChangeNote = "PR title changed since review"
+		case bodyChanged:
+			result.ChangeNote = "PR description changed since review"
+		}
 		if head == "" {
 			result.Detail += "\nReviewed commit not specified"
 		}
@@ -220,8 +234,9 @@ func sameReviewCommit(a, b string) bool {
 	return (len(a) == 40 || len(a) == 64) && reviewCommitID.MatchString(a) && reviewCommitID.MatchString(b) && strings.HasPrefix(strings.ToLower(a), strings.ToLower(b))
 }
 
-// Only the PR's own title edits are requested. Its general updatedAt timestamp
-// and timeline references from other branches say nothing about reviewed work.
+// Read the current pushed head and the PR's own title/description edits after
+// loading reports. General updatedAt timestamps, labels, and conversation
+// activity do not indicate a change to the reviewed content.
 const reviewChangesQuery = `query($owner:String!,$name:String!,$number:Int!,$since:DateTime!,$endCursor:String) {
   repository(owner:$owner,name:$name) {
     pullRequest(number:$number) {

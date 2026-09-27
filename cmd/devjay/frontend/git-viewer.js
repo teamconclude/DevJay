@@ -39,6 +39,12 @@ export function commitPresenceLabel(presence) {
   return {incoming:'↓ Incoming',local:'✓ Already local',unknown:'Local status unknown'}[presence] || '';
 }
 
+export function sameDiffSelection(previous, next) {
+  const before = previous?.files?.[previous.file], after = next.files?.[next.file];
+  return !!before && !!after && previous.siteID === next.siteID && previous.kind === next.kind &&
+    previous.commit === next.commit && before.path === after.path && before.group === after.group && before.oldPath === after.oldPath;
+}
+
 export function viewCategory(v, kind) {
   const count = v.counts?.[kind];
   const known = Number.isInteger(count) && count >= 0;
@@ -103,6 +109,7 @@ export function mountGitViewer(root, request, suggestions) {
     commits.hidden=v.kind==='edits';panes.classList.toggle('edits-only',v.kind==='edits');
     if(changedContext&&v.loading){
       commitList.replaceChildren();fileList.replaceChildren();commitDetail.replaceChildren();diff.replaceChildren();
+      renderedState=null;renderedVersion=null;
       diffTitle.textContent='';note.hidden=true;fileHeading.textContent='Files';
       previous.disabled=true;next.disabled=true;pageLabel.textContent='';
     }
@@ -127,9 +134,13 @@ export function mountGitViewer(root, request, suggestions) {
     if(v.loading)return;
     if(renderedVersion===v.version)return;
     renderedVersion=v.version;
-    const sameList=renderedState?.siteID===v.siteID&&renderedState?.kind===v.kind&&renderedState?.page===v.page;
+    const previousState=renderedState;
+    const sameList=previousState?.siteID===v.siteID&&previousState?.kind===v.kind&&previousState?.page===v.page;
     const commitScroll=sameList?commitList.scrollTop:0;
     const fileScroll=sameList&&renderedState?.commit===v.commit?fileList.scrollTop:0;
+    const sameDiff=sameDiffSelection(previousState,v);
+    const diffScroll=sameDiff?{top:diff.scrollTop,left:diff.scrollLeft}:{top:0,left:0};
+    const focusFile=fileList.contains(document.activeElement),focusCommit=commitList.contains(document.activeElement);
     renderedState=v;
     commitList.replaceChildren();
     for(const commit of v.commits||[]) {
@@ -142,6 +153,7 @@ export function mountGitViewer(root, request, suggestions) {
         item.append(presence);
       }
       item.title=commit.id;commitList.append(item);
+      if(focusCommit&&commit.id===v.commit)item.focus({preventScroll:true});
     }
     if(!(v.commits||[]).length)commitList.append(el('p','git-empty',v.kind==='remote'?'No remote history available.':`No local-only commits compared with ${v.tracking||'the remote history'}.`));
     previous.disabled=v.page===0;next.disabled=!v.more;pageLabel.textContent=`Page ${v.page+1}`;
@@ -159,28 +171,37 @@ export function mountGitViewer(root, request, suggestions) {
       item.append(el('span',`git-file-status status-${status}`,status),el('span','git-file-path',file.path));
       item.title=file.oldPath?`${file.oldPath} → ${file.path}`:file.path;
       item.setAttribute('aria-label',`${file.group}: ${item.title} (${file.status})`);fileList.append(item);
+      if(focusFile&&index===v.file)item.focus({preventScroll:true});
     }
     if(!(v.files||[]).length)fileList.append(el('p','git-empty',v.kind==='edits'?'No local edits.':v.commit?'This commit has no changed files.':'Select a commit.'));
     if(v.filesLimited)fileList.append(el('p','git-empty','Showing the first 2,000 files.'));
     commitList.scrollTop=commitScroll;fileList.scrollTop=fileScroll;
-    commitDetail.hidden=v.kind==='edits'||!v.commit;commitDetail.replaceChildren();
-    if(!commitDetail.hidden){
-      const message=el('details','');const subject=el('summary','',(v.message||'').split('\n')[0]);
-      message.append(subject,el('pre','',v.message||''));commitDetail.append(message);
-      if(v.merge)commitDetail.append(el('p','muted',`Merge commit · compared with first parent ${v.parent.slice(0,8)}`));
-      else if(!v.parent)commitDetail.append(el('p','muted','Initial commit · compared with an empty tree'));
+    commitDetail.hidden=v.kind==='edits'||!v.commit;
+    const sameCommitDetail=previousState?.siteID===v.siteID&&previousState?.kind===v.kind&&previousState?.commit===v.commit&&
+      previousState?.message===v.message&&previousState?.parent===v.parent&&previousState?.merge===v.merge;
+    if(!sameCommitDetail){
+      commitDetail.replaceChildren();
+      if(!commitDetail.hidden){
+        const message=el('details','');const subject=el('summary','',(v.message||'').split('\n')[0]);
+        message.append(subject,el('pre','',v.message||''));commitDetail.append(message);
+        if(v.merge)commitDetail.append(el('p','muted',`Merge commit · compared with first parent ${v.parent.slice(0,8)}`));
+        else if(!v.parent)commitDetail.append(el('p','muted','Initial commit · compared with an empty tree'));
+      }
     }
     const file=v.files?.[v.file];
     diffTitle.textContent=file?(file.oldPath?`${file.oldPath} → ${file.path}`:file.path):'Select a file to view its diff';
     diffTitle.title=diffTitle.textContent;
     note.hidden=!v.diffNote;note.textContent=v.diffNote||'';
-    const fragment=document.createDocumentFragment();
-    for(const row of diffRows(v.diff||'')){
-      const line=el('div',`git-diff-line ${row.kind}`);
-      const left=el('span','git-line-number',row.old),right=el('span','git-line-number',row.current);
-      left.setAttribute('aria-hidden','true');right.setAttribute('aria-hidden','true');
-      line.append(left,right,el('span','git-code',row.line));fragment.append(line);
+    if(!sameDiff||previousState?.diff!==v.diff){
+      const fragment=document.createDocumentFragment();
+      for(const row of diffRows(v.diff||'')){
+        const line=el('div',`git-diff-line ${row.kind}`);
+        const left=el('span','git-line-number',row.old),right=el('span','git-line-number',row.current);
+        left.setAttribute('aria-hidden','true');right.setAttribute('aria-hidden','true');
+        line.append(left,right,el('span','git-code',row.line));fragment.append(line);
+      }
+      diff.replaceChildren(fragment);
     }
-    diff.replaceChildren(fragment);diff.scrollTop=0;diff.scrollLeft=0;
+    diff.scrollTop=diffScroll.top;diff.scrollLeft=diffScroll.left;
   };
 }

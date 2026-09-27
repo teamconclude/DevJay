@@ -36,6 +36,7 @@ type GitStatus struct {
 	RemoteChecked string             `json:"remoteChecked"`
 	Rewritten     bool               `json:"rewritten"`
 	GitHub        string             `json:"github"`
+	PullRequests  []PullRequestLink  `json:"pullRequests,omitempty"`
 	Reviews       []ReviewFindings   `json:"reviews,omitempty"`
 	MergedPR      *MergedPullRequest `json:"mergedPR,omitempty"`
 	Checked       string             `json:"checked"`
@@ -58,17 +59,18 @@ func (m gitMeta) key() string {
 }
 
 type remoteCache struct {
-	Key         string
-	BaseChecked time.Time
-	BaseError   string
-	Checked     time.Time
-	Attempted   time.Time
-	Error       string
-	Missing     bool
-	Rewritten   bool
-	GitHub      string
-	Reviews     []ReviewFindings
-	MergedPR    *MergedPullRequest
+	Key          string
+	BaseChecked  time.Time
+	BaseError    string
+	Checked      time.Time
+	Attempted    time.Time
+	Error        string
+	Missing      bool
+	Rewritten    bool
+	GitHub       string
+	PullRequests []PullRequestLink
+	Reviews      []ReviewFindings
+	MergedPR     *MergedPullRequest
 }
 
 // Bound subprocess output as well as time; a huge working tree must not hang the UI.
@@ -449,6 +451,7 @@ func describeGit(s GitStatus, m gitMeta, c remoteCache) GitStatus {
 	}
 	s.Rewritten = (c.Rewritten && (!m.Comparable || s.Behind > 0)) || s.CanReplaceRemote
 	s.GitHub = c.GitHub
+	s.PullRequests = c.PullRequests
 	s.Reviews = c.Reviews
 	if mergedPRMatchesBranch(c.MergedPR, m) && !s.IsMainBranch {
 		merged := *c.MergedPR
@@ -456,6 +459,9 @@ func describeGit(s GitStatus, m gitMeta, c remoteCache) GitStatus {
 		s.MergedPR = &merged
 		s.GitHub = fmt.Sprintf("PR #%d · Merged", merged.Number)
 		s.Reviews = nil
+		if link, ok := pullRequestLink(m.GitHubRepo, merged.Number, "Merged", false); ok {
+			s.PullRequests = []PullRequestLink{link}
+		}
 	}
 	return s
 }
@@ -495,6 +501,7 @@ func refreshRemote(ctx context.Context, m gitMeta, c *remoteCache) {
 		c.GitHub = "GitHub info unavailable for this remote host"
 	}
 	c.Reviews = nil
+	c.PullRequests = nil
 	c.MergedPR = nil
 	if m.GitHubRepo != "" && m.Branch != "(detached)" && !m.Initial {
 		out, err := runCommand(ctx, 15*time.Second, "gh", "pr", "list", "--repo", m.GitHubRepo, "--head", m.pullRequestBranch(), "--state", "open", "--limit", "20", "--json", "number,isDraft,reviewDecision,headRepositoryOwner,headRefOid")
@@ -503,6 +510,7 @@ func refreshRemote(ctx context.Context, m gitMeta, c *remoteCache) {
 		} else {
 			owner := strings.Split(m.GitHubRepo, "/")[0]
 			c.GitHub = prSummary(out, owner)
+			c.PullRequests = openPullRequestLinks(out, m.GitHubRepo)
 			if c.GitHub == "No open pull request" {
 				merged, err := runCommand(ctx, 15*time.Second, "gh", "pr", "list", "--repo", m.GitHubRepo, "--head", m.pullRequestBranch(), "--state", "merged", "--limit", "20", "--json", "number,state,headRefName,headRefOid,baseRefName,headRepository,mergedAt,url")
 				if err == nil {
