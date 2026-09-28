@@ -3,9 +3,11 @@ package main
 /*
 #cgo LDFLAGS: -framework AppKit
 #include <stdlib.h>
+#include "site_apps_darwin.h"
 unsigned int devjay_window_state(void *window);
 int devjay_prepare_panel(void *window);
 void devjay_track_hover(void *window);
+void devjay_refresh_app_tooltip(void *window);
 unsigned int devjay_panel_preferences(void *window);
 void devjay_all_desktops(void *window, int enabled);
 void devjay_all_windows_on_top(int enabled);
@@ -29,9 +31,10 @@ import (
 )
 
 // Collect native state in one main-thread visit instead of one per property.
-func readWindowSnapshot(items map[string]siteRuntime, panel, settings *application.WebviewWindow) (map[string]DesktopPosition, map[string]cardState, map[string]bool, bool) {
+func readWindowSnapshot(items map[string]siteRuntime, panel, settings *application.WebviewWindow) (map[string]DesktopPosition, map[string]cardState, map[string]bool, bool, map[string]uint32) {
 	positions := map[string]DesktopPosition{}
 	states := map[string]cardState{}
+	windowNumbers := map[string]uint32{}
 	preferences := map[string]bool{"allDesktops": true, "onTop": true}
 	settingsOpen := false
 	application.InvokeSync(func() {
@@ -40,6 +43,7 @@ func readWindowSnapshot(items map[string]siteRuntime, panel, settings *applicati
 				continue
 			}
 			pointer := item.Window.NativeWindow()
+			windowNumbers[id] = uint32(C.devjay_site_app_window_number(pointer))
 			flags := uint(C.devjay_window_state(pointer))
 			states[id] = cardState{Name: id, OnDesktop: flags&1 != 0, Focused: flags&2 != 0, Minimized: flags&4 != 0}
 			raw := C.devjay_desktop_position(pointer)
@@ -58,7 +62,7 @@ func readWindowSnapshot(items map[string]siteRuntime, panel, settings *applicati
 			settingsOpen = C.devjay_window_state(settings.NativeWindow())&8 != 0
 		}
 	})
-	return positions, states, preferences, settingsOpen
+	return positions, states, preferences, settingsOpen, windowNumbers
 }
 
 func prepareControlPanel(window *application.WebviewWindow) bool {
@@ -112,6 +116,10 @@ func showSettingsWindow(window, parent *application.WebviewWindow) {
 	application.InvokeSync(func() { C.devjay_show_settings(window.NativeWindow(), parent.NativeWindow()) })
 }
 func applyTopPreference() { application.InvokeSync(func() { C.devjay_apply_top_preference() }) }
+
+func refreshAppTooltip(window *application.WebviewWindow) {
+	application.InvokeSync(func() { C.devjay_refresh_app_tooltip(window.NativeWindow()) })
+}
 
 func fitControlPanel(window *application.WebviewWindow, config SiteConfig) {
 	mode := 0

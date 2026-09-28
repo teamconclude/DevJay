@@ -22,11 +22,13 @@ type siteRuntime struct {
 }
 type SiteView struct {
 	Site
-	Prefix   string          `json:"prefix"`
-	Name     string          `json:"name"`
-	Window   cardState       `json:"window"`
-	Position DesktopPosition `json:"position"`
-	Git      GitStatus       `json:"git"`
+	Prefix               string           `json:"prefix"`
+	Name                 string           `json:"name"`
+	Window               cardState        `json:"window"`
+	Position             DesktopPosition  `json:"position"`
+	Git                  GitStatus        `json:"git"`
+	DevelopmentApps      []DevelopmentApp `json:"developmentApps"`
+	DevelopmentAppsKnown bool             `json:"developmentAppsKnown"`
 }
 type appSnapshot struct {
 	Action        *CheckoutAction          `json:"action,omitempty"`
@@ -50,6 +52,7 @@ type siteManager struct {
 	editorState                                              *EditorState
 	editorGeneration                                         uint64
 	editorBrowsing                                           bool
+	developmentApps                                          developmentAppMonitor
 	viewers                                                  map[string]*gitViewerWindow
 	viewerSequence                                           uint64
 	prOpening                                                bool
@@ -172,7 +175,9 @@ func (m *siteManager) snapshot() appSnapshot {
 	if m.settingsReady {
 		settings = m.settings
 	}
-	positions, states, preferences, settingsOpen := readWindowSnapshot(items, panel, settings)
+	positions, states, preferences, settingsOpen, windowNumbers := readWindowSnapshot(items, panel, settings)
+	preferences["showIDEStatus"] = m.config.showIDEStatus()
+	m.observeDevelopmentApps(windowNumbers, positions)
 	result := appSnapshot{Action: m.action, QuitMessage: m.quitMessage, SuggestedSite: m.suggestedSite, Layout: m.config.layout(), Placements: m.config.Placements, SettingsOpen: settingsOpen, Decoration: m.config.decoration(), Sites: []SiteView{}, Manual: m.config.Manual, Preferences: preferences}
 	if m.configError != nil {
 		result.Error = "Cannot read saved Sites. Configuration has not been overwritten: " + m.configError.Error()
@@ -180,7 +185,9 @@ func (m *siteManager) snapshot() appSnapshot {
 	for _, site := range orderedSites(m.config) {
 		r := items[site.ID]
 		prefix, name := displayPath(site.Path)
-		result.Sites = append(result.Sites, SiteView{site, prefix, name, states[site.ID], positions[site.ID], r.Git})
+		apps := m.developmentApps.readings[site.ID]
+		result.Sites = append(result.Sites, SiteView{Site: site, Prefix: prefix, Name: name, Window: states[site.ID], Position: positions[site.ID], Git: r.Git,
+			DevelopmentApps: apps.Apps, DevelopmentAppsKnown: apps.Known})
 	}
 	return result
 }
@@ -314,6 +321,41 @@ func (m *siteManager) browse() {
 }
 func (m *siteManager) registerEvents() {
 	m.registerEditorSettingsEvents()
+	m.app.Event.On("devjay:app-tooltip-refresh", func(e *application.CustomEvent) {
+		m.send(func() {
+			if e.Sender == "control-panel" && m.panelReady {
+				refreshAppTooltip(m.panel)
+				return
+			}
+			for id, r := range m.runtime {
+				if e.Sender == "site-"+id && r.Ready {
+					refreshAppTooltip(r.Window)
+					return
+				}
+			}
+		})
+	})
+	m.app.Event.On("devjay:showIDEStatus", func(e *application.CustomEvent) {
+		if e.Sender != "settings" {
+			return
+		}
+		value, ok := e.Data.(bool)
+		if !ok {
+			return
+		}
+		m.send(func() {
+			c := m.config
+			c.ShowIDEStatus = &value
+			if err := m.save(c); err != nil {
+				m.siteError(err.Error())
+				m.broadcast()
+				return
+			}
+			m.developmentApps.setEnabled(value)
+			m.siteError("")
+			m.broadcast()
+		})
+	})
 	m.app.Event.On("devjay:fit-cards", func(e *application.CustomEvent) {
 		var size struct{ Height, ViewportWidth, ViewportHeight float64 }
 		data, err := json.Marshal(e.Data)

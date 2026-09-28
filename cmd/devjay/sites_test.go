@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -110,5 +111,93 @@ func TestPanelLayoutPersistence(t *testing.T) {
 	}
 	if validLayout("manual") {
 		t.Fatal("Manual is a sorting mode, not a layout")
+	}
+}
+
+func TestIDEStatusPreferenceDefaultsOnAndPersistsOff(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sites.json")
+	for _, body := range []string{`{"version":1}`, `{"version":1,"showIDEStatus":true}`, `{"version":1,"showIDEStatus":false}`} {
+		if err := os.WriteFile(path, []byte(body), 0600); err != nil {
+			t.Fatal(err)
+		}
+		config, err := loadSites(path)
+		want := body != `{"version":1,"showIDEStatus":false}`
+		if err != nil || config.showIDEStatus() != want {
+			t.Fatalf("preference from %s: %+v %v", body, config, err)
+		}
+		if err := saveSites(path, config); err != nil {
+			t.Fatal(err)
+		}
+		loaded, err := loadSites(path)
+		if err != nil || loaded.showIDEStatus() != want {
+			t.Fatalf("preference changed on reload: %+v %v", loaded, err)
+		}
+	}
+}
+
+func TestLegacyAppStatusViewPreservesSitesAndStatusPreference(t *testing.T) {
+	for _, mode := range []string{"compact", "detailed"} {
+		for _, disabled := range []bool{false, true} {
+			name := mode + "/default-enabled"
+			if disabled {
+				name = mode + "/disabled"
+			}
+			t.Run(name, func(t *testing.T) {
+				site, err := newSite(t.TempDir(), nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				no := false
+				want := SiteConfig{Version: 1, Sites: []Site{site}, Order: []string{site.ID}, Manual: true,
+					PreferredEditor: "com.jetbrains.goland", UseProjectEditor: &no, Layout: "custom", Decoration: "minimal",
+					Placements: map[string]CardPlacement{site.ID: {X: 224, Y: 160, Z: 0}}}
+				if disabled {
+					want.ShowIDEStatus = &no
+				}
+				data, err := json.Marshal(want)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var legacy map[string]json.RawMessage
+				if err := json.Unmarshal(data, &legacy); err != nil {
+					t.Fatal(err)
+				}
+				legacy["appStatusView"], _ = json.Marshal(mode)
+				data, err = json.Marshal(legacy)
+				if err != nil {
+					t.Fatal(err)
+				}
+				path := filepath.Join(t.TempDir(), "sites.json")
+				if err := os.WriteFile(path, data, 0600); err != nil {
+					t.Fatal(err)
+				}
+				loaded, err := loadSites(path)
+				if err != nil || !reflect.DeepEqual(loaded, want) || loaded.showIDEStatus() == disabled {
+					t.Fatalf("legacy configuration changed: %+v %v", loaded, err)
+				}
+				unchanged, err := os.ReadFile(path)
+				if err != nil || string(unchanged) != string(data) {
+					t.Fatalf("loading rewrote legacy configuration: %v", err)
+				}
+				if err := saveSites(path, loaded); err != nil {
+					t.Fatal(err)
+				}
+				loaded, err = loadSites(path)
+				if err != nil || !reflect.DeepEqual(loaded, want) || loaded.showIDEStatus() == disabled {
+					t.Fatalf("configuration changed on save/reload: %+v %v", loaded, err)
+				}
+				data, err = os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var saved map[string]json.RawMessage
+				if err := json.Unmarshal(data, &saved); err != nil {
+					t.Fatal(err)
+				}
+				if _, exists := saved["appStatusView"]; exists {
+					t.Fatal("obsolete view preference persisted")
+				}
+			})
+		}
 	}
 }

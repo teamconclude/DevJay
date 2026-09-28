@@ -1,7 +1,46 @@
 #import <AppKit/AppKit.h>
 #import <objc/runtime.h>
 #import <WebKit/WebKit.h>
+#import <QuartzCore/QuartzCore.h>
 #import "focus_trace_darwin.h"
+
+// A tooltip must never become the app's remembered key/main window. In
+// particular, hovering on an empty Space must not recreate the desktop bounce.
+@interface DevJayAppTooltipPanel : NSPanel
+@end
+@implementation DevJayAppTooltipPanel
+- (BOOL)canBecomeKeyWindow { return NO; }
+- (BOOL)canBecomeMainWindow { return NO; }
+@end
+
+static BOOL devjay_tooltip_payload(id payload, NSString **text, NSRect *rect) {
+    if (![payload isKindOfClass:NSDictionary.class] ||
+        ![payload[@"text"] isKindOfClass:NSString.class]) return NO;
+    NSString *value = payload[@"text"];
+    if (!value.length || value.length > 4096) return NO;
+    for (NSString *key in @[@"x", @"y", @"width", @"height"]) {
+        if (![payload[key] isKindOfClass:NSNumber.class] || !isfinite([payload[key] doubleValue])) return NO;
+    }
+    NSRect normalized = NSMakeRect([payload[@"x"] doubleValue], [payload[@"y"] doubleValue],
+        [payload[@"width"] doubleValue], [payload[@"height"] doubleValue]);
+    if (normalized.size.width <= 0 || normalized.size.height <= 0 ||
+        normalized.size.width > 10 || normalized.size.height > 10) return NO;
+    normalized = NSIntersectionRect(normalized, NSMakeRect(0, 0, 1, 1));
+    if (NSIsEmptyRect(normalized)) return NO;
+    *text = value;
+    *rect = normalized;
+    return YES;
+}
+
+static NSRect devjay_tooltip_frame(NSRect anchor, NSSize size, NSRect visible) {
+    NSRect safe = NSInsetRect(visible, 8, 8);
+    size.width = MIN(size.width, safe.size.width);
+    size.height = MIN(size.height, safe.size.height);
+    CGFloat x = NSMinX(anchor), y = NSMaxY(anchor) + 8;
+    if (y + size.height > NSMaxY(safe)) y = NSMinY(anchor) - size.height - 8;
+    return NSMakeRect(MAX(NSMinX(safe), MIN(x, NSMaxX(safe) - size.width)),
+        MAX(NSMinY(safe), MIN(y, NSMaxY(safe) - size.height)), size.width, size.height);
+}
 
 // WebKit's CSS hover tracking can stop when its window is inactive. An
 // always-active AppKit tracking area reports position without activating it.
@@ -11,32 +50,166 @@
     NSPoint position;
     NSUInteger revision;
     BOOL pending;
+    DevJayAppTooltipPanel *tooltip;
+    NSString *tooltipText;
+    NSRect tooltipRect;
+    NSUInteger tooltipGeneration;
+    BOOL tooltipReady;
+    id eventMonitor;
 }
 - (void)publish;
+- (void)hideTooltip;
+- (void)invalidate:(NSNotification *)notification;
+- (void)receiveTooltip:(id)payload;
+- (void)showTooltip;
 @end
 
 @implementation DevJayHoverTracker
+- (void)dealloc {
+    [NSNotificationCenter.defaultCenter removeObserver:self];
+    [NSWorkspace.sharedWorkspace.notificationCenter removeObserver:self];
+    if (eventMonitor) [NSEvent removeMonitor:eventMonitor];
+    [tooltip orderOut:nil];
+    [tooltip release];
+    [tooltipText release];
+    [super dealloc];
+}
+- (void)hideTooltip {
+    tooltipGeneration++;
+    tooltipReady = NO;
+    [tooltipText release]; tooltipText = nil;
+    tooltipRect = NSZeroRect;
+    if (tooltip.visible) [tooltip orderOut:nil];
+}
+- (void)invalidate:(NSNotification *)notification {
+    revision++;
+    position = NSMakePoint(-1, -1);
+    [self hideTooltip];
+    if ([notification.name isEqual:NSWindowWillCloseNotification]) view = nil;
+}
+- (BOOL)eligible {
+    NSWindow *window = view.window;
+    return window && window.visible && window.isOnActiveSpace && !window.miniaturized &&
+        !view.loading && NSEvent.pressedMouseButtons == 0;
+}
+- (void)receiveTooltip:(id)payload {
+    NSString *text = nil;
+    NSRect rect;
+    if (![self eligible] || !devjay_tooltip_payload(payload, &text, &rect)) {
+        [self hideTooltip];
+        return;
+    }
+    if (![text isEqual:tooltipText] || !NSEqualRects(rect, tooltipRect)) {
+        [self hideTooltip];
+        tooltipText = [text copy];
+        tooltipRect = rect;
+        NSUInteger generation = tooltipGeneration;
+        // Retain the WebView in the delayed block, so its associated tracker
+        // cannot outlive a dangling raw view pointer during window teardown.
+        WKWebView *expected = view;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.4 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            if (view != expected || generation != tooltipGeneration || ![self eligible]) return;
+            tooltipReady = YES;
+            revision++;
+            // Read the DOM again after the delay. A snapshot may have changed
+            // or removed the target while the pointer was stationary.
+            [self publish];
+        });
+    } else if (tooltipReady) {
+        [self showTooltip];
+    }
+}
+- (void)showTooltip {
+    if (![self eligible] || !tooltipText.length) { [self hideTooltip]; return; }
+    NSRect bounds = view.bounds;
+    NSRect anchor = NSMakeRect(NSMinX(bounds) + tooltipRect.origin.x * bounds.size.width,
+        view.isFlipped ? NSMinY(bounds) + tooltipRect.origin.y * bounds.size.height
+                       : NSMaxY(bounds) - NSMaxY(tooltipRect) * bounds.size.height,
+        tooltipRect.size.width * bounds.size.width, tooltipRect.size.height * bounds.size.height);
+    NSWindow *window = view.window;
+    anchor = [window convertRectToScreen:[view convertRect:anchor toView:nil]];
+    if (!NSPointInRect(NSEvent.mouseLocation, anchor)) { [self hideTooltip]; return; }
+    NSScreen *screen = window.screen;
+    for (NSScreen *candidate in NSScreen.screens) {
+        if (NSPointInRect(NSMakePoint(NSMidX(anchor), NSMidY(anchor)), candidate.frame)) { screen = candidate; break; }
+    }
+    if (!screen || screen.visibleFrame.size.width < 64 || screen.visibleFrame.size.height < 64) {
+        [self hideTooltip]; return;
+    }
+    // The text and anchor are unchanged while this panel is visible. Avoid
+    // rebuilding its content on every mouse-move callback within one icon.
+    if (tooltip.visible) return;
+    if (!tooltip) {
+        tooltip = [[DevJayAppTooltipPanel alloc] initWithContentRect:NSZeroRect
+            styleMask:NSWindowStyleMaskBorderless | NSWindowStyleMaskNonactivatingPanel
+            backing:NSBackingStoreBuffered defer:NO];
+        tooltip.identifier = @"app-status-tooltip";
+        tooltip.releasedWhenClosed = NO;
+        tooltip.hidesOnDeactivate = NO;
+        tooltip.ignoresMouseEvents = YES;
+        tooltip.excludedFromWindowsMenu = YES;
+        tooltip.restorable = NO;
+        tooltip.tabbingMode = NSWindowTabbingModeDisallowed;
+        tooltip.animationBehavior = NSWindowAnimationBehaviorNone;
+        tooltip.level = CGWindowLevelForKey(kCGHelpWindowLevelKey);
+        tooltip.collectionBehavior = NSWindowCollectionBehaviorCanJoinAllSpaces |
+            NSWindowCollectionBehaviorStationary | NSWindowCollectionBehaviorIgnoresCycle |
+            NSWindowCollectionBehaviorFullScreenNone;
+        tooltip.opaque = NO;
+        tooltip.backgroundColor = NSColor.clearColor;
+        tooltip.hasShadow = YES;
+    }
+    NSTextField *label = [NSTextField wrappingLabelWithString:tooltipText];
+    label.font = [NSFont systemFontOfSize:12];
+    label.textColor = NSColor.labelColor;
+    label.selectable = NO;
+    label.cell.wraps = YES;
+    label.cell.lineBreakMode = NSLineBreakByWordWrapping;
+    // Short app labels should fit their content; retain a cap for long names.
+    CGFloat naturalWidth = ceil([label.cell cellSizeForBounds:NSMakeRect(0, 0, CGFLOAT_MAX, CGFLOAT_MAX)].width);
+    CGFloat width = MIN(MIN(380, screen.visibleFrame.size.width - 32), naturalWidth + 24);
+    CGFloat height = ceil([label.cell cellSizeForBounds:NSMakeRect(0, 0, width - 24, CGFLOAT_MAX)].height) + 24;
+    NSRect frame = devjay_tooltip_frame(anchor, NSMakeSize(width, height), screen.visibleFrame);
+    NSView *content = [[[NSView alloc] initWithFrame:NSMakeRect(0, 0, frame.size.width, frame.size.height)] autorelease];
+    content.wantsLayer = YES;
+    content.layer.cornerRadius = 8;
+    content.layer.backgroundColor = NSColor.windowBackgroundColor.CGColor;
+    label.frame = NSInsetRect(content.bounds, 12, 12);
+    [content addSubview:label];
+    tooltip.contentView = content;
+    [tooltip setFrame:frame display:YES];
+    // This is intentionally the only ordering call. No activation, first
+    // responder, key/main request, child-window link, or Space move is made.
+    if (!tooltip.visible) [tooltip orderFrontRegardless];
+}
 - (void)publish {
-    if (pending) return;
+    if (pending || !view) return;
     pending = YES;
     NSUInteger sent = revision;
     NSString *script = [NSString stringWithFormat:
-        @"window.dispatchEvent(new CustomEvent('devjay:native-hover',{detail:{x:%.17g,y:%.17g}}))",
+        @"(()=>{const x=%.17g,y=%.17g;window.dispatchEvent(new CustomEvent('devjay:native-hover',{detail:{x,y}}));"
+        "const n=document.elementFromPoint(x*innerWidth,y*innerHeight)?.closest('[data-app-tooltip]');"
+        "if(!n)return null;const r=n.getBoundingClientRect();return {text:n.dataset.appTooltip,"
+        "x:r.x/innerWidth,y:r.y/innerHeight,width:r.width/innerWidth,height:r.height/innerHeight};})()",
         position.x, position.y];
     // Keep the view alive until delivery finishes, including during closing.
     WKWebView *target = view;
+    NSWindow *parent = target.window;
     [target evaluateJavaScript:script completionHandler:^(id result, NSError *error) {
         pending = NO;
-        if (sent != revision && target.window != nil) [self publish];
+        if (view == target && target.window == parent && sent == revision) [self receiveTooltip:error ? nil : result];
+        if (sent != revision && view && view.window != nil) [self publish];
     }];
 }
 - (void)mouseMoved:(NSEvent *)event {
+    if (!view) return;
     NSRect bounds = view.bounds;
     if (bounds.size.width <= 0 || bounds.size.height <= 0) return;
     NSPoint point = [view convertPoint:event.locationInWindow fromView:nil];
     position.x = (point.x - NSMinX(bounds)) / bounds.size.width;
     position.y = view.isFlipped ? (point.y - NSMinY(bounds)) / bounds.size.height
                                : (NSMaxY(bounds) - point.y) / bounds.size.height;
+    if (!NSPointInRect(position, tooltipRect)) [self hideTooltip];
     revision++;
     [self publish];
 }
@@ -44,6 +217,7 @@
 - (void)mouseExited:(NSEvent *)event {
     position = NSMakePoint(-1, -1);
     revision++;
+    [self hideTooltip];
     [self publish];
 }
 @end
@@ -57,20 +231,50 @@ static WKWebView *devjay_webview(NSView *view) {
     return nil;
 }
 
+static const char devjay_hover_tracker_key;
+
+// A frontend snapshot can replace a tooltip target beneath a stationary mouse.
+// Only an already pending/visible tooltip needs a fresh native hit test.
+void devjay_refresh_app_tooltip(void *pointer) {
+    NSWindow *window = (NSWindow *)pointer;
+    WKWebView *webview = devjay_webview(window.contentView);
+    DevJayHoverTracker *tracker = objc_getAssociatedObject(webview, &devjay_hover_tracker_key);
+    if (!tracker || (!tracker->tooltipText && !tracker->pending)) return;
+    tracker->revision++;
+    [tracker publish];
+}
+
 void devjay_track_hover(void *pointer) {
     NSWindow *window = (NSWindow *)pointer;
     WKWebView *view = devjay_webview(window.contentView);
-    static const char trackerKey;
-    if (!view || objc_getAssociatedObject(view, &trackerKey)) return;
+    if (!view || objc_getAssociatedObject(view, &devjay_hover_tracker_key)) return;
     DevJayHoverTracker *tracker = [[[DevJayHoverTracker alloc] init] autorelease];
     tracker->view = view;
-    objc_setAssociatedObject(view, &trackerKey, tracker, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(view, &devjay_hover_tracker_key, tracker, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     NSTrackingArea *area = [[NSTrackingArea alloc] initWithRect:NSZeroRect
         options:NSTrackingMouseEnteredAndExited | NSTrackingMouseMoved | NSTrackingActiveAlways | NSTrackingInVisibleRect
         owner:tracker userInfo:nil];
     [view addTrackingArea:area];
     [area release];
     window.acceptsMouseMovedEvents = YES;
+    for (NSNotificationName name in @[NSWindowWillCloseNotification, NSWindowDidMoveNotification,
+        NSWindowDidResizeNotification, NSWindowDidMiniaturizeNotification,
+        NSWindowDidChangeScreenNotification, NSWindowDidChangeOcclusionStateNotification]) {
+        [NSNotificationCenter.defaultCenter addObserver:tracker selector:@selector(invalidate:) name:name object:window];
+    }
+    for (NSNotificationName name in @[NSWorkspaceActiveSpaceDidChangeNotification, NSWorkspaceDidActivateApplicationNotification,
+        NSWorkspaceWillSleepNotification,
+        NSWorkspaceScreensDidSleepNotification, NSWorkspaceSessionDidResignActiveNotification]) {
+        [NSWorkspace.sharedWorkspace.notificationCenter addObserver:tracker selector:@selector(invalidate:) name:name object:nil];
+    }
+    // Under manual retain/release, __block does not retain the tracker. Remove
+    // the monitor in dealloc instead of creating a tracker/monitor retain cycle.
+    __block DevJayHoverTracker *unretainedTracker = tracker;
+    tracker->eventMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskLeftMouseDown |
+        NSEventMaskRightMouseDown | NSEventMaskOtherMouseDown | NSEventMaskScrollWheel handler:^NSEvent *(NSEvent *event) {
+            if (event.window == unretainedTracker->view.window) [unretainedTracker invalidate:nil];
+            return event;
+        }];
 }
 
 // Called on the AppKit main thread through application.InvokeSync.

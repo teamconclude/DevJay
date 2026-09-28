@@ -30,6 +30,7 @@ type CardPlacement struct {
 type SiteConfig struct {
 	PreferredEditor  string                   `json:"preferredEditor,omitempty"`
 	UseProjectEditor *bool                    `json:"useProjectEditor,omitempty"`
+	ShowIDEStatus    *bool                    `json:"showIDEStatus,omitempty"`
 	Layout           string                   `json:"layout,omitempty"`
 	Placements       map[string]CardPlacement `json:"placements,omitempty"`
 	Decoration       string                   `json:"decoration,omitempty"`
@@ -40,6 +41,7 @@ type SiteConfig struct {
 }
 
 func (c SiteConfig) useProjectEditor() bool { return c.UseProjectEditor == nil || *c.UseProjectEditor }
+func (c SiteConfig) showIDEStatus() bool    { return c.ShowIDEStatus == nil || *c.ShowIDEStatus }
 
 type DesktopPosition struct {
 	Known    bool    `json:"known"`

@@ -43,9 +43,53 @@ Events.On('devjay:pr-open-result', event => {
 });
 if (!settings && !viewer && !actions) installCardMenu(root, data => emit('card-menu', data));
 function pathLabel(site) { const n = el('div', 'path'); n.title = site.path; n.append(el('span', 'prefix', site.prefix), el('strong', '', site.name)); return n; }
-function details(site, parent) {
+function developmentAppIcon(name, source, size) {
+  const icon = el('span', `development-app-icon${size === 16 ? ' development-agent-icon' : ''}`);
+  icon.setAttribute('aria-hidden', 'true');
+  const initials = (name.match(/\b[\p{L}\p{N}]|\p{Lu}/gu) || []).slice(0, 2).join('').toUpperCase() || '?';
+  const fallback = el('span', 'development-app-initials', initials);
+  icon.append(fallback);
+  if (source) {
+    const image = el('img'); image.alt = ''; image.width = size; image.height = size; image.draggable = false; image.hidden = true;
+    image.setAttribute('aria-hidden', 'true');
+    image.onload = () => { fallback.hidden = true; image.hidden = false; };
+    image.onerror = () => { image.remove(); fallback.hidden = false; };
+    icon.append(image); image.src = source;
+  }
+  return icon;
+}
+function developmentAppIndicator(site) {
+  const apps = site.developmentAppsKnown ? (site.developmentApps || []) : [];
+  const indicator = el('div', 'development-app');
+  if (!apps.length) {
+    indicator.textContent = site.developmentAppsKnown ? 'No app detected' : 'App unknown';
+    return indicator;
+  }
+  for (const app of apps) {
+    const agents = app.agents || [];
+    const agentList = agents.length > 1 ? `${agents.slice(0, -1).join(', ')} and ${agents.at(-1)}` : agents[0];
+    const description = agents.length ? `${app.name} with ${agentList}` : app.name;
+    const group = el('span', `development-app-group${agents.length ? ' has-agents' : ''}`);
+    group.dataset.appTooltip = description;
+    group.setAttribute('aria-label', description);
+    group.setAttribute('role', 'img');
+    const source = typeof app.icon === 'string' && /^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/.test(app.icon) ? app.icon : null;
+    group.append(developmentAppIcon(app.name, source, 22));
+    if (agents.length) {
+      const agentIcons = el('span', 'development-app-agents'); agentIcons.setAttribute('aria-hidden', 'true');
+      for (const agent of agents) {
+        const source = agent === 'Claude Code' ? '/icons/claude.png' : agent === 'Codex' ? '/icons/codex.png' : null;
+        agentIcons.append(developmentAppIcon(agent, source, 16));
+      }
+      group.append(agentIcons);
+    }
+    indicator.append(group);
+  }
+  return indicator;
+}
+function details(site, parent, showIDEStatus) {
   const {checked, ...displayGit} = site.git;
-  const signature = JSON.stringify([site.path, site.prefix, site.name, displayGit]);
+  const signature = JSON.stringify([site.path, site.prefix, site.name, displayGit, site.developmentApps, site.developmentAppsKnown, showIDEStatus, site.position?.label]);
   if (parent.dataset.details === signature) return;
   parent.dataset.details = signature;
   parent.replaceChildren();
@@ -121,7 +165,7 @@ function details(site, parent) {
   }
   if (status.freshness) line(status.freshness, 'freshness muted', '◷', [site.git.remoteNote, site.git.remoteChecked ? `Last checked ${new Date(site.git.remoteChecked).toLocaleString()}` : ''].filter(Boolean).join('\n'), 'remote');
   parent.append(body);
-
+  if (showIDEStatus) parent.append(developmentAppIndicator(site));
 }
 
 let list, decoration, layout, siteError, siteErrorTimer;
@@ -159,10 +203,11 @@ if (viewer) {
   editorSettings = mountEditorSettings(root, data => emit('editor-settings-request', data));
   Events.On('devjay:editor-settings-state', event => editorSettings.renderEditor(event.data));
   root.append(el('h2', '', 'View settings'));
-  for (const [key, title] of [['allDesktops', 'Control panel always visible'], ['onTop', 'Show all windows on top']]) {
+  for (const [key, title] of [['allDesktops', 'Control panel always visible'], ['onTop', 'Show all windows on top'], ['showIDEStatus', 'Show development app status']]) {
     const label = el('label', 'preference'); const box = el('input'); box.type = 'checkbox'; box.dataset.pref = key; box.onchange = () => emit(key, box.checked);
     label.append(box, document.createTextNode(title)); root.append(label);
   }
+  root.append(el('p', 'help', 'Show IDEs, terminals and AI apps on Site cards. Turning this off stops app detection.'));
   const panelLayout = el('label', 'decoration-setting', 'Control panel layout');
   layout = el('select'); layout.setAttribute('aria-label', 'Control panel layout');
   for (const value of ['horizontal', 'vertical', 'custom']) {
@@ -298,10 +343,25 @@ function cardPlacements(state) {
   });
   return positions;
 }
+let appTooltipSignature;
+function refreshAppTooltip(state) {
+  if (settings || viewer || actions) return;
+  const sites = siteID ? state.sites.filter(site => site.id === siteID) : state.sites;
+  const signature = JSON.stringify([
+    state.preferences?.showIDEStatus !== false,
+    state.layout || 'horizontal', state.decoration || 'none',
+    sites.map(site => [site.id, site.path, site.position?.label, state.placements?.[site.id], site.developmentAppsKnown,
+      (site.developmentApps || []).map(app => [app.bundleID, app.name, app.agents, app.windowCount])]),
+  ]);
+  if (signature === appTooltipSignature) return;
+  appTooltipSignature = signature;
+  emit('app-tooltip-refresh');
+}
 function render(state) {
   report('snapshot', state);
   if (viewer) { renderViewerSnapshot(state); return; }
   snapshot = state;
+  const showIDEStatus = state.preferences?.showIDEStatus !== false;
   if (actions) { renderSuggestedActions(state); return; }
   if (panelDragging) return;
   document.body.dataset.layout = state.layout || 'horizontal';
@@ -315,7 +375,7 @@ function render(state) {
   document.body.dataset.decoration = state.decoration || 'none';
   if (decoration) decoration.value = state.decoration || 'none';
   if (settings) {
-    document.querySelectorAll('[data-pref]').forEach(n => { n.checked = state.preferences[n.dataset.pref]; });
+    document.querySelectorAll('[data-pref]').forEach(n => { n.checked = n.dataset.pref === 'showIDEStatus' ? showIDEStatus : state.preferences[n.dataset.pref]; });
     document.querySelectorAll('[name=sorting]').forEach(n => { n.checked = n.value === (state.manual ? 'manual' : 'name'); });
     if (dragging) return;
     const signature = state.sites.map(s => s.id).join(',');
@@ -340,10 +400,11 @@ function render(state) {
     for (const site of state.sites) { const row = [...list.children].find(n => n.dataset.id === site.id); const status = row.querySelector('.row-status'); status.textContent = [site.git.branch, site.position.label || 'Desktop unknown'].filter(Boolean).join(' · '); status.title = status.textContent; }
   } else if (siteID) {
     const site = state.sites.find(s => s.id === siteID); if (!site) return;
-    details(site, list); root.title = `${site.path}\n${site.position.label || 'Desktop unknown'}\nDrag to move this Site`;
+    details(site, list, showIDEStatus); root.title = `${site.path}\n${site.position.label || 'Desktop unknown'}\nDrag to move this Site`;
   } else {
     if (!state.sites.length) {
       if (!list.firstElementChild?.classList.contains('empty')) list.replaceChildren(button('Add your first Site in Settings', () => emit('settings-open'), 'empty'));
+      refreshAppTooltip(state);
       return;
     }
     for (const child of [...list.children]) if (!state.sites.some(s => s.id === child.dataset.id)) child.remove();
@@ -356,11 +417,12 @@ function render(state) {
       card.style.zIndex = free ? position.z : '';
       card.classList.toggle('visible', site.window.onDesktop);
       card.setAttribute('aria-label', `Activate ${site.path}, ${site.git.branch || 'folder'}, ${site.git.localNote || site.git.summary}${site.window.onDesktop ? ', visible on current desktop' : ''}`);
-      details(site, card);
+      details(site, card, showIDEStatus);
       card.title = [site.window.onDesktop ? 'Visible on current desktop' : '', site.path, site.git.branch, site.git.summary, site.git.localNote, site.git.github, site.git.remoteNote, site.position.label, site.git.tracking ? `Tracking ${site.git.tracking}` : '', site.git.remoteChecked ? `Remote checked ${new Date(site.git.remoteChecked).toLocaleString()}` : ''].filter(Boolean).join('\n');
       if (list.children[index] !== card) list.insertBefore(card, list.children[index] || null);
     });
   }
+  refreshAppTooltip(state);
 }
 if (settings) Events.On('devjay:site-error', event => {
   clearTimeout(siteErrorTimer);

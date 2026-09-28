@@ -37,6 +37,18 @@ check:
 	trap 'rm -f "$$menu_bin"' EXIT; \
 	clang -Wall -Wextra -Werror -fblocks -framework AppKit -framework WebKit tests/card_menu_test.m -o "$$menu_bin"; \
 	"$$menu_bin"
+	@set -e; tooltip_bin=$$(mktemp "$${TMPDIR:-/tmp}/devjay-app-tooltip.XXXXXX"); \
+	trap 'rm -f "$$tooltip_bin"' EXIT; \
+	clang -fblocks -framework AppKit -framework WebKit -framework QuartzCore tests/app_tooltip_test.m -o "$$tooltip_bin"; \
+	"$$tooltip_bin"
+	@set -e; apps_bin=$$(mktemp "$${TMPDIR:-/tmp}/devjay-site-apps.XXXXXX"); \
+	trap 'rm -f "$$apps_bin"' EXIT; \
+	clang -Wall -Wextra -Werror -fblocks -framework AppKit -framework CoreGraphics tests/site_apps_test.m -o "$$apps_bin"; \
+	"$$apps_bin"
+	@set -e; agents_bin=$$(mktemp "$${TMPDIR:-/tmp}/devjay-agent-processes.XXXXXX"); \
+	trap 'rm -f "$$agents_bin"' EXIT; \
+	clang -Wall -Wextra -Werror -framework Foundation tests/agent_processes_test.m -o "$$agents_bin"; \
+	"$$agents_bin"
 	go test -ldflags="$(GO_LINK_FLAGS)" ./...
 	go vet ./...
 	node --input-type=module --check < cmd/devjay/frontend/app.js

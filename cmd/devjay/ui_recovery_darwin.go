@@ -55,6 +55,7 @@ func (m *siteManager) recoverViews() {
 	oldSerial := m.recovery.wakeSerial
 	m.recovery.power(sleeping != 0, uint64(serial), now)
 	if wasPaused != m.recovery.paused || oldSerial != uint64(serial) {
+		m.developmentApps.invalidate()
 		logUIRecovery("suspended=%t, wake=%d", m.recovery.paused, serial)
 	}
 	reload, failed := m.recovery.tick(now)
