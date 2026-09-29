@@ -30,7 +30,7 @@ func (m *siteManager) refreshViewers(now time.Time) {
 	active := 0
 	var due []string
 	for id, r := range m.viewers {
-		if m.recovery.paused {
+		if m.recovery.paused || !m.monitor.visibility[id] {
 			r.cancelViewerRefresh()
 			continue
 		}
@@ -57,6 +57,33 @@ func (m *siteManager) refreshViewers(now time.Time) {
 		m.startViewerRefresh(id)
 		active++
 	}
+}
+
+func (m *siteManager) nextViewerRefresh(now time.Time) time.Time {
+	if m.recovery.paused {
+		return time.Time{}
+	}
+	active := 0
+	for _, viewer := range m.viewers {
+		if viewer.refresh.running {
+			active++
+		}
+	}
+	if active >= viewerRefreshLimit {
+		return time.Time{}
+	}
+	var due time.Time
+	for id, viewer := range m.viewers {
+		if !m.monitor.visibility[id] || !viewer.ready || viewer.state.Loading || viewer.editorOpening || viewer.refresh.running {
+			continue
+		}
+		next := viewer.refresh.lastFinished.Add(viewerRefreshInterval)
+		if viewer.refresh.pending {
+			next = now
+		}
+		due = earlierDeadline(due, next)
+	}
+	return due
 }
 
 func (m *siteManager) startViewerRefresh(id string) {

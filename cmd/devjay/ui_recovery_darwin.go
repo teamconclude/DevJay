@@ -25,6 +25,7 @@ func (m *siteManager) watchView(id string, w *application.WebviewWindow) {
 	}
 	m.recoveryWindows[id] = w
 	m.recovery.add(id)
+	m.monitor.visibilityDirty = true
 	w.RegisterHook(events.Mac.WebViewDidFinishNavigation, func(*application.WindowEvent) {
 		application.InvokeSync(func() {
 			C.devjay_trace_navigation(w.NativeWindow())
@@ -45,6 +46,8 @@ func (m *siteManager) watchView(id string, w *application.WebviewWindow) {
 func (m *siteManager) forgetView(id string) {
 	delete(m.recoveryWindows, id)
 	delete(m.recovery.views, id)
+	delete(m.monitor.visibility, id)
+	delete(m.monitor.sent, id)
 }
 func (m *siteManager) recoverViews() {
 	var sleeping C.uint
@@ -56,12 +59,23 @@ func (m *siteManager) recoverViews() {
 	m.recovery.power(sleeping != 0, uint64(serial), now)
 	if wasPaused != m.recovery.paused || oldSerial != uint64(serial) {
 		m.developmentApps.invalidate()
+		if m.recovery.paused {
+			m.developmentApps.stopRegistryWatch()
+		}
+		m.monitor.windowsValid = false
+		m.monitor.visibilityDirty = true
 		logUIRecovery("suspended=%t, wake=%d", m.recovery.paused, serial)
 	}
+}
+
+func (m *siteManager) tickViewRecovery(now time.Time) {
 	reload, failed := m.recovery.tick(now)
 	for _, id := range reload {
 		if w := m.recoveryWindows[id]; w != nil {
 			logUIRecovery("reloading %s (attempt %d)", id, m.recovery.views[id].attempts)
+			delete(m.monitor.sent, id)
+			delete(m.monitor.visibility, id)
+			m.monitor.visibilityDirty = true
 			w.Reload()
 		}
 	}

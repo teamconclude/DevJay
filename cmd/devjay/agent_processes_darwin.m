@@ -113,6 +113,34 @@ static BOOL agent_process_unchanged(pid_t pid, NSDictionary *record, uid_t user)
         started == [record[@"started"] unsignedLongLongValue];
 }
 
+static NSDictionary *agent_process_observation(NSNumber *pid, NSDictionary *table, NSString *home, uid_t user) {
+    NSDictionary *record = table[pid];
+    if (!record || [record[@"uid"] unsignedIntValue] != user) return nil;
+    NSString *name = agent_process_name(agent_process_path(pid.intValue), home);
+    if (!name) return nil;
+    NSArray *ancestors = agent_process_ancestors(pid, table, user);
+    if (!ancestors.count) return nil;
+    struct proc_vnodepathinfo info = {0};
+    if (proc_pidinfo(pid.intValue, PROC_PIDVNODEPATHINFO, 0, &info, sizeof(info)) != sizeof(info)) return nil;
+    info.pvi_cdir.vip_path[sizeof(info.pvi_cdir.vip_path) - 1] = 0;
+    NSString *cwd = [NSString stringWithUTF8String:info.pvi_cdir.vip_path];
+    if (!cwd.isAbsolutePath || !agent_process_unchanged(pid.intValue, record, user)) return nil;
+    NSMutableDictionary *result = [NSMutableDictionary dictionaryWithDictionary:@{
+        @"name": name, @"pid": pid, @"started": record[@"started"], @"cwd": cwd, @"ancestors": ancestors}];
+    for (NSNumber *parentPID in ancestors) {
+        NSDictionary *parent = table[parentPID];
+        if (!agent_process_unchanged(parentPID.intValue, parent, user)) continue;
+        NSString *bundle = agent_process_host_bundle(agent_process_path(parentPID.intValue), home);
+        if (bundle) { result[@"hostBundleID"] = bundle; break; }
+    }
+    return result;
+}
+
+static char *agent_process_json(NSArray *results) {
+    NSData *json = [NSJSONSerialization dataWithJSONObject:results options:0 error:nil];
+    return json ? strndup(json.bytes, json.length) : strdup("[]");
+}
+
 char *devjay_agent_processes(void) {
     @autoreleasepool {
         NSDictionary *table = agent_process_table();
@@ -120,29 +148,41 @@ char *devjay_agent_processes(void) {
         uid_t user = getuid();
         NSString *home = NSHomeDirectory().stringByResolvingSymlinksInPath;
         for (NSNumber *pid in table) {
-            NSDictionary *record = table[pid];
-            if ([record[@"uid"] unsignedIntValue] != user) continue;
-            NSString *name = agent_process_name(agent_process_path(pid.intValue), home);
-            if (!name) continue;
-            NSArray *ancestors = agent_process_ancestors(pid, table, user);
-            if (!ancestors.count) continue;
-            struct proc_vnodepathinfo info = {0};
-            if (proc_pidinfo(pid.intValue, PROC_PIDVNODEPATHINFO, 0, &info, sizeof(info)) != sizeof(info)) continue;
-            info.pvi_cdir.vip_path[sizeof(info.pvi_cdir.vip_path) - 1] = 0;
-            NSString *cwd = [NSString stringWithUTF8String:info.pvi_cdir.vip_path];
-            if (!cwd.isAbsolutePath || !agent_process_unchanged(pid.intValue, record, user)) continue;
-            NSMutableDictionary *result = [@{@"name": name, @"pid": pid, @"started": record[@"started"],
-                @"cwd": cwd, @"ancestors": ancestors} mutableCopy];
-            for (NSNumber *parentPID in ancestors) {
-                NSDictionary *parent = table[parentPID];
-                if (!agent_process_unchanged(parentPID.intValue, parent, user)) continue;
-                NSString *bundle = agent_process_host_bundle(agent_process_path(parentPID.intValue), home);
-                if (bundle) { result[@"hostBundleID"] = bundle; break; }
-            }
-            [results addObject:result];
-            [result release];
+            NSDictionary *result = agent_process_observation(pid, table, home, user);
+            if (result) [results addObject:result];
         }
-        NSData *json = [NSJSONSerialization dataWithJSONObject:results options:0 error:nil];
-        return json ? strndup(json.bytes, json.length) : strdup("[]");
+        return agent_process_json(results);
+    }
+}
+
+// Known-agent refresh avoids querying executable paths for every user process.
+// A fresh kernel table still validates identities and the entire parent chain.
+// Changed identities/cwd/ancestry are dropped, causing full discovery in Go.
+char *devjay_refresh_agent_processes(const char *knownJSON) {
+    @autoreleasepool {
+        NSString *input = knownJSON ? [NSString stringWithUTF8String:knownJSON] : nil;
+        NSData *data = [input dataUsingEncoding:NSUTF8StringEncoding];
+        id known = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+        if (![known isKindOfClass:NSArray.class] || [known count] > 1024) return strdup("[]");
+        NSDictionary *table = agent_process_table();
+        NSMutableArray *results = [NSMutableArray array];
+        uid_t user = getuid();
+        NSString *home = NSHomeDirectory().stringByResolvingSymlinksInPath;
+        for (id previous in known) {
+            if (![previous isKindOfClass:NSDictionary.class]) continue;
+            NSNumber *pid = previous[@"pid"];
+            if (![pid isKindOfClass:NSNumber.class] || pid.intValue <= 1) continue;
+            NSDictionary *current = agent_process_observation(pid, table, home, user);
+            if (!current) continue;
+            BOOL same = YES;
+            for (NSString *key in @[@"name", @"pid", @"started", @"cwd", @"ancestors"]) {
+                if (![current[key] isEqual:previous[key]]) { same = NO; break; }
+            }
+            id previousHost = previous[@"hostBundleID"], currentHost = current[@"hostBundleID"];
+            if (!currentHost) currentHost = @"";
+            if (!previousHost) previousHost = @"";
+            if (same && [currentHost isEqual:previousHost]) [results addObject:current];
+        }
+        return agent_process_json(results);
     }
 }

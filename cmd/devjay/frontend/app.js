@@ -23,6 +23,24 @@ const viewer = params.has('viewer');
 let renderSuggestedActions, renderViewerSnapshot, editorSettings;
 const root = document.querySelector('#app');
 let snapshot = {sites: []}, dragging = null, panelDragging = false;
+let nativeVisible = true, renderedSnapshot = false, deferredSnapshot = null;
+function updateMonitoringVisibility() {
+  const visible = nativeVisible && !document.hidden;
+  document.body.dataset.monitorVisible = String(visible);
+  if (!visible) {
+    // A brief attention pulse must not resume minutes later after unhiding.
+    document.querySelectorAll('.card-waiting-glow').forEach(node => node.remove());
+    document.querySelectorAll('.waiting-attention').forEach(node => node.classList.toggle('waiting-attention', false));
+  } else if (deferredSnapshot) {
+    const state = deferredSnapshot; deferredSnapshot = null;
+    render(state);
+  }
+}
+Events.On('devjay:visibility', event => {
+  nativeVisible = event.data === true;
+  updateMonitoringVisibility();
+});
+document.addEventListener('visibilitychange', updateMonitoringVisibility);
 const el = (tag, cls, text) => { const n = document.createElement(tag); n.className = cls || ''; if (text !== undefined) n.textContent = text; return n; };
 const button = (text, action, cls = '') => { const n = el('button', cls, text); n.type = 'button'; n.onclick = action; return n; };
 const notice = el('footer', 'notice copyable'); notice.setAttribute('role', 'status');
@@ -526,7 +544,17 @@ if (settings) Events.On('devjay:site-error', event => {
   siteErrorTimer = setTimeout(() => { siteError.hidden = true; siteError.textContent = ''; }, 5000);
 });
 Events.On('devjay:snapshot', event => {
+  // Initial documents still render and acknowledge recovery even if hidden.
+  // Later hidden updates retain only the newest state until the window returns.
+  if (renderedSnapshot && (!nativeVisible || document.hidden)) {
+    deferredSnapshot = event.data;
+    updateWaitingAttention(event.data);
+    return;
+  }
+  deferredSnapshot = null;
   render(event.data);
+  renderedSnapshot = true;
+  updateMonitoringVisibility();
   if (!viewer) reportUIReady();
 });
 emit('hello');

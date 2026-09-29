@@ -59,18 +59,21 @@ func (m gitMeta) key() string {
 }
 
 type remoteCache struct {
-	Key          string
-	BaseChecked  time.Time
-	BaseError    string
-	Checked      time.Time
-	Attempted    time.Time
-	Error        string
-	Missing      bool
-	Rewritten    bool
-	GitHub       string
-	PullRequests []PullRequestLink
-	Reviews      []ReviewFindings
-	MergedPR     *MergedPullRequest
+	Key             string
+	BaseChecked     time.Time
+	BaseError       string
+	Checked         time.Time
+	Attempted       time.Time
+	ChecksAttempted time.Time
+	CheckHeads      map[int]string
+	ChecksRetry     bool
+	Error           string
+	Missing         bool
+	Rewritten       bool
+	GitHub          string
+	PullRequests    []PullRequestLink
+	Reviews         []ReviewFindings
+	MergedPR        *MergedPullRequest
 }
 
 // Bound subprocess output as well as time; a huge working tree must not hang the UI.
@@ -466,6 +469,7 @@ func describeGit(s GitStatus, m gitMeta, c remoteCache) GitStatus {
 	return s
 }
 func refreshRemote(ctx context.Context, m gitMeta, c *remoteCache) {
+	retryChecks := hasPendingChecks(*c) || c.ChecksRetry
 	c.Attempted = time.Now()
 	defer func() { c.Attempted = time.Now() }()
 	c.Error = ""
@@ -505,6 +509,9 @@ func refreshRemote(ctx context.Context, m gitMeta, c *remoteCache) {
 	c.MergedPR = nil
 	if m.GitHubRepo != "" && m.Branch != "(detached)" && !m.Initial {
 		out, err := runCommand(ctx, 15*time.Second, "gh", "pr", "list", "--repo", m.GitHubRepo, "--head", m.pullRequestBranch(), "--state", "open", "--limit", "20", "--json", "number,isDraft,reviewDecision,headRepositoryOwner,headRefOid,statusCheckRollup")
+		c.ChecksAttempted = time.Now()
+		c.CheckHeads = pullRequestHeads(out, m.GitHubRepo)
+		c.ChecksRetry = err != nil && retryChecks
 		if err != nil {
 			c.GitHub = "GitHub unavailable"
 		} else {
@@ -580,76 +587,7 @@ func prSummary(data []byte, owner string) string {
 	return strings.Join(labels, "; ")
 }
 
-// Remote commands run independently so a slow network never delays local changes.
+// Compatibility entry point for callers without visibility/power policy.
 func watchGit(ctx context.Context, path string, publish func(GitStatus)) {
-	cache := remoteCache{}
-	var last GitStatus
-	var rebased rebaseComparison
-	type refreshResult struct {
-		cache      remoteCache
-		generation uint64
-	}
-	results := make(chan refreshResult, 1)
-	var generation uint64
-	var activeKey string
-	var activeCancel context.CancelFunc
-	defer func() {
-		if activeCancel != nil {
-			activeCancel()
-		}
-	}()
-	tick := time.NewTicker(3 * time.Second)
-	defer tick.Stop()
-	poll := func() {
-		s, m := inspectLocal(ctx, path)
-		if ctx.Err() != nil {
-			return
-		}
-		s.Rebased = rebased.check(ctx, s, m)
-		s.CanReplaceRemote = canReplaceFromRemote(ctx, s, m)
-		status, valid := applyLocalReading(s, m, &cache, &last)
-		publish(status)
-		if !valid {
-			return
-		}
-		if activeCancel != nil && activeKey != m.key() {
-			activeCancel()
-			activeCancel = nil
-		}
-		if activeCancel == nil && s.Summary == "" && time.Since(cache.Attempted) >= time.Minute {
-			refreshCtx, cancel := context.WithCancel(ctx)
-			activeKey, activeCancel = m.key(), cancel
-			previous := cache
-			generation++
-			current := generation
-			go func() {
-				defer cancel()
-				refreshRemote(refreshCtx, m, &previous)
-				select {
-				case results <- refreshResult{previous, current}:
-				case <-refreshCtx.Done():
-				}
-			}()
-		}
-	}
-	poll()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case result := <-results:
-			if result.generation != generation {
-				continue
-			}
-			if result.cache.Key == activeKey {
-				activeCancel = nil
-			}
-			if result.cache.Key == cache.Key {
-				cache = result.cache
-			}
-			poll()
-		case <-tick.C:
-			poll()
-		}
-	}
+	watchGitWithControl(ctx, path, newGitWatchControl(), publish)
 }

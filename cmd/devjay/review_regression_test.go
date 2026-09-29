@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -63,6 +65,47 @@ func TestReviewRemoteURLInvalidatesStatus(t *testing.T) {
 	}
 	if !cache.Attempted.IsZero() || cache.Missing || result.RemoteNote != "Remote not checked yet" {
 		t.Fatalf("status from old remote retained after URL change: summary=%q note=%q attempted=%v", result.Summary, result.RemoteNote, cache.Attempted)
+	}
+}
+
+func TestReviewChecksUseTrackedRemoteBranch(t *testing.T) {
+	repo := trackedFixture(t)
+	fixtureGit(t, repo, "branch", "-m", "local-main")
+	_, meta := inspectLocal(context.Background(), repo)
+	if meta.ReadError != nil {
+		t.Fatal(meta.ReadError)
+	}
+	if meta.Merge != "refs/heads/main" {
+		t.Fatalf("fixture upstream: %+v", meta)
+	}
+	meta.GitHubRepo = "example/repo"
+	shim := filepath.Join(t.TempDir(), "gh")
+	script := `#!/bin/sh
+while test "$#" -gt 0; do
+ if test "$1" = --head; then shift; head="$1"; fi
+ shift
+done
+if test "$head" = main; then
+ echo '[{"number":42,"headRepositoryOwner":{"login":"example"},"headRefOid":"abc123","statusCheckRollup":[]}]'
+else
+ echo '[]'
+fi
+`
+	if err := os.WriteFile(shim, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", filepath.Dir(shim)+":"+os.Getenv("PATH"))
+	control := meta
+	control.Branch = "main"
+	controlCache := remoteCache{}
+	refreshPullRequestChecks(context.Background(), control, &controlCache)
+	if len(controlCache.PullRequests) != 1 {
+		t.Fatal("control query failed")
+	}
+	cache := remoteCache{CheckHeads: map[int]string{42: "abc123"}}
+	refreshPullRequestChecks(context.Background(), meta, &cache)
+	if len(cache.PullRequests) != 1 {
+		t.Fatalf("PR for tracked remote main absent: local=%s remote=%s summary=%q", meta.Branch, meta.Merge, cache.GitHub)
 	}
 }
 
@@ -136,6 +179,22 @@ esac`)
 				t.Fatal("observation/preparation changed local branches")
 			}
 		})
+	}
+}
+
+func TestReviewRemoteURLRejectsOutstandingResult(t *testing.T) {
+	repo, seed := updateFixture(t)
+	_, old := inspectLocal(context.Background(), repo)
+	fixtureGit(t, repo, "remote", "set-url", "origin", seed)
+	s, next := inspectLocal(context.Background(), repo)
+	cache := remoteCache{Key: old.key(), Checked: time.Now(), Attempted: time.Now(), Rewritten: true}
+	var last GitStatus
+	applyLocalReading(s, next, &cache, &last)
+	if currentGitRefresh(1, 1, old.key(), cache.Key, next.key(), true, false) {
+		t.Fatal("accepted outstanding result from previous remote URL")
+	}
+	if !cache.Checked.IsZero() || !cache.Attempted.IsZero() || cache.Rewritten {
+		t.Fatal("old freshness or rewrite claims survived URL change")
 	}
 }
 

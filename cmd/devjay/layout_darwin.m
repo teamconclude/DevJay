@@ -3,9 +3,30 @@
 #import <objc/runtime.h>
 #import "layout_geometry.h"
 #import "spaces_darwin.h"
+#import "native_monitor_darwin.h"
 
 static NSString * const layoutKey = @"DevJay.WindowLayout.v1";
 static const char layoutObserverKey;
+@class DevJayLayoutObserver;
+
+// Most placement changes already have AppKit/Workspace notifications. Keep a
+// single slow safety check for moves between inactive Spaces that change
+// neither the frame nor the currently active Space. Weak membership avoids
+// retaining windows/observers after they close.
+@interface DevJayLayoutMonitor : NSObject {
+@public
+    NSHashTable *observers;
+    NSTimer *timer;
+    unsigned int sleepReasons;
+    NSMutableArray *powerObservers;
+}
+- (void)add:(DevJayLayoutObserver *)observer;
+- (void)remove:(DevJayLayoutObserver *)observer;
+- (void)checkLayouts;
+- (void)updateTimer;
+@end
+
+static DevJayLayoutMonitor *layoutMonitor;
 static DPRect dp_rect(NSRect r) { return (DPRect){r.origin.x, r.origin.y, r.size.width, r.size.height}; }
 static NSRect ns_rect(DPRect r) { return NSMakeRect(r.x, r.y, r.width, r.height); }
 
@@ -42,7 +63,6 @@ static NSScreen *nearest_screen(NSRect frame) {
     BOOL restoreFailed;
     NSString *desiredSpace;
     NSString *failedLaunchSpace;
-    NSTimer *timer;
     NSString *lastScreen;
     NSRect lastFrame, lastBounds;
     BOOL hasPlacement;
@@ -53,7 +73,73 @@ static NSScreen *nearest_screen(NSRect frame) {
 - (void)windowMoved:(NSNotification *)notification;
 - (void)screensChanged:(NSNotification *)notification;
 - (void)spaceChanged:(NSNotification *)notification;
+- (void)windowClosed:(NSNotification *)notification;
+- (void)stopObserving;
 @end
+
+@implementation DevJayLayoutMonitor
+- (instancetype)init {
+    self = [super init];
+    if (self) {
+        observers = [[NSHashTable weakObjectsHashTable] retain];
+        powerObservers = [NSMutableArray new];
+        NSNotificationCenter *center = NSWorkspace.sharedWorkspace.notificationCenter;
+        NSArray *sleepNames = @[NSWorkspaceWillSleepNotification,
+            NSWorkspaceScreensDidSleepNotification, NSWorkspaceSessionDidResignActiveNotification];
+        NSArray *wakeNames = @[NSWorkspaceDidWakeNotification,
+            NSWorkspaceScreensDidWakeNotification, NSWorkspaceSessionDidBecomeActiveNotification];
+        __block DevJayLayoutMonitor *monitor = self;
+        for (NSUInteger i = 0; i < sleepNames.count; i++) {
+            unsigned int reason = 1u << i;
+            id asleep = [center addObserverForName:sleepNames[i] object:nil queue:NSOperationQueue.mainQueue
+                usingBlock:^(NSNotification *note) {
+                    (void)note;
+                    monitor->sleepReasons |= reason;
+                    [monitor updateTimer];
+                }];
+            id awake = [center addObserverForName:wakeNames[i] object:nil queue:NSOperationQueue.mainQueue
+                usingBlock:^(NSNotification *note) {
+                    (void)note;
+                    monitor->sleepReasons &= ~reason;
+                    [monitor updateTimer];
+                }];
+            [powerObservers addObject:asleep];
+            [powerObservers addObject:awake];
+        }
+    }
+    return self;
+}
+- (void)add:(DevJayLayoutObserver *)observer {
+    [observers addObject:observer];
+    [self updateTimer];
+}
+- (void)remove:(DevJayLayoutObserver *)observer {
+    [observers removeObject:observer];
+    [self updateTimer];
+}
+- (void)updateTimer {
+    // NSHashTable.count can include zeroed weak slots until its next rehash.
+    if (sleepReasons || observers.allObjects.count == 0) {
+        [timer invalidate]; timer = nil;
+    } else if (!timer) {
+        timer = [NSTimer scheduledTimerWithTimeInterval:60 target:self
+            selector:@selector(checkLayouts) userInfo:nil repeats:YES];
+        timer.tolerance = 10;
+    }
+}
+- (void)checkLayouts {
+    if (!sleepReasons) for (DevJayLayoutObserver *observer in observers.allObjects) [observer save];
+    [self updateTimer];
+}
+- (void)dealloc {
+    [timer invalidate];
+    for (id observer in powerObservers) [NSWorkspace.sharedWorkspace.notificationCenter removeObserver:observer];
+    [powerObservers release];
+    [observers release];
+    [super dealloc];
+}
+@end
+
 @implementation DevJayLayoutObserver
 - (void)save {
     if (adjusting || window == nil) return;
@@ -99,6 +185,9 @@ static NSScreen *nearest_screen(NSRect frame) {
     if (![state isEqual:previous]) {
         all[window.identifier] = state;
         [defaults setObject:all forKey:layoutKey];
+        // Restoring/moving between inactive Spaces can change membership
+        // without a frame, occlusion, or active-Space notification.
+        [NSNotificationCenter.defaultCenter postNotificationName:DevJayLayoutChangedNotification object:window];
     }
 }
 - (void)restoreDesktop {
@@ -119,9 +208,12 @@ static NSScreen *nearest_screen(NSRect frame) {
     }
     adjusting = NO;
     [self save];
-    // Polling detects moves between Spaces even if the frame and active Space
-    // did not change. Writes occur only when the placement actually changes.
-    timer = [NSTimer scheduledTimerWithTimeInterval:1 target:self selector:@selector(save) userInfo:nil repeats:YES];
+    // The manager may have sampled the provisional launch Space before this
+    // asynchronous restore. Returning to the saved placement does not change
+    // preferences, so save's changed-only notification is not sufficient here.
+    [NSNotificationCenter.defaultCenter postNotificationName:DevJayLayoutChangedNotification object:window];
+    if (!layoutMonitor) layoutMonitor = [DevJayLayoutMonitor new];
+    [layoutMonitor add:self];
 }
 - (void)windowMoved:(NSNotification *)notification { [self save]; }
 - (void)screensChanged:(NSNotification *)notification {
@@ -150,10 +242,20 @@ static NSScreen *nearest_screen(NSRect frame) {
     [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(save) object:nil];
     [self performSelector:@selector(save) withObject:nil afterDelay:0.5];
 }
-- (void)dealloc {
+- (void)windowClosed:(NSNotification *)notification {
+    (void)notification;
+    [self save];
+    [self stopObserving];
+}
+- (void)stopObserving {
     [NSObject cancelPreviousPerformRequestsWithTarget:self];
     [NSNotificationCenter.defaultCenter removeObserver:self];
     [NSWorkspace.sharedWorkspace.notificationCenter removeObserver:self];
+    [layoutMonitor remove:self];
+    window = nil;
+}
+- (void)dealloc {
+    [self stopObserving];
     [lastScreen release];
     [desiredSpace release];
     [failedLaunchSpace release];
@@ -217,6 +319,7 @@ void devjay_restore_layout(void *pointer, const char *identifier) {
     NSNotificationCenter *center = NSNotificationCenter.defaultCenter;
     [center addObserver:observer selector:@selector(windowMoved:) name:NSWindowDidMoveNotification object:window];
     [center addObserver:observer selector:@selector(windowMoved:) name:NSWindowDidResizeNotification object:window];
+    [center addObserver:observer selector:@selector(windowClosed:) name:NSWindowWillCloseNotification object:window];
     [center addObserver:observer selector:@selector(screensChanged:) name:NSApplicationDidChangeScreenParametersNotification object:nil];
     [NSWorkspace.sharedWorkspace.notificationCenter addObserver:observer selector:@selector(spaceChanged:) name:NSWorkspaceActiveSpaceDidChangeNotification object:nil];
     [observer performSelector:@selector(restoreDesktop) withObject:nil afterDelay:0.4];
@@ -228,9 +331,7 @@ void devjay_save_layout(void *pointer) {
     DevJayLayoutObserver *observer = objc_getAssociatedObject(window, &layoutObserverKey);
     if (observer == nil) return;
     [observer save];
-    [observer->timer invalidate];
-    observer->timer = nil;
-    [NSObject cancelPreviousPerformRequestsWithTarget:observer];
+    [observer stopObserving];
 }
 
 // Resize around the top-left corner, keeping the result on the same display.

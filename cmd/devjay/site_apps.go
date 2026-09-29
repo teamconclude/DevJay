@@ -2,6 +2,7 @@ package main
 
 import (
 	"maps"
+	"sync/atomic"
 	"time"
 )
 
@@ -18,8 +19,11 @@ type DevelopmentApp struct {
 }
 
 type developmentAppScan struct {
-	Available bool                        `json:"available"`
-	Sites     map[string][]DevelopmentApp `json:"sites"`
+	Available       bool                        `json:"available"`
+	Sites           map[string][]DevelopmentApp `json:"sites"`
+	windows         developmentAppWindowScan
+	processes       []observedAgentProcess
+	discoveryNeeded bool
 }
 
 type developmentAppTarget struct {
@@ -61,16 +65,67 @@ type developmentAppReading struct {
 	Known  bool
 }
 
-// Owned by the manager command queue. One scan serves every Site, at most once
-// every ten seconds while unchanged. A moved/new Site refreshes sooner, with a
-// two-second minimum spacing to avoid repeated scans during window dragging.
+const (
+	developmentAppDiscoveryInterval = 30 * time.Second
+	developmentAgentIdleInterval    = 12 * time.Second
+	developmentAgentActiveInterval  = 2 * time.Second
+	developmentAgentMinimumInterval = 250 * time.Millisecond
+	developmentAgentBurstDuration   = 12 * time.Second
+)
+
+// Owned by the manager command queue. Window/process discovery is independent
+// from cheap activity reads. Only the filesystem watcher's mask is atomic;
+// events wake the queue through a coalesced channel, never mutate this state.
 type developmentAppMonitor struct {
-	targets            map[string]developmentAppTarget
-	readings           map[string]developmentAppReading
-	generation         uint64
-	inFlight, dirty    bool
-	disabled           bool
-	started, completed time.Time
+	targets                                                                map[string]developmentAppTarget
+	readings                                                               map[string]developmentAppReading
+	generation                                                             uint64
+	inFlight, dirty, statusDirty, discovering, disabled, active, hasAgents bool
+	started, completed, discovered, burstUntil                             time.Time
+	windows                                                                developmentAppWindowScan
+	processes                                                              []observedAgentProcess
+	changes                                                                <-chan struct{}
+	watchCancel                                                            func()
+	watchMask                                                              *atomic.Uint32
+	watchRoot                                                              string
+}
+
+func (s *developmentAppMonitor) hasWindows() bool {
+	for _, target := range s.targets {
+		if target.WindowNumber != 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// Zero means no timer is needed. In-flight completion and filesystem/native
+// events wake the manager separately, rather than requiring a one-second tick.
+func (s *developmentAppMonitor) nextDue(now time.Time) time.Time {
+	if s.disabled || s.inFlight || !s.hasWindows() {
+		return time.Time{}
+	}
+	due := s.discovered.Add(developmentAppDiscoveryInterval)
+	if s.dirty || s.discovered.IsZero() {
+		due = now
+	}
+	if s.windows.Available && s.hasAgents && len(s.processes) != 0 {
+		interval := developmentAgentIdleInterval
+		if s.active || now.Before(s.burstUntil) {
+			interval = developmentAgentActiveInterval
+		}
+		status := s.completed.Add(interval)
+		if s.statusDirty || s.completed.IsZero() {
+			status = now
+		}
+		if status.Before(due) {
+			due = status
+		}
+	}
+	if minimum := s.started.Add(developmentAgentMinimumInterval); !s.started.IsZero() && due.Before(minimum) {
+		due = minimum
+	}
+	return due
 }
 
 func (s *developmentAppMonitor) request(targets map[string]developmentAppTarget, now time.Time) (map[string]developmentAppTarget, uint64, bool) {
@@ -87,16 +142,15 @@ func (s *developmentAppMonitor) request(targets map[string]developmentAppTarget,
 			}
 		}
 	}
-	hasWindows := false
-	for _, target := range targets {
-		hasWindows = hasWindows || target.WindowNumber != 0
-	}
-	if s.inFlight || !hasWindows ||
-		(!s.started.IsZero() && now.Sub(s.started) < 2*time.Second) ||
-		(!s.dirty && !s.completed.IsZero() && now.Sub(s.completed) < 10*time.Second) {
+	due := s.nextDue(now)
+	if due.IsZero() || now.Before(due) {
 		return nil, 0, false
 	}
-	s.inFlight, s.dirty, s.started = true, false, now
+	s.discovering = s.dirty || s.discovered.IsZero() || !now.Before(s.discovered.Add(developmentAppDiscoveryInterval))
+	s.inFlight, s.statusDirty, s.started = true, false, now
+	if s.discovering {
+		s.dirty = false
+	}
 	return maps.Clone(targets), s.generation, true
 }
 
@@ -106,6 +160,11 @@ func (s *developmentAppMonitor) finish(targets map[string]developmentAppTarget, 
 		return
 	}
 	s.completed = now
+	if s.discovering {
+		s.discovered, s.windows = now, result.windows
+	}
+	s.processes = result.processes
+	s.active, s.hasAgents = false, false
 	s.readings = make(map[string]developmentAppReading, len(targets))
 	for id, target := range targets {
 		apps, known := result.Sites[id]
@@ -113,23 +172,75 @@ func (s *developmentAppMonitor) finish(targets map[string]developmentAppTarget, 
 		if !known {
 			apps = nil
 		}
+		for _, app := range apps {
+			s.hasAgents = s.hasAgents || len(app.Agents) != 0
+			s.active = s.active || len(app.WaitingAgents) != 0 || len(app.WorkingAgents) != 0
+		}
 		s.readings[id] = developmentAppReading{Target: target, Apps: apps, Known: known}
+	}
+	// A vanished/replaced process cannot retain status until the next inventory.
+	// Re-discover promptly after clearing it in this reading.
+	if result.discoveryNeeded {
+		s.dirty = true
 	}
 }
 
-func (s *developmentAppMonitor) invalidate() {
+// Events saying inventory may have changed preserve currently known labels
+// until refreshed, but reject a worker started before that event.
+func (s *developmentAppMonitor) markDiscoveryDirty() {
 	s.generation++
 	s.dirty = true
-	s.completed = time.Time{}
-	s.readings = nil
 }
+
+func (s *developmentAppMonitor) requestStatusRefresh(now time.Time) {
+	s.statusDirty = true
+	s.burstUntil = now.Add(developmentAgentBurstDuration)
+}
+
+func (s *developmentAppMonitor) invalidateDiscovery() {
+	s.markDiscoveryDirty()
+	s.completed, s.discovered = time.Time{}, time.Time{}
+	s.readings, s.processes = nil, nil
+	s.windows = developmentAppWindowScan{}
+	s.active, s.hasAgents = false, false
+}
+
+func (s *developmentAppMonitor) invalidate() { s.invalidateDiscovery() }
 
 func (s *developmentAppMonitor) setEnabled(enabled bool) {
 	if s.disabled == !enabled {
 		return
 	}
 	s.disabled = !enabled
-	// Keep the in-flight guard until the worker returns, but reject that old
-	// result even if the user enables detection again before it finishes.
-	s.invalidate()
+	// Keep the in-flight guard until the worker returns; reject its old result.
+	s.invalidateDiscovery()
+	if !enabled {
+		s.stopRegistryWatch()
+	}
+}
+
+func (s *developmentAppMonitor) stopRegistryWatch() {
+	if s.watchCancel != nil {
+		s.watchCancel()
+	}
+	s.watchCancel, s.changes, s.watchMask, s.watchRoot = nil, nil, nil, ""
+}
+
+const (
+	developmentRegistryStatus uint32 = 1 << iota
+	developmentRegistryDiscovery
+)
+
+func (s *developmentAppMonitor) filesystemChanged(now time.Time) {
+	if s.disabled || s.watchMask == nil {
+		return
+	}
+	flags := s.watchMask.Swap(0)
+	if flags == 0 {
+		return
+	}
+	s.requestStatusRefresh(now)
+	if flags&developmentRegistryDiscovery != 0 {
+		s.markDiscoveryDirty()
+	}
 }

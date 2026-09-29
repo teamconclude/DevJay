@@ -9,7 +9,7 @@ const source=(await readFile(new URL('../cmd/devjay/frontend/app.js',import.meta
 
 // Exercise the real snapshot renderer with a small DOM and the Wails boundary.
 function app(search='') {
- let document, clock=0;
+ let document, clock=0, readyCount=0;
  class Element {
   constructor(tag){this.tag=tag;this.children=[];this.dataset={};this.style={};this.className='';this.attrs={};this.textContent='';this.listeners={};
    this.classList={add:c=>{this.className+=' '+c;},contains:c=>this.className.split(' ').includes(c),toggle:(c,on)=>{const all=new Set(this.className.split(' '));on?all.add(c):all.delete(c);this.className=[...all].join(' ');}};
@@ -40,13 +40,13 @@ function app(search='') {
   window:{addEventListener:noop,getSelection:()=>({isCollapsed:true})},
   Events:{On:(name,fn)=>events[name]=fn,Emit:(...args)=>{calls.push(args);return Promise.resolve();}},Window:{},
   createBridge:(send,report)=>{bridgeReport=report;return {emit:async(n,d)=>{await send(`devjay:${n}`,d);report('');},reply:noop};},
-  uiReady:()=>noop,installCardSizing:()=>noop,mountEditorSettings:()=>({renderEditor:noop}),
+  uiReady:()=>()=>readyCount++,installCardSizing:()=>noop,mountEditorSettings:()=>({renderEditor:noop}),
   mountGitViewer:()=>noop,cardStatus,
   mountSuggestedActions:()=>noop,mountViewerSuggestions:()=>noop,
   installPanelDrag:(_list,options)=>{drag=options;},installCardActivation,installDragOriginGuard:noop,installCardHover:noop,installCardMenu:noop,
  };
  vm.runInNewContext(source,context);
- return {document,root,calls,advance:ms=>{clock+=ms;},reportBridge:(text,error)=>bridgeReport(text,error),event:(name,data)=>events[name]?.({data}),get drag(){return drag;},snapshot:s=>events['devjay:snapshot']({data:s}),click:target=>{
+ return {document,root,calls,get readyCount(){return readyCount;},advance:ms=>{clock+=ms;},reportBridge:(text,error)=>bridgeReport(text,error),event:(name,data)=>events[name]?.({data}),get drag(){return drag;},snapshot:s=>events['devjay:snapshot']({data:s}),click:target=>{
   const event={button:0,defaultPrevented:false,target};
   for(let node=target;node;node=node.parent)for(const listener of node.listeners.click || [])listener(event);
  }};
@@ -63,6 +63,33 @@ test('ending a panel drag renders the latest snapshot even after cancellation',(
  assert.equal(view.root.querySelector('.branch').textContent,'old');
  view.drag.busy(false);
  assert.equal(view.root.querySelector('.branch').textContent,'new');
+});
+
+test('hidden windows defer updates, pause motion, and render the latest state when visible',()=>{
+ const view=app();
+ view.snapshot(state([site('a','initial')]));
+ view.event('devjay:visibility',false);
+ assert.equal(view.document.body.dataset.monitorVisible,'false');
+ view.snapshot(state([site('a','intermediate')]));
+ view.snapshot(state([site('a','latest')]));
+ assert.equal(view.root.querySelector('.branch').textContent,'initial');
+ view.event('devjay:visibility',true);
+ assert.equal(view.document.body.dataset.monitorVisible,'true');
+ assert.equal(view.root.querySelector('.branch').textContent,'latest');
+});
+
+test('an initially hidden document still renders its first recovery snapshot',()=>{
+ const view=app('?site=a');
+ view.event('devjay:visibility',false);
+ view.snapshot(state([site('a','initial')]));
+ assert.equal(view.root.querySelector('.branch').textContent,'initial');
+ assert.equal(view.document.body.dataset.monitorVisible,'false');
+ assert.equal(view.readyCount,1,'first hidden render acknowledges recovery');
+ view.snapshot(state([site('a','later')]));
+ assert.equal(view.readyCount,1,'deferred updates do not acknowledge another render');
+ assert.equal(view.root.querySelector('.branch').textContent,'initial');
+ view.event('devjay:visibility',true);
+ assert.equal(view.root.querySelector('.branch').textContent,'later');
 });
 
 test('keyboard reordering preserves the same Site row focus across snapshots',async()=>{

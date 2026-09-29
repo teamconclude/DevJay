@@ -304,6 +304,7 @@ html:not([data-local-drag-press]) .strip *, html:not([data-local-drag-press]) .w
 .development-app-group.is-working { border-color: #75d4bd80; background: #75d4bd12; }
 .development-app-working-dots { display: inline-flex; align-items: center; gap: 3px; height: 12px; padding-left: 2px; pointer-events: none; }
 .development-app-working-dots > span { width: 4px; height: 4px; border-radius: 50%; background: #a2e5d5; opacity: .3; animation: agent-working-dots 1.8s ease-in-out infinite; }
+body[data-monitor-visible="false"] .development-app-working-dots > span { animation-play-state: paused; }
 @keyframes agent-working-dots {
   0%, 60%, 100% { opacity: .3; transform: translateY(0); }
   30% { opacity: 1; transform: translateY(-2px); }

@@ -41,7 +41,7 @@ type gitViewerWindow struct {
 func (m *siteManager) emitViewer(id string) {
 	r := m.viewers[id]
 	if r != nil && r.ready && r.state != nil && !m.recovery.paused {
-		m.app.Event.Emit("devjay:viewer-state:"+id, r.state)
+		dispatchWindowEvent(r.window, "devjay:viewer-state:"+id, r.state)
 	}
 }
 func (m *siteManager) viewerLoad(id string, work func(context.Context, *GitView) error) {

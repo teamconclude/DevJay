@@ -14,11 +14,12 @@ import (
 )
 
 type siteRuntime struct {
-	Site   Site
-	Window *application.WebviewWindow
-	Ready  bool
-	Git    GitStatus
-	Cancel context.CancelFunc
+	Site       Site
+	Window     *application.WebviewWindow
+	Ready      bool
+	Git        GitStatus
+	Cancel     context.CancelFunc
+	GitControl *gitWatchControl
 }
 type SiteView struct {
 	Site
@@ -71,7 +72,7 @@ type siteManager struct {
 	configError                                              error
 	runtime                                                  map[string]*siteRuntime
 	commands                                                 chan func()
-	lastSnapshot                                             string
+	monitor                                                  monitorSchedule
 }
 
 func newSiteManager(app *application.App, c SiteConfig, err error) *siteManager {
@@ -88,9 +89,12 @@ func (m *siteManager) send(fn func()) {
 	}
 }
 func (m *siteManager) run() {
+	// Install the existing power observer before the wake bridge. Native
+	// callbacks only wake this queue; none wait on it from the AppKit thread.
 	m.recoverViews()
-	tick := time.NewTicker(time.Second)
-	defer tick.Stop()
+	startNativeMonitoring()
+	timer := time.NewTimer(0)
+	defer timer.Stop()
 	for {
 		select {
 		case <-m.app.Context().Done():
@@ -99,11 +103,16 @@ func (m *siteManager) run() {
 			if m.app.Context().Err() == nil {
 				fn()
 			}
-		case <-tick.C:
-			m.recoverViews()
-			m.refreshViewers(time.Now())
+		case <-nativeMonitorEvents():
+			m.handleNativeMonitorEvents(takeNativeMonitorEvents(), time.Now())
+		case <-m.developmentApps.changes:
+			m.developmentApps.filesystemChanged(time.Now())
 			m.publishSnapshot(false)
+		case <-timer.C:
+			m.pollMonitoring(time.Now())
 		}
+		m.tickViewRecovery(time.Now())
+		timer.Reset(m.nextMonitorDelay(time.Now()))
 	}
 }
 func (m *siteManager) syncSettings() {
@@ -145,8 +154,9 @@ func (m *siteManager) createWindow(site Site) {
 			m.mu.Lock()
 			r.Ready = true
 			r.Cancel = cancel
+			r.GitControl = newGitWatchControl()
 			m.mu.Unlock()
-			go watchGit(ctx, site.Path, func(status GitStatus) {
+			go watchGitWithControl(ctx, site.Path, r.GitControl, func(status GitStatus) {
 				m.send(func() {
 					if current := m.runtime[site.ID]; current == r {
 						m.mu.Lock()
@@ -154,6 +164,7 @@ func (m *siteManager) createWindow(site Site) {
 						current.Git = status
 						m.mu.Unlock()
 						m.siteViewersChanged(site.ID, previous, status)
+						m.publishSnapshot(false)
 					}
 				})
 			})
@@ -168,16 +179,12 @@ func (m *siteManager) snapshot() appSnapshot {
 		items[id] = *r
 	}
 	m.mu.Unlock()
-	var panel, settings *application.WebviewWindow
-	if m.panelReady {
-		panel = m.panel
-	}
-	if m.settingsReady {
-		settings = m.settings
-	}
-	positions, states, preferences, settingsOpen, windowNumbers := readWindowSnapshot(items, panel, settings)
+	m.ensureWindowSnapshot(items)
+	positions, states := m.monitor.positions, m.monitor.states
+	preferences := maps.Clone(m.monitor.preferences)
 	preferences["showIDEStatus"] = m.config.showIDEStatus()
-	m.observeDevelopmentApps(windowNumbers, positions)
+	m.observeDevelopmentApps(m.monitor.windowNumbers, positions)
+	settingsOpen := m.monitor.settingsOpen
 	result := appSnapshot{Action: m.action, QuitMessage: m.quitMessage, SuggestedSite: m.suggestedSite, Layout: m.config.layout(), Placements: m.config.Placements, SettingsOpen: settingsOpen, Decoration: m.config.decoration(), Sites: []SiteView{}, Manual: m.config.Manual, Preferences: preferences}
 	if m.configError != nil {
 		result.Error = "Cannot read saved Sites. Configuration has not been overwritten: " + m.configError.Error()
@@ -202,18 +209,19 @@ func snapshotSignature(snapshot appSnapshot) string {
 	data, _ := json.Marshal(snapshot)
 	return string(data)
 }
-func (m *siteManager) broadcast() { m.publishSnapshot(true) }
+func (m *siteManager) broadcast() {
+	// Explicit UI operations may have changed preferences or window geometry.
+	m.monitor.windowsValid = false
+	m.monitor.visibilityDirty = true
+	m.publishSnapshot(true)
+}
 func (m *siteManager) publishSnapshot(force bool) {
 	if !m.panelReady || m.recovery.paused {
 		return
 	}
 	snapshot := m.snapshot()
-	signature := snapshotSignature(snapshot)
-	if !force && signature == m.lastSnapshot {
-		return
-	}
-	m.lastSnapshot = signature
-	m.app.Event.Emit("devjay:snapshot", snapshot)
+	m.refreshWindowVisibility()
+	m.deliverSnapshot(snapshot, force)
 }
 func (m *siteManager) activate(id string) {
 	r := m.runtime[id]
@@ -464,7 +472,17 @@ func (m *siteManager) registerEvents() {
 		})
 	})
 
-	m.app.Event.On("devjay:hello", func(e *application.CustomEvent) { m.send(m.broadcast) })
+	m.app.Event.On("devjay:hello", func(e *application.CustomEvent) {
+		m.send(func() {
+			if m.recoveryWindows[e.Sender] == nil {
+				return
+			}
+			delete(m.monitor.sent, e.Sender)
+			delete(m.monitor.visibility, e.Sender)
+			m.monitor.visibilityDirty = true
+			m.publishSnapshot(false)
+		})
+	})
 	m.app.Event.On("devjay:settings-open", func(e *application.CustomEvent) {
 		m.send(func() {
 			if e.Sender == "control-panel" {

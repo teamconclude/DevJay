@@ -25,6 +25,17 @@ type uiRecovery struct {
 	lastWake   time.Time
 }
 
+func (r *uiRecovery) nextDue() time.Time {
+	if r.paused {
+		return time.Time{}
+	}
+	var due time.Time
+	for _, view := range r.views {
+		due = earlierDeadline(due, view.due)
+	}
+	return due
+}
+
 func (r *uiRecovery) add(id string) {
 	if r.views == nil {
 		r.views = make(map[string]*viewRecovery)

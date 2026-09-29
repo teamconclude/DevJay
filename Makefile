@@ -29,6 +29,10 @@ check:
 	trap 'rm -f "$$power_bin"' EXIT; \
 	clang -Wall -Wextra -Werror -fblocks -framework AppKit tests/ui_power_test.m -o "$$power_bin"; \
 	"$$power_bin"
+	@set -e; monitor_bin=$$(mktemp "$${TMPDIR:-/tmp}/devjay-native-monitor.XXXXXX"); \
+	trap 'rm -f "$$monitor_bin"' EXIT; \
+	clang -Wall -Wextra -Werror -fblocks -framework AppKit -framework CoreGraphics tests/native_monitor_test.m -o "$$monitor_bin"; \
+	"$$monitor_bin"
 	@set -e; review_bin=$$(mktemp "$${TMPDIR:-/tmp}/devjay-native-review.XXXXXX"); \
 	trap 'rm -f "$$review_bin"' EXIT; \
 	clang -fblocks -framework AppKit -framework WebKit tests/native_review_test.m -o "$$review_bin"; \
