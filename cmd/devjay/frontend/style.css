@@ -293,6 +293,8 @@ html:not([data-local-drag-press]) .strip *, html:not([data-local-drag-press]) .w
 .card-prs { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; flex-shrink: 0; max-width: 45%; }
 .pr-tag { padding: 2px 6px; border: 1px solid #b39aff45; border-radius: 5px; background: #aa85ff1a; color: #d1baff; font-size: 13px; font-weight: 600; line-height: 17px; white-space: nowrap; --wails-draggable: no-drag; }
 .pr-tag:hover, .pr-tag.status-hover { background: #aa85ff33; border-color: #b39aff80; }
+.pr-tag.pr-approved { border-color: #74cba380; background: #4ca77b26; color: #9be0b9; }
+.pr-tag.pr-approved:hover, .pr-tag.pr-approved.status-hover { border-color: #9be0b9; background: #4ca77b40; }
 .pr-tag.ci-failed { border-color: #ef878999; background: #e3535a26; color: #ffb7ba; }
 .pr-tag.ci-failed:hover, .pr-tag.ci-failed.status-hover { border-color: #ffb0b2; background: #e3535a40; }
 
@@ -383,12 +385,29 @@ body[data-monitor-visible="false"] .development-app-working-dots > span { animat
 .suggestion-delete span { overflow-wrap: anywhere; }
 .suggestion-warning { font-size: 12px; line-height: 17px; margin: 10px 0; }
 .suggestion-preview { font-size: 11px; color: #939fb2; margin: auto 0 12px; padding-top: 18px; }
-.suggestion-footer { display: flex; justify-content: flex-end; gap: 8px; }
+.suggestion-footer { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.suggestion-footer button { max-width: 100%; overflow-wrap: anywhere; }
 .suggestion-primary { background: #294568; border-color: #6483af; }
 .suggestion-plan ol { padding-left: 20px; margin: 8px 0; }
 .suggestion-plan li { margin-bottom: 10px; line-height: 18px; overflow-wrap: anywhere; }
 
 .suggestion-chooser { margin-bottom: 12px; max-width: 100%; }
+.branch-chooser { margin: 6px 0 12px; }
+.branch-search { display: block; margin-bottom: 9px; font-size: 12px; }
+.branch-search input { display: block; width: 100%; margin-top: 6px; padding: 7px 9px; background: #151b25; color: #edf1f7; border: 1px solid #435066; border-radius: 5px; font: inherit; }
+.branch-search input:focus-visible { outline: 2px solid #8ab5ff; outline-offset: 1px; }
+.branch-options { display: flex; flex-direction: column; gap: 4px; height: max(356px, calc(100vh - 350px)); overflow: auto; }
+.branch-choice { display: flex; flex: 0 0 56px; flex-direction: column; justify-content: center; gap: 4px; width: 100%; min-width: 0; padding: 7px 10px; text-align: left; }
+.branch-choice-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; width: 100%; }
+.branch-choice-prs { display: flex; gap: 8px; font-size: 11px; line-height: 15px; color: #a7b2c3; min-width: 0; max-width: 100%; overflow: hidden; }
+.branch-pr { color: #d1baff; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.branch-pr.pr-approved { color: #9be0b9; }
+.branch-pr.ci-failed { color: #ffb7ba; }
+.branch-pr-note { white-space: nowrap; }
+.branch-choice-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.branch-choice-kind { flex: 0 0 auto; color: #a7b2c3; font-size: 11px; }
+.branch-empty, .branch-discovery-note { font-size: 12px; line-height: 18px; }
+.branch-remote-option input { margin-top: 3px; flex: 0 0 auto; }
 .rebase-result { margin-top: 14px; padding: 10px 12px; border: 1px solid currentColor; border-radius: 6px; font-size: 12px; line-height: 18px; overflow-wrap: anywhere; }
 .rebase-result p { margin: 6px 0 0; }
 .rebase-result ul { padding-left: 18px; margin-bottom: 0; max-height: 110px; overflow: auto; }
@@ -404,6 +423,8 @@ button.status-line:hover { text-decoration: underline; }
 .git-view-header { display: flex; align-items: center; gap: 16px; padding: 14px 18px; border-bottom: 1px solid #303a49; flex-shrink: 0; }
 .git-view-title { display: flex; flex-direction: column; gap: 4px; min-width: 80px; flex: 1; overflow: hidden; }
 .git-view-title strong { font-size: 17px; }
+.git-view-branch { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; min-width: 0; }
+.git-switch-branch { padding: 2px 6px; font-size: 11px; white-space: nowrap; --wails-draggable: no-drag; }
 .git-view-title span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .git-view-tabs { display: flex; gap: 4px; }
 .git-view-tabs button { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; padding: 7px 9px; background: transparent; border-color: transparent; }

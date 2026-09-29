@@ -8,7 +8,7 @@ const viewerSource=(await readFile(new URL('../cmd/devjay/frontend/git-viewer.js
 
 // Mount the production renderer. Fragments, focus and scroll are represented
 // here so assertions cover updates to the actual diff DOM, not just helpers.
-function viewer() {
+function viewer(openBranches) {
   let document;
   class Element {
     constructor(tag) {
@@ -38,7 +38,7 @@ function viewer() {
   body.append(root);
   const context=vm.createContext({document});
   vm.runInContext(editorSource+'\n'+viewerSource,context);
-  return {root,document,render:context.mountGitViewer(root,()=>{})};
+  return {root,document,render:context.mountGitViewer(root,()=>{},null,openBranches)};
 }
 
 const file=(path='selected.go')=>({path,group:'Unstaged',status:'M',statsKnown:true,added:1,removed:1});
@@ -98,4 +98,21 @@ test('background updates preserve expanded commit messages until another commit 
   view.render({...initial,version:3,commit:'b',message:'Another commit',commits:[{id:'b',subject:'Another commit',date:'2026-01-02'}]});
   const next=view.root.querySelector('.git-commit-detail').querySelector('details');
   assert.notEqual(next,details);assert.equal(!!next.open,false);assert.match(next.textContent,/Another commit/);
+});
+
+test('Changes window opens branch selection for its Site and restores the button after a failed request',async()=>{
+  let finish;const calls=[];
+  const view=viewer(siteID=>{calls.push(siteID);return new Promise((resolve,reject)=>{finish=reject;});});
+  view.render(state({head:'head'}));
+  const button=view.root.querySelector('.git-switch-branch');
+  assert.equal(button.hidden,false);assert.equal(button.attrs['aria-haspopup'],'dialog');
+  const opening=button.onclick();assert.equal(button.disabled,true);
+  view.render(state({head:'head',version:2}));assert.equal(button.disabled,true);
+  await button.onclick();assert.deepEqual(calls,['one']);
+  finish(new Error('Bridge unavailable'));await assert.rejects(opening,/Bridge unavailable/);
+  assert.equal(button.disabled,false);
+  view.render(state({head:'head',loading:true}));assert.equal(button.disabled,true);
+  for(const change of [{head:''},{head:'head',branch:'Detached HEAD'},{head:'head',branch:'(detached)'},{head:'head',branch:''}]){
+   view.render(state(change));assert.equal(button.hidden,true);
+  }
 });

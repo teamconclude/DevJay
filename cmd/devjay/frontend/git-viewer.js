@@ -57,7 +57,7 @@ export function viewCategory(v, kind) {
   };
 }
 
-export function mountGitViewer(root, request, suggestions) {
+export function mountGitViewer(root, request, suggestions, openBranches) {
   const el=(tag,cls,text)=>{const node=document.createElement(tag);node.className=cls;if(text!==undefined)node.textContent=text;return node;};
   const button=(text,run,cls='')=>{const node=el('button',cls,text);node.type='button';node.onclick=run;return node;};
   function summaryHeading(node, files, label, limited=false){
@@ -74,7 +74,18 @@ export function mountGitViewer(root, request, suggestions) {
   const send=(operation,extra={})=>{if(state)request({version:state.version,operation,...extra});};
   const header=el('header','git-view-header');
   const title=el('div','git-view-title');
-  const name=el('strong',''),branch=el('span','muted');title.append(name,branch);
+  const name=el('strong',''),branch=el('span','muted');
+  let openingBranches=false;
+  const canSwitch=()=>!!openBranches && !!state?.head && !!state?.branch && !['Detached HEAD','(detached)'].includes(state.branch);
+  const updateBranchButton=()=>{switchBranch.hidden=!canSwitch();switchBranch.disabled=openingBranches||!!state?.loading;};
+  const switchBranch=button('Switch branch…',async()=>{
+    if(switchBranch.disabled||!canSwitch())return;
+    openingBranches=true;updateBranchButton();
+    try { await openBranches(state.siteID); }
+    finally { openingBranches=false;updateBranchButton(); }
+  },'git-switch-branch');
+  switchBranch.setAttribute('aria-haspopup','dialog');switchBranch.hidden=true;
+  const branchRow=el('div','git-view-branch');branchRow.append(branch,switchBranch);title.append(name,branchRow);
   const tabs=el('nav','git-view-tabs');tabs.setAttribute('aria-label','Changes to inspect');
   for(const [kind,label] of [['edits','Local edits'],['local','Local commits'],['remote','Remote commits']]) {
     const tab=button('',()=>send('mode',{kind}));tab.dataset.kind=kind;
@@ -115,6 +126,7 @@ export function mountGitViewer(root, request, suggestions) {
     }
     name.textContent=v.name||'Changes';name.title=v.path;
     branch.textContent=v.branch||'';
+    updateBranchButton();
     tabs.querySelectorAll('button').forEach(tab=>{
       const category=viewCategory(v,tab.dataset.kind);
       tab.classList.toggle('selected',tab.dataset.kind===v.kind);

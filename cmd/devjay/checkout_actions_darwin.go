@@ -41,6 +41,10 @@ func (m *siteManager) registerCheckoutActions() {
 				m.actionReply(req.RequestID, "The Site is not ready or another action is running. Refresh and try again.")
 				return
 			}
+			if req.Kind == "switch" && !branchSwitchPreparationAllowed(sender, req.SiteID, m.suggestedSite, m.action) {
+				m.actionReply(req.RequestID, "Choose a branch from this Site's branch picker before continuing.")
+				return
+			}
 			if sender == "suggested-actions" {
 				if req.SiteID != m.suggestedSite {
 					m.actionReply(req.RequestID, "The selected Site changed. Open the action again.")
@@ -57,12 +61,16 @@ func (m *siteManager) registerCheckoutActions() {
 				m.suggestedSite = req.SiteID
 				m.suggestionsParent = viewer.window
 			}
-			title := map[string]string{"replace": "Confirm branch replacement", "push": "Confirm push", "update": "Confirm branch update", "rebase": "Confirm rebase", "merged": "Confirm return to default branch"}[req.Kind]
+			title := map[string]string{"switch": "Confirm branch switch", "replace": "Confirm branch replacement", "push": "Confirm push", "update": "Confirm branch update", "rebase": "Confirm rebase", "merged": "Confirm return to default branch"}[req.Kind]
 			if title == "" {
 				m.actionReply(req.RequestID, "Unknown action.")
 				return
 			}
 			m.actionReply(req.RequestID, "")
+			if req.Kind != "switch" {
+				m.suggestions.SetMinSize(400, 340)
+				m.suggestions.SetSize(460, 470)
+			}
 			m.suggestions.SetTitle(title)
 			m.cancelCheckoutAction()
 			ctx, cancel := context.WithTimeout(m.app.Context(), 2*time.Minute)
@@ -132,7 +140,13 @@ func (m *siteManager) registerCheckoutActions() {
 				// Network commands are bounded individually. Local mutations must finish.
 				result := applyCheckoutAction(context.Background(), plan)
 				result.SiteID = id
-				m.send(func() { m.action = &result; m.broadcast() })
+				m.send(func() {
+					m.action = &result
+					if current := m.runtime[id]; current == r && current.GitControl != nil {
+						current.GitControl.refresh()
+					}
+					m.broadcast()
+				})
 			}()
 		})
 	})

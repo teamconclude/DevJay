@@ -213,6 +213,54 @@ func TestReviewPostPushCannotWriteThroughSymbolicTrackingRef(t *testing.T) {
 	}
 }
 
+func TestReviewFullRefreshUsesTrackedPRBranch(t *testing.T) {
+	for _, state := range []string{"open", "merged"} {
+		t.Run(state, func(t *testing.T) {
+			t.Setenv("DEVJAY_TEST_PR_STATE", state)
+			shim := filepath.Join(t.TempDir(), "gh")
+			script := `#!/bin/sh
+if test "$1" != pr; then echo '[]'; exit 0; fi
+while test "$#" -gt 0; do
+ case "$1" in
+ --head) shift; head="$1" ;;
+ --state) shift; state="$1" ;;
+ esac
+ shift
+done
+if test "$head" != feature; then
+ echo '[{"number":99,"headRepositoryOwner":{"login":"example"}}]'
+elif test "$state" != "$DEVJAY_TEST_PR_STATE"; then
+ echo '[]'
+elif test "$state" = open; then
+ echo '[{"number":42,"headRefName":"feature","headRefOid":"tip","headRepository":{"nameWithOwner":"example/repo"},"headRepositoryOwner":{"login":"example"},"statusCheckRollup":[]}]'
+else
+ echo '[{"number":42,"state":"MERGED","headRefName":"feature","headRefOid":"tip","baseRefName":"main","headRepository":{"nameWithOwner":"example/repo"},"mergedAt":"2026-09-28T12:00:00Z"}]'
+fi
+`
+			if err := os.WriteFile(shim, []byte(script), 0700); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", filepath.Dir(shim)+":"+os.Getenv("PATH"))
+			meta := gitMeta{Branch: "local-feature", Remote: "origin", Merge: "refs/heads/feature", GitHubRepo: "example/repo", OID: "tip"}
+			cache := remoteCache{}
+			refreshRemote(context.Background(), meta, &cache)
+			if state == "open" {
+				if len(cache.PullRequests) != 1 || cache.PullRequests[0].Number != 42 {
+					t.Fatalf("wrong PR: %+v", cache)
+				}
+				choices := branchPullRequests([]BranchChoice{{Name: meta.Branch, prRemote: meta.Remote, prBranch: trackedPullRequestBranch(meta.Remote, meta.Merge)}}, func(string) string { return meta.GitHubRepo }, func(string) ([]byte, error) {
+					return []byte(`[{"number":42,"headRefName":"feature","headRepository":{"nameWithOwner":"example/repo"},"headRepositoryOwner":{"login":"example"}}]`), nil
+				})
+				if len(choices[0].PullRequests) != 1 || choices[0].PullRequests[0].Number != cache.PullRequests[0].Number {
+					t.Fatal("chooser and card disagree")
+				}
+			} else if cache.MergedPR == nil || cache.MergedPR.Number != 42 || !mergedPRMatchesBranch(cache.MergedPR, meta) {
+				t.Fatalf("missing exact merged PR: %+v", cache)
+			}
+		})
+	}
+}
+
 func TestReviewRebaseOwnUpstreamFetchPreservesLocalBranch(t *testing.T) {
 	for _, validation := range []bool{false, true} {
 		t.Run(map[bool]string{false: "prepare", true: "validate"}[validation], func(t *testing.T) {

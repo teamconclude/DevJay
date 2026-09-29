@@ -37,3 +37,17 @@ test('missing acknowledgement and hung transport time out without retrying actio
   assert.match(reports.at(-1)[0],/timed out/);
  }
 });
+
+test('branch chooser opening waits for the Site-bound backend acknowledgement',async()=>{
+ const reports=[];
+ let sent;
+ const bridge=createBridge(async(name,data)=>{sent=[name,data];},(...args)=>reports.push(args),100);
+ const opened=bridge.emit('branches-open',{siteID:'site-one'});
+ await Promise.resolve();await Promise.resolve();
+ assert.equal(sent[0],'devjay:branches-open');
+ assert.equal(sent[1].siteID,'site-one');
+ assert.ok(sent[1].requestID);
+ bridge.reply({requestID:sent[1].requestID,error:'Open branch switching from this Site\'s window'});
+ assert.equal(await opened,false);
+ assert.match(reports.at(-1)[0],/Site's window/);
+});

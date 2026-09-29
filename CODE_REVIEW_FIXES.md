@@ -1,6 +1,6 @@
 # Claude review follow-up
 
-Applied to `a1751ad`, including the replacement action added after the reviewed `7811d95`. The original `CODE_REVIEW.md` is preserved.
+Applied to `a1751ad`, including the replacement action added after the reviewed `7811d95`. The original `CODE_REVIEW.md` is not present in this repository; the table below is the retained summary of its finding IDs. These commit IDs refer to history before the September 2026 reorganization, retained locally at `refs/codex/pre-reorg-20260929`. The corresponding work units in the current history are `d49d0f5` (Git safety) and `65d3111` (review follow-up, including the notice regression).
 
 | Findings | Resolution |
 | --- | --- |
@@ -41,3 +41,15 @@ Claude's follow-up against `cad3f78` confirmed that the stylesheet still hid non
 - Reproduced the hidden quit message against the original stylesheet in a browser, then verified visible informational notices, hidden empty notices, and unchanged error colors in all five view contexts after the fix.
 - Reproduced stale snapshot text and bridge success clearing an active snapshot notice against the original renderer. Added unit coverage for notice ownership and renderer coverage across all five views; existing bridge-error preservation remains covered.
 - `make check` passed with 67 JavaScript tests, and the full Go race suite passed in 131 seconds. Both used the same macOS 13.0 deployment settings and temporary Go cache described above.
+
+## September 2026 comprehensive review follow-up
+
+Confirmed and fixed the three runtime findings in the comprehensive review of `abd43bf`:
+
+- **F1:** Monitoring, default-branch refresh, and checkout-action upstream fetches use private temporary refs. Tracking publication rejects symbolic refs, compares the expected old commit, and never dereferences a concurrent symbolic replacement. Post-push publication uses the same guard. Fetch, publication, and cleanup disable hooks; temporary refs are cleaned up on success and failure.
+- **F2:** Remote cache and worker identity include the effective remote URL, tracking ref, and default remote. A URL change clears previous freshness, missing-branch, error, and rewrite claims and rejects outstanding results from the old identity.
+- **F3:** Full PR, merged-PR, and checks-only lookups use the configured remote upstream branch. The chooser shares the upstream-name derivation. Cards without a remote upstream retain the existing same-name origin fallback. Exact merged-tip, repository, and branch-lifetime checks remain in place.
+
+Regression coverage uses disposable Git repositories and local CLI stubs, including symbolic refs installed during fetch and immediately before publication, action preparation, post-push publication, remote URL changes, and local/remote branch names that differ. These checks do not establish live GitHub availability or interactive macOS Space/display behavior; those validation items remain in `PLAN.md`.
+
+Validation: the final `make check` passed (uncached Go package run, `go vet`, native harnesses, 132 JavaScript tests, syntax checks, and plist validation). The expanded focused regressions also passed. An initial full run caught missing hook suppression in the new publication/cleanup commands; that was corrected and the full suite rerun successfully. Checks required access outside the filesystem sandbox for the Go cache and the existing local socket/filesystem-observation tests.

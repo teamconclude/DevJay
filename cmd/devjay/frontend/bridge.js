@@ -9,7 +9,7 @@ export function createBridge(send, report, timeout = 10000) {
   async function emit(name, data) {
     let timer, requestID;
     try {
-      const acknowledged = name === 'action-prepare' || name === 'action-confirm';
+      const acknowledged = name === 'action-prepare' || name === 'action-confirm' || name === 'branches-open';
       const completion = new Promise((resolve, reject) => {
         timer = setTimeout(() => reject(new Error('The request timed out. Check the action’s current state before trying again.')), timeout);
         if (acknowledged) {

@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
-const source = await readFile(new URL('../cmd/devjay/frontend/suggested-actions.js', import.meta.url), 'utf8');
+let source = await readFile(new URL('../cmd/devjay/frontend/suggested-actions.js', import.meta.url), 'utf8');
+const prSource = await readFile(new URL('../cmd/devjay/frontend/pr-status.js', import.meta.url), 'utf8');
+source = source.replace('./pr-status.js', `data:text/javascript;base64,${Buffer.from(prSource).toString('base64')}`);
 const {postMergeSuggestion} = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
 const git = {branch:'feature',defaultBranch:'trunk',mergedPR:{number:4,sameHead:true,base:'trunk'}};
 test('suggestions require a merged PR and use the repository default', () => {
@@ -40,13 +42,102 @@ test('feature upstream and default-branch comparisons are independent', () => {
  assert.equal(siteSuggestions({git:{...feature,defaultBranch:'develop',mergedPR:{number:1,sameHead:true,base:'develop'}}})[0].kind,'merged');
 });
 class Element {
- constructor(tag) {this.tag=tag;this.children=[];this.hidden=false;this.disabled=false;}
+ constructor(tag) {this.tag=tag;this.children=[];this.hidden=false;this.disabled=false;this.attrs={};}
  append(...nodes){this.children.push(...nodes);}
  replaceChildren(...nodes){this.children=nodes;}
- setAttribute(){}
+ setAttribute(name,value){this.attrs[name]=value;}
 }
 function nodes(root) {const result=[];const walk=n=>{result.push(n);n.children.forEach(walk);};walk(root);return result;}
 function withDocument(fn) {const previous=globalThis.document;globalThis.document={createElement:tag=>new Element(tag)};try{fn();}finally{globalThis.document=previous;}}
+
+const classNode=(root,name)=>nodes(root).find(n=>n.className?.split(' ').includes(name));
+const branchState=()=>({suggestedSite:'site',sites:[{id:'site',name:'project',path:'/tmp/project',git:{branch:'stale',head:'stale-head'}}],
+ action:{siteID:'site',kind:'switch',status:'choosing',currentBranch:'feature',currentHead:'head123456',message:'Known remote branches are listed. The selected upstream is checked before confirmation.',branches:[
+  {name:'feature',local:true,current:true},{name:'main',local:true,current:false},{name:'release/next',remote:'origin',local:false,current:false},
+ ]}});
+const switchPlan=(patch={})=>({id:'switch-token',kind:'switch',branch:'feature',head:'head123456',target:'main',targetHead:'target123456',targetRemote:'',remoteTarget:'origin/main',canUpdateTarget:true,updateTarget:false,remoteAhead:3,localAhead:0,createTarget:false,...patch});
+
+test('branch discovery waits for explicit choice and filtering survives snapshots without replacing search',()=>withDocument(()=>{
+ const root=new Element('root'),calls=[],render=mountSuggestedActions(root,()=>{},(...args)=>calls.push(args)),state=branchState();
+ render({...state,action:{...state.action,status:'loading-branches',branches:undefined}});
+ assert.ok(nodes(root).some(n=>n.textContent==='Loading branches…'));assert.equal(calls.length,0);
+ render(state);
+ const search=nodes(root).find(n=>n.type==='search'),rows=nodes(root).filter(n=>n.className==='branch-choice');
+ assert.equal(rows.length,3);assert.equal(rows[0].disabled,true);rows[0].onclick();assert.equal(calls.length,0);
+ assert.match(rows[2].attrs['aria-label'],/^release\/next · Remote · origin/);
+ search.value='release';search.oninput();assert.deepEqual(rows.map(n=>n.hidden),[true,true,false]);
+ render({...state,sites:[{...state.sites[0],git:{branch:'unrelated',head:'other'}}],action:{...state.action,message:'Remote list refreshed'}});
+ assert.equal(nodes(root).find(n=>n.type==='search'),search);assert.equal(search.value,'release');
+ assert.equal(nodes(root).find(n=>n.className==='branch-choice'),rows[0]);
+ rows[2].onclick();rows[2].onclick();
+ assert.deepEqual(calls,[['action-prepare',{siteID:'site',kind:'switch',branch:'feature',head:'head123456',targetBranch:'release/next',targetRemote:'origin',updateTarget:false}]]);
+ assert.equal(search.disabled,true);assert.ok(rows.every(n=>n.disabled));
+ assert.equal(calls.some(([kind])=>kind==='action-confirm'),false);
+}));
+
+test('switch defaults to the local tip and remote opt-in prepares a new plan before confirmation',()=>withDocument(()=>{
+ const root=new Element('root'),calls=[],render=mountSuggestedActions(root,()=>{},(...args)=>calls.push(args)),state=branchState(),plan=switchPlan();
+ render({...state,action:{siteID:'site',kind:'switch',status:'ready',plan}});
+ assert.equal(calls.length,0);
+ assert.ok(nodes(root).some(n=>n.textContent==='Switch to existing local branch main at its current commit.'));
+ const option=classNode(root,'branch-remote-option'),checkbox=classNode(root,'branch-remote-checkbox'),confirm=classNode(root,'suggestion-primary');
+ assert.equal(option.hidden,false);assert.equal(checkbox.checked,false);
+ assert.ok(nodes(root).some(n=>n.textContent==='Use newer remote version from origin/main (3 newer commits)'));
+ checkbox.checked=true;checkbox.onchange();confirm.onclick();
+ assert.deepEqual(calls,[['action-prepare',{siteID:'site',kind:'switch',branch:'feature',head:'head123456',targetBranch:'main',targetRemote:'',updateTarget:true}]]);
+ render({...state,action:{siteID:'site',kind:'switch',status:'ready',plan:{...plan,id:'updated-token',updateTarget:true}}});
+ assert.ok(nodes(root).some(n=>n.textContent==='Switch to main and fast-forward it to the confirmed origin/main commit.'));
+ assert.equal(checkbox.checked,true);checkbox.checked=false;checkbox.onchange();
+ assert.equal(calls[1][1].updateTarget,false);
+ render({...state,action:{siteID:'site',kind:'switch',status:'ready',plan:{...plan,id:'local-token'}}});
+ confirm.onclick();confirm.onclick();
+ assert.deepEqual(calls[2],['action-confirm','local-token']);assert.equal(calls.length,3);
+}));
+
+test('diverged or locally ahead targets never offer remote replacement and remote-only creation is explicit',()=>withDocument(()=>{
+ const root=new Element('root'),calls=[],render=mountSuggestedActions(root,()=>{},(...args)=>calls.push(args)),state=branchState();
+ for(const patch of [{localAhead:2,remoteAhead:0},{localAhead:2,remoteAhead:3},{canUpdateTarget:false},{remoteAhead:0}]){
+  render({...state,action:{siteID:'site',kind:'switch',status:'ready',plan:switchPlan({...patch,remoteNote:'Local commits are kept.'})}});
+  assert.equal(classNode(root,'branch-remote-option').hidden,true);
+  const checkbox=classNode(root,'branch-remote-checkbox');checkbox.checked=true;checkbox.onchange();assert.equal(calls.length,0);
+  assert.ok(nodes(root).some(n=>n.textContent==='Local commits are kept.'));
+ }
+ render({...state,action:{siteID:'site',kind:'switch',status:'ready',plan:switchPlan({localAhead:2,remoteAhead:3,canUpdateTarget:false})}});
+ assert.ok(nodes(root).some(n=>n.textContent==='main has 2 local commits not in origin/main; its local version will be kept.'));
+ render({...state,action:{siteID:'site',kind:'switch',status:'ready',plan:switchPlan({localAhead:2,remoteNote:'Remote unavailable; keeping the local version.'})}});
+ assert.equal(nodes(root).some(n=>n.textContent?.includes('2 local commits not in')),false,'unavailable remote notes take precedence over counts');
+ render({...state,action:{siteID:'site',kind:'switch',status:'ready',plan:switchPlan({target:'release/next',targetRemote:'origin',remoteTarget:'origin/release/next',createTarget:true})}});
+ assert.equal(classNode(root,'branch-remote-option').hidden,true);
+ assert.ok(nodes(root).some(n=>n.textContent==='Create local branch release/next from origin/release/next and switch to it.'));
+ classNode(root,'suggestion-primary').onclick();assert.deepEqual(calls,[['action-confirm','switch-token']]);
+}));
+
+test('blocked branch switches show saved local-work guidance and can reopen the chooser without mutation',()=>withDocument(()=>{
+ const root=new Element('root'),calls=[],render=mountSuggestedActions(root,()=>{},(...args)=>calls.push(args)),state=branchState();
+ render({...state,action:{siteID:'site',kind:'switch',status:'failed',message:'Commit or stash local changes before switching.',files:['file.txt'],currentBranch:'feature',currentHead:'head123456'}});
+ assert.ok(nodes(root).some(n=>n.textContent==='Commit or stash local changes before switching.'));
+ assert.ok(nodes(root).some(n=>n.textContent==='file.txt'));assert.equal(classNode(root,'suggestion-primary').hidden,true);
+ const back=classNode(root,'branch-back');assert.equal(back.hidden,false);back.onclick();back.onclick();
+ assert.deepEqual(calls,[['branches-open',{siteID:'site'}]]);
+ render({...state,action:{...state.action,status:'loading-branches'}});render(state);
+ assert.equal(nodes(root).find(n=>n.type==='search').disabled,false);
+ assert.equal(nodes(root).filter(n=>n.className==='branch-choice'&&!n.disabled).length,2);
+}));
+
+test('branch-choice and remote-option delivery failures restore retry without accepting an old plan',async()=>{
+ const previous=globalThis.document;globalThis.document={createElement:tag=>new Element(tag)};
+ try {
+  const root=new Element('root'),state=branchState(),render=mountSuggestedActions(root,()=>{},async()=>false);
+  render(state);const choice=nodes(root).find(n=>n.attrs['aria-label']?.startsWith('main · Local branch'));
+  const selecting=choice.onclick();assert.equal(choice.disabled,true);await selecting;assert.equal(choice.disabled,false);
+  assert.equal(nodes(root).find(n=>n.type==='search').disabled,false);
+  render({...state,action:{siteID:'site',kind:'switch',status:'ready',plan:switchPlan()}});
+  const checkbox=classNode(root,'branch-remote-checkbox'),confirm=classNode(root,'suggestion-primary');
+  checkbox.checked=true;const preparing=checkbox.onchange();assert.equal(confirm.disabled,true);await preparing;
+  assert.equal(checkbox.checked,false);assert.equal(checkbox.disabled,false);assert.equal(confirm.disabled,false);
+  const back=classNode(root,'branch-back'),opening=back.onclick();assert.equal(back.disabled,true);await opening;assert.equal(back.disabled,false);
+ } finally {globalThis.document=previous;}
+});
 
 test('direct update opens confirmation without a second review step',()=>withDocument(()=>{
  const root=new Element('root'),calls=[];
@@ -147,7 +238,7 @@ test('optional merged-branch deletion requires a newly prepared confirmation',()
  const plan={id:'old',kind:'merged',branch:'feature',head:'oldhead12',target:'develop',targetHead:'newhead12',deleteBranch:false};
  const state={suggestedSite:'site',sites:[site],action:{siteID:'site',kind:'merged',status:'ready',plan}};
  render(state);
- const checkbox=nodes(root).find(n=>n.tag==='input');assert.equal(checkbox.checked,false);checkbox.checked=true;checkbox.onchange();
+ const checkbox=nodes(root).find(n=>n.tag==='input'&&n.type==='checkbox'&&n.className==='');assert.equal(checkbox.checked,false);checkbox.checked=true;checkbox.onchange();
  assert.deepEqual(calls,[['action-prepare',{siteID:'site',kind:'merged',branch:'feature',head:'oldhead12',deleteBranch:true}]]);
  nodes(root).find(n=>n.tag==='button'&&n.textContent==='Return to develop').onclick();assert.equal(calls.length,1);
  render({...state,action:{...state.action,plan:{...plan,id:'new',deleteBranch:true}}});
@@ -202,5 +293,31 @@ test('failed prepare and confirm delivery re-enable the same rendered buttons',a
   render({suggestedSite:'site',sites:[site],action:{siteID:'site',status:'ready',plan:{id:'token',kind:'update',branch:'main',target:'origin/main',head:'old',targetHead:'new'}}});
   const confirm=nodes(popup).find(n=>n.textContent==='Update branch');
   const confirming=confirm.onclick();assert.equal(confirm.disabled,true);await confirming;assert.equal(confirm.disabled,false);
+ } finally {globalThis.document=previous;}
+});
+
+test('branch rows show PR review and CI independently, support PR search, and preserve filtering during enrichment',()=>withDocument(()=>{
+ const root=new Element('root'),render=mountSuggestedActions(root,()=>{},()=>{}),state=branchState();
+ render(state);
+ const search=nodes(root).find(n=>n.type==='search');search.value='main';search.oninput();
+ const enriched={...state,action:{...state.action,branches:state.action.branches.map(branch=>({...branch,prStatus:'known',pullRequests:branch.name==='main'?[{number:42,state:'Approved',ciState:'failure'}]:[]}))}};
+ render(enriched);assert.equal(search.value,'main');
+ const tag=classNode(root,'branch-pr');assert.match(tag.textContent,/#42 · Approved · CI failed/);assert.match(tag.className,/ci-failed/);assert.doesNotMatch(tag.className,/pr-approved/);
+ const rows=nodes(root).filter(n=>n.className==='branch-choice');assert.deepEqual(rows.map(n=>n.hidden),[true,false,true]);
+ search.value='#42';search.oninput();assert.deepEqual(rows.map(n=>n.hidden),[true,false,true]);
+ enriched.action.branches[1].pullRequests[0].ciState='success';render(enriched);
+ assert.match(classNode(root,'branch-pr').className,/pr-approved/);assert.match(classNode(root,'branch-pr').textContent,/CI passed/);
+}));
+
+test('PR enrichment cannot unlock a branch request in flight and delivery failure still permits retry',async()=>{
+ const previous=globalThis.document;globalThis.document={createElement:tag=>new Element(tag)};
+ try {
+  let finish;const state=branchState(),root=new Element('root');
+  const render=mountSuggestedActions(root,()=>{},()=>new Promise(resolve=>{finish=resolve;}));
+  render(state);const selecting=nodes(root).find(n=>n.attrs['aria-label']?.startsWith('main ·')).onclick();
+  render({...state,action:{...state.action,branches:state.action.branches.map(b=>({...b,prStatus:'known'}))}});
+  assert.ok(nodes(root).filter(n=>n.className==='branch-choice').every(n=>n.disabled));
+  finish(false);await selecting;
+  assert.equal(nodes(root).find(n=>n.attrs['aria-label']?.startsWith('main ·')).disabled,false);
  } finally {globalThis.document=previous;}
 });

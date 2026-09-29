@@ -1,3 +1,4 @@
+import { prDescription, prTagTone } from './pr-status.js';
 // Delivery failures and missing acknowledgements must leave a retry available.
 async function recoverRequest(send, restore) {
   try { if (await send() !== false) return; } catch { /* The bridge displays the error. */ }
@@ -60,6 +61,13 @@ export function siteSuggestions(site) {
 }
 
 export function suggestionSteps(suggestion, deleteBranch) {
+  if (suggestion.kind === 'switch') return [
+    'Check that the checkout has no local changes or untracked files. Stop if the checkout or target branch has changed.',
+    suggestion.createTarget ? `Create local branch ${suggestion.target} from ${suggestion.remoteTarget} and switch to it.` :
+      suggestion.updateTarget ? `Switch to ${suggestion.target} and fast-forward it to the confirmed ${suggestion.remoteTarget} commit.` :
+      `Switch to existing local branch ${suggestion.target} at its current commit.`,
+    `Keep local branch ${suggestion.branch}. Nothing is stashed, reset, or pushed automatically.`,
+  ];
   if (suggestion.kind === 'replace') return [
     `Fetch ${suggestion.target} and verify that the exact local tip was previously recorded on that upstream.`,
     'Stop if there are local edits, untracked files, unverified local commits, or changes since this confirmation.',
@@ -90,6 +98,7 @@ export function suggestionSteps(suggestion, deleteBranch) {
 }
 
 export function actionLabels(plan) {
+  if (plan.kind === 'switch') return {title:'Confirm branch switch',button:`Switch to ${plan.target || 'branch'}`};
   if (plan.kind === 'replace') return {title:'Confirm branch replacement',button:'Replace branch'};
   if (plan.kind === 'push') return {title:'Confirm push', button:`Push ${plan.commits} ${plan.commits === 1 ? 'commit' : 'commits'}`};
   if (plan.kind === 'update') return {title:'Confirm branch update', button:'Update branch'};
@@ -112,8 +121,8 @@ export function suggestionButtonLabel(suggestion, git) {
   return `Return to ${suggestion.target}`;
 }
 
-// The originating viewer selects an action and starts preparation. This window
-// only confirms the resulting plan; it never selects or runs an action on load.
+// The Changes window opens the branch chooser or prepares another action.
+// Selecting a branch only prepares a plan. Applying it requires confirmation.
 export function mountSuggestedActions(root, close, actionEvent) {
   const el = (tag, cls, text) => {
     const node = document.createElement(tag); node.className = cls;
@@ -127,21 +136,51 @@ export function mountSuggestedActions(root, close, actionEvent) {
   chrome.append(dismiss);
   const heading = el('h2', 'confirmation-title');
   const context = el('p', 'help copyable');
+  const chooser = el('section', 'branch-chooser'); chooser.hidden = true;
+  const searchLabel = el('label', 'branch-search', 'Find a branch');
+  const search = el('input', ''); search.type = 'search'; search.placeholder = 'Branch name'; search.value = '';
+  search.setAttribute('aria-label', 'Find a branch'); searchLabel.append(search);
+  const choices = el('div', 'branch-options');
+  const empty = el('p', 'branch-empty', 'No matching branches.'); empty.hidden = true;
+  const discovery = el('p', 'branch-discovery-note help copyable');
+  chooser.append(searchLabel, choices, empty, discovery);
   const plan = el('section', 'suggestion-plan');
   const deletion = el('label', 'suggestion-delete');
   const checkbox = el('input', ''); checkbox.type = 'checkbox';
   const deleteText = el('span', ''); deletion.append(checkbox, deleteText);
+  const remoteOption = el('label', 'suggestion-delete branch-remote-option'); remoteOption.hidden = true;
+  const remoteCheckbox = el('input', 'branch-remote-checkbox'); remoteCheckbox.type = 'checkbox';
+  const remoteText = el('span', ''); remoteOption.append(remoteCheckbox, remoteText);
   const preview = el('p', 'suggestion-preview');
   const footer = el('div', 'suggestion-footer');
+  const back = el('button', 'branch-back', 'Choose another branch'); back.type = 'button'; back.hidden = true;
   const cancel = el('button', '', 'Cancel'); cancel.type = 'button'; cancel.onclick = close;
   const next = el('button', 'suggestion-primary'); next.type = 'button';
-  footer.append(cancel, next); root.append(chrome, heading, context, plan, deletion, preview, footer);
-  let current = null, identity = '';
+  footer.append(back, cancel, next); root.append(chrome, heading, context, chooser, plan, deletion, remoteOption, preview, footer);
+  let current = null, identity = '', choicesIdentity = '', chooserContext = '', preparingChoice = false;
+  let branchRows = [];
+  const filterBranches = () => {
+    const query = search.value.trim().toLocaleLowerCase();
+    let visible = 0;
+    for (const {button, choice} of branchRows) {
+      button.hidden = !`${choice.name} ${choice.remote || ''} ${(choice.pullRequests || []).map(prDescription).join(' ')}`.toLocaleLowerCase().includes(query);
+      button.disabled = !!choice.current || preparingChoice;
+      if (!button.hidden) visible++;
+    }
+    search.disabled = preparingChoice;
+    empty.hidden = visible > 0;
+  };
+  search.oninput = filterBranches;
+  const switchRequest = (pending, target, updateTarget) => ({siteID:pending.siteID,kind:'switch',
+    branch:pending.plan?.branch || pending.currentBranch,head:pending.plan?.head || pending.currentHead,
+    targetBranch:target.name,targetRemote:target.remote || '',updateTarget});
   next.onclick = () => {
     if (next.disabled || current?.status !== 'ready' || !current.plan) return;
-    next.disabled = true;
+    next.disabled = remoteCheckbox.disabled = back.disabled = true;
     const pending = current;
-    return recoverRequest(() => actionEvent('action-confirm', pending.plan.id), () => { if (current === pending) next.disabled = false; });
+    return recoverRequest(() => actionEvent('action-confirm', pending.plan.id), () => {
+      if (current === pending) { next.disabled = back.disabled = false; remoteCheckbox.disabled = remoteOption.hidden; }
+    });
   };
   checkbox.onchange = () => {
     if (checkbox.disabled || current?.status !== 'ready' || current.plan?.kind !== 'merged') return;
@@ -152,6 +191,23 @@ export function mountSuggestedActions(root, close, actionEvent) {
         if (current === pending) { checkbox.disabled = next.disabled = false; checkbox.checked = !!pending.plan.deleteBranch; }
       });
   };
+  remoteCheckbox.onchange = () => {
+    if (remoteCheckbox.disabled || current?.status !== 'ready' || current.plan?.kind !== 'switch' || remoteOption.hidden) return;
+    remoteCheckbox.disabled = next.disabled = back.disabled = true;
+    const pending = current;
+    return recoverRequest(() => actionEvent('action-prepare', switchRequest(pending,
+      {name:pending.plan.target,remote:pending.plan.targetRemote}, remoteCheckbox.checked)), () => {
+      if (current === pending) { remoteCheckbox.disabled = next.disabled = back.disabled = false; remoteCheckbox.checked = !!pending.plan.updateTarget; }
+    });
+  };
+  back.onclick = () => {
+    if (back.hidden || back.disabled || !['ready','failed'].includes(current?.status)) return;
+    const pending = current;
+    back.disabled = next.disabled = remoteCheckbox.disabled = true;
+    return recoverRequest(() => actionEvent('branches-open', {siteID:pending.siteID}), () => {
+      if (current === pending) { back.disabled = next.disabled = false; remoteCheckbox.disabled = remoteOption.hidden; }
+    });
+  };
   return state => {
     const action = state.action?.siteID === state.suggestedSite ? state.action : null;
     const site = state.sites.find(s => s.id === state.suggestedSite);
@@ -161,20 +217,68 @@ export function mountSuggestedActions(root, close, actionEvent) {
     const p = action?.plan;
     const kind = p?.kind || action?.kind;
     const labels = actionLabels(p || {kind, target:site?.git.defaultBranch});
-    heading.textContent = action ? labels.title : 'Confirm action';
-    context.textContent = site ? `${site.name || site.path || ''} · ${p?.branch || site.git.branch}${p ? ` → ${p.target}` : ''}` : '';
+    const choosing = kind === 'switch' && action?.status === 'choosing';
+    heading.textContent = kind === 'switch' && ['loading-branches','choosing'].includes(action?.status) ? 'Switch branch' : action ? labels.title : 'Confirm action';
+    context.textContent = site ? `${site.name || site.path || ''} · ${p?.branch || action?.currentBranch || site.git.branch}${p ? ` → ${p.target}` : ''}` : '';
     context.title = site?.path || '';
     next.hidden = action?.status !== 'ready'; next.disabled = false;
+    back.hidden = kind !== 'switch' || !['ready','failed'].includes(action?.status); back.disabled = false;
     next.textContent = labels.button;
     cancel.disabled = dismiss.disabled = action?.status === 'running';
     cancel.textContent = action?.status === 'complete' ? 'Done' : 'Cancel';
     deletion.hidden = action?.status !== 'ready' || kind !== 'merged';
     checkbox.disabled = deletion.hidden; checkbox.checked = !!p?.deleteBranch;
     deleteText.textContent = `Delete local branch ${p?.branch || ''} afterward`;
+    remoteOption.hidden = action?.status !== 'ready' || kind !== 'switch' || !p?.canUpdateTarget || p.createTarget || p.localAhead > 0 || !(p.remoteAhead > 0);
+    remoteCheckbox.disabled = remoteOption.hidden; remoteCheckbox.checked = !!p?.updateTarget;
+    remoteText.textContent = `Use newer remote version from ${p?.remoteTarget || ''} (${p?.remoteAhead || 0} newer ${p?.remoteAhead === 1 ? 'commit' : 'commits'})`;
     preview.textContent = action?.status === 'running' ? 'Finishing the operation before this window can close.' :
+      choosing ? 'Select a branch to review before switching.' :
+      kind === 'switch' ? 'Commit or stash local changes before switching. Nothing is stashed or pushed automatically.' :
       kind === 'push' ? 'Only the confirmed commits are published. Your local checkout stays unchanged.' :
       'Nothing is pushed automatically. Original commits are kept in a recovery reference.';
-    if (action?.status === 'ready') {
+    chooser.hidden = !choosing; plan.hidden = choosing;
+    if (!choosing) preparingChoice = false;
+    if (choosing) {
+      const contextKey = JSON.stringify([action.siteID,action.currentBranch,action.currentHead]);
+      if (contextKey !== chooserContext) { chooserContext = contextKey; search.value = ''; preparingChoice = false; }
+      const branchKey = JSON.stringify([contextKey,action.branches]);
+      if (branchKey !== choicesIdentity) {
+        choicesIdentity = branchKey;
+        const scroll = choices.scrollTop;
+        const focused = branchRows.find(row => row.button === document.activeElement)?.choice.name;
+        branchRows = []; choices.replaceChildren();
+        for (const choice of action.branches || []) {
+          const button = el('button', 'branch-choice'); button.type = 'button';
+          const description = choice.current ? 'Current branch' : choice.local ? 'Local branch' : `Remote · ${choice.remote}`;
+          const heading = el('span', 'branch-choice-heading');
+          heading.append(el('span', 'branch-choice-name', choice.name), el('span', 'branch-choice-kind', description));
+          const details = el('span', 'branch-choice-prs');
+          const prs = choice.pullRequests || [];
+          for (const pr of prs) details.append(el('span', `branch-pr ${prTagTone(pr)}`.trim(), prDescription(pr)));
+          const note = choice.prStatus === 'unavailable' ? 'PR status unavailable' :
+            choice.prStatus === 'partial' ? 'PR list incomplete' : choice.prStatus === 'no-upstream' ? 'No remote branch linked' :
+            choice.prStatus === 'known' ? (prs.length ? '' : 'No open PR') : 'Checking PR status…';
+          if (note) details.append(el('span', 'branch-pr-note', note));
+          button.append(heading, details);
+          button.title = [choice.name, description, ...prs.map(prDescription), note].filter(Boolean).join(' · ');
+          button.setAttribute('aria-label', [choice.name, description, ...prs.map(prDescription), note].filter(Boolean).join(' · '));
+          button.onclick = () => {
+            if (button.disabled || current?.status !== 'choosing') return;
+            preparingChoice = true; filterBranches();
+            const pending = current;
+            return recoverRequest(() => actionEvent('action-prepare', switchRequest(pending, choice, false)), () => {
+              if (current?.status === 'choosing' && current.siteID === pending.siteID && current.currentHead === pending.currentHead && current.currentBranch === pending.currentBranch) { preparingChoice = false; filterBranches(); }
+            });
+          };
+          branchRows.push({button,choice}); choices.append(button);
+          if (focused === choice.name) button.focus?.({preventScroll:true});
+        }
+        choices.scrollTop = scroll;
+      }
+      discovery.textContent = action.message || ''; discovery.hidden = !action.message;
+      filterBranches();
+    } else if (action?.status === 'ready') {
       const list = el('ol', '');
       for (const step of suggestionSteps({...p,tracking:site?.git.base?.tracking || p.target}, p.deleteBranch)) list.append(el('li', '', step));
       const revisions = p.kind === 'push' ? `${p.targetHead.slice(0,8)} → ${p.head.slice(0,8)}` : `${p.head.slice(0,8)} → ${p.targetHead.slice(0,8)}`;
@@ -182,8 +286,12 @@ export function mountSuggestedActions(root, close, actionEvent) {
       if (p.deleteBranch) plan.append(el('p', 'warning', `This also deletes local branch ${p.branch}. A recovery reference will retain its commits.`));
       if (p.kind === 'replace') plan.append(el('p', 'warning', 'The local branch will use the rewritten remote history. Its old commits will be kept in a recovery reference.'));
       if (p.kind === 'rebase') plan.append(el('p', 'warning', 'Rebasing rewrites commit IDs. Review the result before pushing.'));
+      if (p.kind === 'switch' && p.remoteNote) plan.append(el('p', 'help copyable', p.remoteNote));
+      if (p.kind === 'switch' && !p.remoteNote && !p.createTarget && p.localAhead > 0 && p.remoteTarget) {
+        plan.append(el('p', 'help copyable', `${p.target} has ${p.localAhead} local ${p.localAhead === 1 ? 'commit' : 'commits'} not in ${p.remoteTarget}; its local version will be kept.`));
+      }
     } else {
-      const titles = {preparing:'Checking action…',running:'Applying action…',complete:'✓ Completed',failed:'Action stopped'};
+      const titles = {'loading-branches':'Loading branches…',preparing:'Checking action…',running:'Applying action…',complete:'✓ Completed',failed:'Action stopped'};
       plan.replaceChildren(el('strong', action?.status === 'complete' ? 'good' : '', titles[action?.status] || 'Choose an action in the Site’s changes window.'),
         el('p', 'copyable', action?.message || ''));
       if (action?.files?.length) { const files=el('ul','copyable'); for(const file of action.files) files.append(el('li','',file)); plan.append(files); }

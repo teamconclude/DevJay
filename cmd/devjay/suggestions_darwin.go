@@ -33,6 +33,7 @@ func (m *siteManager) createSuggestionsWindow() {
 		m.send(m.closeSuggestions)
 	})
 	m.registerCheckoutActions()
+	m.registerBranchPicker()
 	m.app.Event.On("devjay:suggestions-close", func(e *application.CustomEvent) {
 		if e.Sender == "suggested-actions" {
 			m.send(m.closeSuggestions)

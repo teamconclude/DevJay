@@ -4,6 +4,7 @@ import {readFile} from 'node:fs/promises';
 import vm from 'node:vm';
 import {cardStatus} from '../cmd/devjay/frontend/card-status.js';
 import {installCardActivation} from '../cmd/devjay/frontend/card-interaction.js';
+import {prCheckIndicator,prTagTone} from '../cmd/devjay/frontend/pr-status.js';
 import {nextNotice} from '../cmd/devjay/frontend/notice.js';
 const source=(await readFile(new URL('../cmd/devjay/frontend/app.js',import.meta.url),'utf8')).replace(/^import .*;\n/gm,'');
 
@@ -36,7 +37,7 @@ function app(search='') {
  const events={},calls=[];
  let drag, bridgeReport;
  const noop=()=>{};
- const context={document,location:{search},URLSearchParams,setTimeout,clearTimeout,nextNotice,performance:{now:()=>clock},
+ const context={prCheckIndicator,prTagTone,document,location:{search},URLSearchParams,setTimeout,clearTimeout,nextNotice,performance:{now:()=>clock},
   window:{addEventListener:noop,getSelection:()=>({isCollapsed:true})},
   Events:{On:(name,fn)=>events[name]=fn,Emit:(...args)=>{calls.push(args);return Promise.resolve();}},Window:{},
   createBridge:(send,report)=>{bridgeReport=report;return {emit:async(n,d)=>{await send(`devjay:${n}`,d);report('');},reply:noop};},
@@ -54,6 +55,19 @@ function app(search='') {
 const site=(id,branch='main')=>({id,path:`/tmp/${id}`,prefix:'/tmp/',name:id,git:{branch},position:{label:'Desktop 1'},window:{}});
 const state=sites=>({sites,preferences:{},layout:'horizontal',settingsOpen:true});
 const appLabels=view=>view.root.querySelectorAll('.development-app-group').map(group=>group.attrs['aria-label']);
+
+test('desktop Site and panel branch labels do not open the branch chooser',async()=>{
+ const item=site('a','feature/topic');item.git.head='current-head';
+ for(const search of ['?site=a','']) {
+  const view=app(search);view.snapshot(state([item]));
+  assert.equal(view.root.querySelector('.branch-switch'),null);
+  const branch=view.root.querySelector('.branch');
+  assert.equal(branch.tag,'div');assert.equal(branch.textContent,'feature/topic');
+  if(!search){branch.closest('button').onclick();view.click(branch);await Promise.resolve();}
+  assert.equal(view.calls.some(([name])=>name==='devjay:branches-open'),false);
+  assert.deepEqual(view.calls.filter(([name])=>name==='devjay:activate'),search?[]:[['devjay:activate','a']]);
+ }
+});
 
 test('ending a panel drag renders the latest snapshot even after cancellation',()=>{
  const view=app();
@@ -858,5 +872,21 @@ test('settings, viewer, and action snapshots never request app tooltip refresh',
   view.snapshot(state([{...item,developmentApps:[{name:'GoLand',agents:['Codex']}]}]));
   view.snapshot({...state([item]),preferences:{showIDEStatus:false}});
   assert.equal(view.calls.some(([name])=>name==='devjay:app-tooltip-refresh'),false,search);
+ }
+});
+
+test('approved card PRs are green unless CI needs attention, and drafts remain neutral',()=>{
+ for(const search of ['', '?site=a']) {
+  const view=app(search);
+  for(const [stateName,isDraft,ciState,tone] of [
+   ['Approved',false,'success','pr-approved'],['Approved',false,'pending','pr-approved'],
+   ['Approved',false,'failure','ci-failed'],['Approved',false,'action_required','ci-failed'],
+   ['Approved',true,'success',''],['Review required',false,'success',''],
+  ]) {
+   view.snapshot(state([{...site('a'),git:{branch:'feature',pullRequests:[{number:42,state:stateName,isDraft,ciState}]}}]));
+   const tag=view.root.querySelector('.pr-tag');
+   assert.equal(tag.classList.contains('pr-approved'),tone==='pr-approved');
+   assert.equal(tag.classList.contains('ci-failed'),tone==='ci-failed');
+  }
  }
 });

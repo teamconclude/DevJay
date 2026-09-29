@@ -41,7 +41,9 @@ In Settings, choose a horizontal, vertical, or custom layout, adjust window appe
 
 Click a card’s status or change count to inspect file diffs and commit history in its existing changes window. Right-click for a new window or Settings. Changes windows refresh automatically. From the changes window, open a file in your editor or review an available Git action: update, rebase, push, return after a merge, or replace verified rewritten remote history. Each action checks the checkout and requires a separate confirmation.
 
-Click the colored PR tag in a card’s upper-right corner to open its pull request. DevJay can reuse tabs in Safari, Chrome, Edge, and Brave with macOS Automation permission; right-click the tag to open a new tab alongside existing PRs.
+In the Changes window, click **Switch branch…** beside the branch name to choose another branch. Switching requires a clean checkout and a separate confirmation. If the destination has a newer remote version with no local-only commits, DevJay offers to use it; branches with unpublished or diverged commits keep their local version.
+
+Approved PR tags are green; failing CI takes priority in red. Click the colored PR tag in a card’s upper-right corner to open its pull request. DevJay can reuse tabs in Safari, Chrome, Edge, and Brave with macOS Automation permission; right-click the tag to open a new tab alongside existing PRs.
 
 Background monitoring fetches remote information without changing your local branches or working files. Offline or failed checks show cached/unavailable status. GitHub support currently covers GitHub.com; fork PRs targeting another repository and GitHub Enterprise are not yet resolved.
 

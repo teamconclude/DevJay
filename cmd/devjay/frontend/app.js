@@ -1,3 +1,4 @@
+import { prCheckIndicator, prTagTone } from './pr-status.js';
 import { Events, Window } from '/wails/runtime.js';
 import { createBridge } from './bridge.js';
 import { nextNotice } from './notice.js';
@@ -174,18 +175,6 @@ function developmentAppIndicator(site) {
   }
   return indicator;
 }
-function prCheckIndicator(pr) {
-  switch (pr.ciState) {
-    case 'failure': return {symbol:'×', tone:'ci-failed', label:'CI failed'};
-    case 'pending': return {symbol:'◷', tone:'', label:'CI running or queued'};
-    case 'action_required': return {symbol:'!', tone:'ci-failed', label:'CI needs attention'};
-    case 'cancelled': return {symbol:'⊘', tone:'', label:'CI cancelled'};
-    case 'neutral': return {symbol:'', tone:'', label:'CI checks skipped or neutral'};
-    case 'success': return {symbol:'', tone:'', label:'CI passed'};
-    case 'none': return {symbol:'', tone:'', label:'No CI checks reported'};
-    default: return {symbol:'', tone:'', label:pr.state === 'Merged' ? '' : 'CI status unavailable'};
-  }
-}
 function details(site, parent, showIDEStatus) {
   const {checked, ...displayGit} = site.git;
   const attention = (site.developmentApps || []).map(app => appWaitingAttention(site, app).map(entry => entry.serial));
@@ -203,7 +192,8 @@ function details(site, parent, showIDEStatus) {
   }
   const heading = el('div', 'card-heading');
   const title = siteID ? el('div', 'card-title') : button('', () => emit('activate', site.id), 'card-title');
-  title.append(pathLabel(site), el('div', 'branch', site.git.branch || 'Folder'));
+  const branch = el('div', 'branch', site.git.branch || 'Folder');
+  title.append(pathLabel(site), branch);
   title.title = siteID ? 'Drag to move this Site' : 'Go to this Site · Drag to move the panel';
   if (!siteID) title.setAttribute('aria-label', `Activate ${site.path}, ${site.git.branch || 'folder'}`);
   heading.append(title);
@@ -213,7 +203,7 @@ function details(site, parent, showIDEStatus) {
     const tags = el('div', 'card-prs');
     for (const pr of pullRequests) {
       const ci = prCheckIndicator(pr);
-      const tag = button(`${ci.symbol ? `${ci.symbol} ` : ''}#${pr.number}`, () => openPR(pr.number), `pr-tag status-link ${ci.tone}`.trim());
+      const tag = button(`${ci.symbol ? `${ci.symbol} ` : ''}#${pr.number}`, () => openPR(pr.number), `pr-tag status-link ${prTagTone(pr)}`.trim());
       tag.dataset.prNumber = String(pr.number);
       const description = [`PR #${pr.number}`, pr.isDraft ? 'Draft' : pr.state, ci.label].filter(Boolean).join(' · ');
       tag.title = `Open ${description}`;
@@ -287,7 +277,7 @@ if (viewer) {
   const updateSuggestions = mountViewerSuggestions(suggestions, request => emit('action-prepare', request));
   const updateOverview = () => updateSuggestions(currentSnapshot.sites.find(site => site.id === currentView?.siteID), currentSnapshot.action);
   renderViewerSnapshot = state => { currentSnapshot = state; updateOverview(); };
-  const renderViewer = mountGitViewer(root, data => emit('viewer-request', data), suggestions);
+  const renderViewer = mountGitViewer(root, data => emit('viewer-request', data), suggestions, siteID => emit('branches-open', {siteID}));
   Events.On(`devjay:viewer-state:${params.get('viewer')}`, event => {
     currentView = event.data; renderViewer(currentView); updateOverview(); reportUIReady();
   });

@@ -20,6 +20,9 @@ type ActionRequest struct {
 	Branch       string `json:"branch"`
 	Head         string `json:"head"`
 	DeleteBranch bool   `json:"deleteBranch"`
+	TargetBranch string `json:"targetBranch,omitempty"`
+	TargetRemote string `json:"targetRemote,omitempty"`
+	UpdateTarget bool   `json:"updateTarget,omitempty"`
 }
 
 type CheckoutPlan struct {
@@ -37,18 +40,28 @@ type CheckoutPlan struct {
 	gitDir                                                           string
 	gitDirInfo                                                       os.FileInfo
 	upstreamRef, upstreamRemote, upstreamMerge                       string
+	CanUpdateTarget                                                  bool   `json:"canUpdateTarget,omitempty"`
+	UpdateTarget                                                     bool   `json:"updateTarget,omitempty"`
+	CreateTarget                                                     bool   `json:"createTarget,omitempty"`
+	RemoteAhead                                                      int    `json:"remoteAhead,omitempty"`
+	LocalAhead                                                       int    `json:"localAhead,omitempty"`
+	RemoteTarget                                                     string `json:"remoteTarget,omitempty"`
+	RemoteNote                                                       string `json:"remoteNote,omitempty"`
+	TargetRemote                                                     string `json:"targetRemote,omitempty"`
+	switchTarget                                                     switchBranchState
 }
 
 type CheckoutAction struct {
-	Kind          string        `json:"kind,omitempty"`
-	CurrentBranch string        `json:"currentBranch,omitempty"`
-	CurrentHead   string        `json:"currentHead,omitempty"`
-	SiteID        string        `json:"siteID"`
-	Status        string        `json:"status"`
-	Message       string        `json:"message"`
-	Plan          *CheckoutPlan `json:"plan,omitempty"`
-	Files         []string      `json:"files,omitempty"`
-	Recovery      string        `json:"recovery,omitempty"`
+	Kind          string         `json:"kind,omitempty"`
+	CurrentBranch string         `json:"currentBranch,omitempty"`
+	CurrentHead   string         `json:"currentHead,omitempty"`
+	SiteID        string         `json:"siteID"`
+	Status        string         `json:"status"`
+	Message       string         `json:"message"`
+	Plan          *CheckoutPlan  `json:"plan,omitempty"`
+	Files         []string       `json:"files,omitempty"`
+	Recovery      string         `json:"recovery,omitempty"`
+	Branches      []BranchChoice `json:"branches,omitempty"`
 }
 
 func actionGit(ctx context.Context, path string, args ...string) ([]byte, error) {
@@ -150,6 +163,9 @@ func prepareCheckoutAction(ctx context.Context, path string, req ActionRequest, 
 	p.gitDirInfo, err = os.Stat(p.gitDir)
 	if err != nil {
 		return nil, errors.New("Could not verify the checkout identity.")
+	}
+	if req.Kind == "switch" {
+		return prepareBranchSwitch(ctx, p, req)
 	}
 	switch req.Kind {
 	case "update", "push", "replace":
@@ -266,6 +282,9 @@ func validateCheckoutPlan(ctx context.Context, p *CheckoutPlan, checkRemote bool
 	if m.Branch != p.Branch || m.OID != p.Head || m.BranchGeneration != p.branchGeneration {
 		return errors.New("The checkout changed since confirmation was prepared. Review the action again.")
 	}
+	if p.Kind == "switch" {
+		return validateBranchSwitch(ctx, p, checkRemote)
+	}
 	if gitString(ctx, p.path, "remote", "get-url", p.remote) != p.remoteURL {
 		return errors.New("The remote configuration changed. Review the action again.")
 	}
@@ -338,7 +357,7 @@ func applyCheckoutAction(ctx context.Context, p *CheckoutPlan) (result CheckoutA
 		}
 		result.CurrentBranch, result.CurrentHead = s.Branch, meta.OID
 		branch := p.Branch
-		if p.Kind == "merged" {
+		if p.Kind == "merged" || p.Kind == "switch" {
 			branch = p.Target
 		}
 		if result.Status == "complete" && (meta.Branch != branch || meta.OID != expectedResultHead) {
@@ -430,6 +449,18 @@ func applyCheckoutAction(ctx context.Context, p *CheckoutPlan) (result CheckoutA
 		return fail(err)
 	}
 	ctx = context.WithoutCancel(ctx)
+	if p.Kind == "switch" {
+		if err := applyBranchSwitch(ctx, p); err != nil {
+			return fail(err)
+		}
+		result.Status, result.Message = "complete", "Switched to "+p.Target+". Nothing was pushed."
+		if p.UpdateTarget {
+			result.Message = "Switched to " + p.Target + " and fast-forwarded to the confirmed remote version. Nothing was pushed."
+		} else if p.CreateTarget {
+			result.Message = "Created and switched to " + p.Target + ", tracking " + p.RemoteTarget + ". Nothing was pushed."
+		}
+		return result
+	}
 	if p.Kind == "replace" {
 		if err := replaceCheckout(ctx, p); err != nil {
 			return fail(err)
