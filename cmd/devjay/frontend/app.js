@@ -43,6 +43,41 @@ Events.On('devjay:pr-open-result', event => {
 });
 if (!settings && !viewer && !actions) installCardMenu(root, data => emit('card-menu', data));
 function pathLabel(site) { const n = el('div', 'path'); n.title = site.path; n.append(el('span', 'prefix', site.prefix), el('strong', '', site.name)); return n; }
+const waitingAttentionDuration = 4000;
+const waitingAttention = new Map();
+let waitingAttentionSerial = 0;
+function confirmedWaiting(app) {
+  return (app.agents || []).filter(agent => (agent === 'Claude Code' || agent === 'Codex') && app.waitingAgents?.includes(agent));
+}
+function confirmedWorking(app) {
+  return (app.agents || []).filter(agent => (agent === 'Claude Code' || agent === 'Codex') && app.workingAgents?.includes(agent) && !app.waitingAgents?.includes(agent));
+}
+function waitingAttentionKey(site, app, agent) { return JSON.stringify([site.id, site.path, app.bundleID || app.name, agent]); }
+function updateWaitingAttention(state) {
+  if (settings || viewer || actions) return;
+  const current = new Set(), now = performance.now();
+  if (state.preferences?.showIDEStatus !== false) {
+    for (const site of state.sites) {
+      if ((siteID && site.id !== siteID) || !site.developmentAppsKnown) continue;
+      for (const app of site.developmentApps || []) {
+        for (const agent of confirmedWaiting(app)) {
+          const key = waitingAttentionKey(site, app, agent);
+          current.add(key);
+          if (!waitingAttention.has(key)) waitingAttention.set(key, {started:now, serial:++waitingAttentionSerial});
+        }
+      }
+    }
+  }
+  for (const key of waitingAttention.keys()) if (!current.has(key)) waitingAttention.delete(key);
+}
+function appWaitingAttention(site, app) {
+  return confirmedWaiting(app).map(agent => waitingAttention.get(waitingAttentionKey(site, app, agent))).filter(Boolean);
+}
+function waitingAttentionElapsed(entries) {
+  if (!entries.length) return null;
+  const elapsed = performance.now() - Math.max(...entries.map(entry => entry.started));
+  return elapsed < waitingAttentionDuration ? elapsed : null;
+}
 function developmentAppIcon(name, source, size) {
   const icon = el('span', `development-app-icon${size === 16 ? ' development-agent-icon' : ''}`);
   icon.setAttribute('aria-hidden', 'true');
@@ -59,7 +94,9 @@ function developmentAppIcon(name, source, size) {
   return icon;
 }
 function developmentAppIndicator(site) {
-  const apps = site.developmentAppsKnown ? (site.developmentApps || []) : [];
+  const observedApps = site.developmentAppsKnown ? (site.developmentApps || []) : [];
+  const pairedApps = observedApps.filter(app => app.agents?.some(agent => agent === 'Claude Code' || agent === 'Codex'));
+  const apps = pairedApps.length ? pairedApps : observedApps;
   const indicator = el('div', 'development-app');
   if (!apps.length) {
     indicator.textContent = site.developmentAppsKnown ? 'No app detected' : 'App unknown';
@@ -68,8 +105,21 @@ function developmentAppIndicator(site) {
   for (const app of apps) {
     const agents = app.agents || [];
     const agentList = agents.length > 1 ? `${agents.slice(0, -1).join(', ')} and ${agents.at(-1)}` : agents[0];
-    const description = agents.length ? `${app.name} with ${agentList}` : app.name;
-    const group = el('span', `development-app-group${agents.length ? ' has-agents' : ''}`);
+    const waiting = confirmedWaiting(app);
+    const waitingList = waiting.length > 1 ? `${waiting.slice(0, -1).join(', ')} and ${waiting.at(-1)}` : waiting[0];
+    const working = confirmedWorking(app);
+    const workingList = working.length > 1 ? `${working.slice(0, -1).join(', ')} and ${working.at(-1)}` : working[0];
+    const description = (agents.length ? `${app.name} with ${agentList}` : app.name)
+      + (waiting.length ? ` · ${waitingList} ${waiting.length === 1 ? 'needs' : 'need'} input` : '')
+      + (working.length ? ` · ${workingList} ${working.length === 1 ? 'is' : 'are'} working` : '');
+    const group = el('span', `development-app-group${agents.length ? ' has-agents' : ''}${waiting.length ? ' needs-input' : working.length ? ' is-working' : ''}`);
+    const elapsed = waitingAttentionElapsed(appWaitingAttention(site, app));
+    if (elapsed !== null) {
+      group.classList.add('waiting-attention');
+      // Recreated DOM resumes the original finite pulse; ordinary snapshots
+      // never extend its deadline. CSS finishes without a timer or render.
+      group.style.animationDelay = `${-elapsed}ms`;
+    }
     group.dataset.appTooltip = description;
     group.setAttribute('aria-label', description);
     group.setAttribute('role', 'img');
@@ -79,20 +129,60 @@ function developmentAppIndicator(site) {
       const agentIcons = el('span', 'development-app-agents'); agentIcons.setAttribute('aria-hidden', 'true');
       for (const agent of agents) {
         const source = agent === 'Claude Code' ? '/icons/claude.png' : agent === 'Codex' ? '/icons/codex.png' : null;
-        agentIcons.append(developmentAppIcon(agent, source, 16));
+        const icon = developmentAppIcon(agent, source, 16);
+        if (waiting.includes(agent)) {
+          const marker = el('span', 'development-agent-input', '?'); marker.setAttribute('aria-hidden', 'true');
+          icon.append(marker);
+        } else if (working.includes(agent)) {
+          const marker = el('span', 'development-agent-working', '▶'); marker.setAttribute('aria-hidden', 'true');
+          icon.append(marker);
+        }
+        agentIcons.append(icon);
       }
       group.append(agentIcons);
+    }
+    if (working.length && !waiting.length) {
+      const dots = el('span', 'development-app-working-dots'); dots.setAttribute('aria-hidden', 'true');
+      const phase = performance.now();
+      for (let i = 0; i < 3; i++) {
+        const dot = el('span');
+        // Retain the staggered CSS phase across rebuilds without a timer.
+        dot.style.animationDelay = `${-((phase + i * 180) % 1800)}ms`;
+        dots.append(dot);
+      }
+      group.append(dots);
     }
     indicator.append(group);
   }
   return indicator;
 }
+function prCheckIndicator(pr) {
+  switch (pr.ciState) {
+    case 'failure': return {symbol:'×', tone:'ci-failed', label:'CI failed'};
+    case 'pending': return {symbol:'◷', tone:'', label:'CI running or queued'};
+    case 'action_required': return {symbol:'!', tone:'ci-failed', label:'CI needs attention'};
+    case 'cancelled': return {symbol:'⊘', tone:'', label:'CI cancelled'};
+    case 'neutral': return {symbol:'', tone:'', label:'CI checks skipped or neutral'};
+    case 'success': return {symbol:'', tone:'', label:'CI passed'};
+    case 'none': return {symbol:'', tone:'', label:'No CI checks reported'};
+    default: return {symbol:'', tone:'', label:pr.state === 'Merged' ? '' : 'CI status unavailable'};
+  }
+}
 function details(site, parent, showIDEStatus) {
   const {checked, ...displayGit} = site.git;
-  const signature = JSON.stringify([site.path, site.prefix, site.name, displayGit, site.developmentApps, site.developmentAppsKnown, showIDEStatus, site.position?.label]);
+  const attention = (site.developmentApps || []).map(app => appWaitingAttention(site, app).map(entry => entry.serial));
+  const signature = JSON.stringify([site.path, site.prefix, site.name, displayGit, site.developmentApps, site.developmentAppsKnown, showIDEStatus, site.position?.label, attention]);
   if (parent.dataset.details === signature) return;
   parent.dataset.details = signature;
   parent.replaceChildren();
+  const entries = (site.developmentApps || []).flatMap(app => appWaitingAttention(site, app));
+  const elapsed = waitingAttentionElapsed(entries);
+  if (showIDEStatus && elapsed !== null) {
+    const glow = el('span', 'card-waiting-glow');
+    glow.setAttribute('aria-hidden', 'true');
+    glow.style.animationDelay = `${-elapsed}ms`;
+    parent.append(glow);
+  }
   const heading = el('div', 'card-heading');
   const title = siteID ? el('div', 'card-title') : button('', () => emit('activate', site.id), 'card-title');
   title.append(pathLabel(site), el('div', 'branch', site.git.branch || 'Folder'));
@@ -104,9 +194,12 @@ function details(site, parent, showIDEStatus) {
   if (pullRequests.length) {
     const tags = el('div', 'card-prs');
     for (const pr of pullRequests) {
-      const tag = button(`#${pr.number}`, () => openPR(pr.number), 'pr-tag status-link');
+      const ci = prCheckIndicator(pr);
+      const tag = button(`${ci.symbol ? `${ci.symbol} ` : ''}#${pr.number}`, () => openPR(pr.number), `pr-tag status-link ${ci.tone}`.trim());
       tag.dataset.prNumber = String(pr.number);
-      tag.title = `Open PR #${pr.number}${pr.isDraft ? ' · Draft' : pr.state ? ` · ${pr.state}` : ''}`;
+      const description = [`PR #${pr.number}`, pr.isDraft ? 'Draft' : pr.state, ci.label].filter(Boolean).join(' · ');
+      tag.title = `Open ${description}`;
+      tag.dataset.appTooltip = description;
       tag.setAttribute('aria-label', tag.title); tags.append(tag);
     }
     heading.append(tags);
@@ -351,7 +444,8 @@ function refreshAppTooltip(state) {
     state.preferences?.showIDEStatus !== false,
     state.layout || 'horizontal', state.decoration || 'none',
     sites.map(site => [site.id, site.path, site.position?.label, state.placements?.[site.id], site.developmentAppsKnown,
-      (site.developmentApps || []).map(app => [app.bundleID, app.name, app.agents, app.windowCount])]),
+      (site.developmentApps || []).map(app => [app.bundleID, app.name, app.agents, app.waitingAgents, app.workingAgents, app.windowCount]),
+      (site.git.pullRequests || []).map(pr => [pr.number, pr.state, pr.isDraft, pr.ciState])]),
   ]);
   if (signature === appTooltipSignature) return;
   appTooltipSignature = signature;
@@ -363,6 +457,7 @@ function render(state) {
   snapshot = state;
   const showIDEStatus = state.preferences?.showIDEStatus !== false;
   if (actions) { renderSuggestedActions(state); return; }
+  updateWaitingAttention(state);
   if (panelDragging) return;
   document.body.dataset.layout = state.layout || 'horizontal';
   document.body.dataset.settingsOpen = String(!!state.settingsOpen);
@@ -399,7 +494,7 @@ function render(state) {
     }
     for (const site of state.sites) { const row = [...list.children].find(n => n.dataset.id === site.id); const status = row.querySelector('.row-status'); status.textContent = [site.git.branch, site.position.label || 'Desktop unknown'].filter(Boolean).join(' · '); status.title = status.textContent; }
   } else if (siteID) {
-    const site = state.sites.find(s => s.id === siteID); if (!site) return;
+    const site = state.sites.find(s => s.id === siteID); if (!site) { list.replaceChildren(); list.dataset.details = ''; return; }
     details(site, list, showIDEStatus); root.title = `${site.path}\n${site.position.label || 'Desktop unknown'}\nDrag to move this Site`;
   } else {
     if (!state.sites.length) {

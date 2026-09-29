@@ -21,9 +21,13 @@ type developmentAppWindowScan struct {
 
 type observedAgentProcess struct {
 	Name         string `json:"name"`
+	PID          int    `json:"pid"`
+	Started      uint64 `json:"started"`
 	Cwd          string `json:"cwd"`
 	Ancestors    []int  `json:"ancestors"`
 	HostBundleID string `json:"hostBundleID"`
+	Waiting      bool   `json:"-"`
+	Working      bool   `json:"-"`
 }
 
 // Called only by the background scan. Resolve symlinks once per distinct path;
@@ -110,6 +114,18 @@ func matchDevelopmentAgents(targets map[string]developmentAppTarget, windows dev
 			if !slices.Contains(visible.Agents, process.Name) {
 				visible.Agents = append(visible.Agents, process.Name)
 				slices.Sort(visible.Agents)
+			}
+			if process.Waiting {
+				if !slices.Contains(visible.WaitingAgents, process.Name) {
+					visible.WaitingAgents = append(visible.WaitingAgents, process.Name)
+					slices.Sort(visible.WaitingAgents)
+				}
+				// A busy session must not hide a second session that needs input
+				// in this same host, regardless of process enumeration order.
+				visible.WorkingAgents = slices.DeleteFunc(visible.WorkingAgents, func(name string) bool { return name == process.Name })
+			} else if process.Working && !slices.Contains(visible.WaitingAgents, process.Name) && !slices.Contains(visible.WorkingAgents, process.Name) {
+				visible.WorkingAgents = append(visible.WorkingAgents, process.Name)
+				slices.Sort(visible.WorkingAgents)
 			}
 		}
 	}

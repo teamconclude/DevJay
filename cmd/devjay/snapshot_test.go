@@ -36,3 +36,37 @@ func TestSnapshotSignatureIgnoresPollTimeButRetainsVisibleChanges(t *testing.T) 
 		}
 	}
 }
+
+func TestSnapshotSignatureRetainsWaitingOnlyChanges(t *testing.T) {
+	s := appSnapshot{Sites: []SiteView{{Site: Site{ID: "one"}, DevelopmentApps: []DevelopmentApp{
+		{Name: "GoLand", BundleID: "com.jetbrains.goland", Agents: []string{"Claude Code", "Codex"}},
+	}}}}
+	before := snapshotSignature(s)
+	s.Sites[0].DevelopmentApps[0].WaitingAgents = []string{"Claude Code"}
+	claude := snapshotSignature(s)
+	s.Sites[0].DevelopmentApps[0].WaitingAgents = []string{"Codex"}
+	if codex := snapshotSignature(s); claude == before || codex == before || codex == claude {
+		t.Fatal("a change in which agent needs input must publish a new snapshot")
+	}
+	s.Sites[0].DevelopmentApps[0].WaitingAgents = nil
+	if snapshotSignature(s) != before {
+		t.Fatal("resuming should restore the ordinary agent display")
+	}
+}
+
+func TestSnapshotSignatureRetainsWorkingOnlyChanges(t *testing.T) {
+	s := appSnapshot{Sites: []SiteView{{Site: Site{ID: "one"}, DevelopmentApps: []DevelopmentApp{
+		{Name: "GoLand", BundleID: "com.jetbrains.goland", Agents: []string{"Claude Code", "Codex"}},
+	}}}}
+	before := snapshotSignature(s)
+	s.Sites[0].DevelopmentApps[0].WorkingAgents = []string{"Claude Code"}
+	claude := snapshotSignature(s)
+	s.Sites[0].DevelopmentApps[0].WorkingAgents = []string{"Codex"}
+	if codex := snapshotSignature(s); claude == before || codex == before || codex == claude {
+		t.Fatal("a change in which agent is working must publish a new snapshot")
+	}
+	s.Sites[0].DevelopmentApps[0].WorkingAgents = nil
+	if snapshotSignature(s) != before {
+		t.Fatal("clearing working should restore the ordinary agent display")
+	}
+}

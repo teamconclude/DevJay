@@ -9,12 +9,13 @@ package main
 import "C"
 
 import (
+	"context"
 	"encoding/json"
 	"time"
 	"unsafe"
 )
 
-func scanDevelopmentApps(targets map[string]developmentAppTarget) developmentAppScan {
+func scanDevelopmentApps(ctx context.Context, targets map[string]developmentAppTarget) developmentAppScan {
 	windows := make(map[string]uint32, len(targets))
 	for id, target := range targets {
 		windows[id] = target.WindowNumber
@@ -39,6 +40,7 @@ func scanDevelopmentApps(targets map[string]developmentAppTarget) developmentApp
 			C.free(unsafe.Pointer(processes))
 		}
 	}
+	observeAgentWaiting(ctx, targets, result, agents)
 	return matchDevelopmentAgents(targets, result, agents)
 }
 
@@ -53,7 +55,7 @@ func (m *siteManager) observeDevelopmentApps(windows map[string]uint32, position
 		return
 	}
 	go func() {
-		result := scanDevelopmentApps(request)
+		result := scanDevelopmentApps(m.app.Context(), request)
 		m.send(func() {
 			m.developmentApps.finish(request, generation, result, time.Now())
 			m.publishSnapshot(false)

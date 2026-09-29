@@ -14,6 +14,7 @@ type PullRequestLink struct {
 	URL     string `json:"url"`
 	State   string `json:"state"`
 	IsDraft bool   `json:"isDraft"`
+	CIState string `json:"ciState,omitempty"`
 }
 
 type prOpenRequest struct {
@@ -57,6 +58,7 @@ func openPullRequestLinks(data []byte, repo string) []PullRequestLink {
 			state = "Draft"
 		}
 		if link, ok := pullRequestLink(repo, pr.Number, state, pr.IsDraft); ok {
+			link.CIState = pullRequestCIState(pr)
 			result = append(result, link)
 			seen[pr.Number] = true
 		}

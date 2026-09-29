@@ -8,11 +8,13 @@ import (
 // These are observed windows on a Site's desktop, not proof that an app has
 // opened the Site's folder. File-opening preferences remain separate.
 type DevelopmentApp struct {
-	Name        string   `json:"name"`
-	BundleID    string   `json:"bundleID"`
-	Icon        string   `json:"icon,omitempty"`
-	WindowCount int      `json:"windowCount,omitempty"`
-	Agents      []string `json:"agents,omitempty"`
+	Name          string   `json:"name"`
+	BundleID      string   `json:"bundleID"`
+	Icon          string   `json:"icon,omitempty"`
+	WindowCount   int      `json:"windowCount,omitempty"`
+	Agents        []string `json:"agents,omitempty"`
+	WaitingAgents []string `json:"waitingAgents,omitempty"`
+	WorkingAgents []string `json:"workingAgents,omitempty"`
 }
 
 type developmentAppScan struct {

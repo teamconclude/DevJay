@@ -131,7 +131,8 @@ char *devjay_agent_processes(void) {
             info.pvi_cdir.vip_path[sizeof(info.pvi_cdir.vip_path) - 1] = 0;
             NSString *cwd = [NSString stringWithUTF8String:info.pvi_cdir.vip_path];
             if (!cwd.isAbsolutePath || !agent_process_unchanged(pid.intValue, record, user)) continue;
-            NSMutableDictionary *result = [@{@"name": name, @"cwd": cwd, @"ancestors": ancestors} mutableCopy];
+            NSMutableDictionary *result = [@{@"name": name, @"pid": pid, @"started": record[@"started"],
+                @"cwd": cwd, @"ancestors": ancestors} mutableCopy];
             for (NSNumber *parentPID in ancestors) {
                 NSDictionary *parent = table[parentPID];
                 if (!agent_process_unchanged(parentPID.intValue, parent, user)) continue;

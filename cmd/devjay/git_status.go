@@ -504,7 +504,7 @@ func refreshRemote(ctx context.Context, m gitMeta, c *remoteCache) {
 	c.PullRequests = nil
 	c.MergedPR = nil
 	if m.GitHubRepo != "" && m.Branch != "(detached)" && !m.Initial {
-		out, err := runCommand(ctx, 15*time.Second, "gh", "pr", "list", "--repo", m.GitHubRepo, "--head", m.pullRequestBranch(), "--state", "open", "--limit", "20", "--json", "number,isDraft,reviewDecision,headRepositoryOwner,headRefOid")
+		out, err := runCommand(ctx, 15*time.Second, "gh", "pr", "list", "--repo", m.GitHubRepo, "--head", m.pullRequestBranch(), "--state", "open", "--limit", "20", "--json", "number,isDraft,reviewDecision,headRepositoryOwner,headRefOid,statusCheckRollup")
 		if err != nil {
 			c.GitHub = "GitHub unavailable"
 		} else {

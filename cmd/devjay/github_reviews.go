@@ -18,6 +18,7 @@ type pullRequest struct {
 	IsDraft             bool
 	ReviewDecision      string
 	HeadRefOid          string
+	StatusCheckRollup   json.RawMessage
 	HeadRepositoryOwner struct{ Login string }
 	TitleEditedAt       time.Time
 	BodyEditedAt        time.Time

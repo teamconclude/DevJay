@@ -293,15 +293,58 @@ html:not([data-local-drag-press]) .strip *, html:not([data-local-drag-press]) .w
 .card-prs { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; flex-shrink: 0; max-width: 45%; }
 .pr-tag { padding: 2px 6px; border: 1px solid #b39aff45; border-radius: 5px; background: #aa85ff1a; color: #d1baff; font-size: 13px; font-weight: 600; line-height: 17px; white-space: nowrap; --wails-draggable: no-drag; }
 .pr-tag:hover, .pr-tag.status-hover { background: #aa85ff33; border-color: #b39aff80; }
+.pr-tag.ci-failed { border-color: #ef878999; background: #e3535a26; color: #ffb7ba; }
+.pr-tag.ci-failed:hover, .pr-tag.ci-failed.status-hover { border-color: #ffb0b2; background: #e3535a40; }
 
 /* Separate the branch heading from compact, independently readable status rows. */
 .card-status { border-top: 1px solid #ffffff12; padding-top: 7px; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .development-app { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-height: 28px; margin-top: auto; padding-top: 10px; color: #97a6bb; font-size: 11px; line-height: 14px; min-width: 0; flex-shrink: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; --wails-draggable: no-drag; }
 .development-app-group { display: inline-flex; align-items: center; flex: 0 0 auto; gap: 5px; }
 .development-app-group.has-agents { min-height: 28px; padding: 1px 5px 1px 2px; border: 1px solid #ffffff24; border-radius: 7px; background: #ffffff08; }
+.development-app-group.is-working { border-color: #75d4bd80; background: #75d4bd12; }
+.development-app-working-dots { display: inline-flex; align-items: center; gap: 3px; height: 12px; padding-left: 2px; pointer-events: none; }
+.development-app-working-dots > span { width: 4px; height: 4px; border-radius: 50%; background: #a2e5d5; opacity: .3; animation: agent-working-dots 1.8s ease-in-out infinite; }
+@keyframes agent-working-dots {
+  0%, 60%, 100% { opacity: .3; transform: translateY(0); }
+  30% { opacity: 1; transform: translateY(-2px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .development-app-working-dots > span { animation: none; opacity: .7; transform: none; }
+}
+.development-app-group.needs-input { border-color: #eab45f; background: #eab45f20; }
+.development-app-group.waiting-attention { animation: development-app-attention 4s ease-in-out; }
+.strip .card, .workspace .site-detail { isolation: isolate; }
+.workspace .site-detail { position: relative; }
+/* Soft light spreads from the card center behind the content.
+   Clip the decorative circle inside the active Site's blue outline. */
+.card-waiting-glow { position: absolute; z-index: -1; pointer-events: none; user-select: none; inset: 2px; border-radius: inherit; overflow: hidden; opacity: 0; animation: card-waiting-attention 4s ease-in-out; }
+.card-waiting-glow::before { content: ''; position: absolute; inset: -50%; border-radius: 50%; background: radial-gradient(ellipse closest-side at center, #ffd58b66 0%, #edb56a36 35%, #e9a55616 68%, #e9a55600 100%); transform: scale(.55); animation: card-waiting-radiance 4s ease-in-out; animation-delay: inherit; }
+@keyframes card-waiting-attention {
+  0%, 50%, 100% { opacity: 0; }
+  25% { opacity: 1; }
+  75% { opacity: .7; }
+}
+@keyframes card-waiting-radiance {
+  0%, 50%, 100% { transform: scale(.55); }
+  25% { transform: scale(1.2); }
+  75% { transform: scale(1.12); }
+}
+/* Two soft breaths of warm light; the second is quieter before settling.
+   Keep the glow inside the capsule so it never shifts or covers nearby icons. */
+@keyframes development-app-attention {
+  0%, 50%, 100% { border-color: #eab45f; background: #eab45f20; box-shadow: inset 0 0 10px #ffcf8f00; }
+  25% { border-color: #ffe0a8; background: #edb56a60; box-shadow: inset 0 0 10px #ffcf8f55; }
+  75% { border-color: #f8d69b; background: #edb56a4d; box-shadow: inset 0 0 10px #ffcf8f40; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .development-app-group.waiting-attention { animation: none; }
+  .card-waiting-glow, .card-waiting-glow::before { animation: none; }
+}
 .development-app-agents { display: inline-flex; align-items: center; gap: 3px; }
 .development-app-icon { --app-icon-size: 22px; position: relative; display: inline-block; width: var(--app-icon-size); height: var(--app-icon-size); flex: 0 0 var(--app-icon-size); }
 .development-agent-icon { --app-icon-size: 16px; }
+.development-agent-input { position: absolute; right: -2px; bottom: -2px; z-index: 1; display: flex; align-items: center; justify-content: center; width: 9px; height: 9px; border-radius: 50%; background: #ffc467; color: #2a1d09; font-size: 8px; font-weight: 700; line-height: 9px; pointer-events: none; }
+.development-agent-working { position: absolute; right: -2px; bottom: -2px; z-index: 1; display: flex; align-items: center; justify-content: center; width: 9px; height: 9px; border-radius: 50%; background: #88dbc5; color: #10352c; font-size: 6px; line-height: 9px; pointer-events: none; }
 .development-app-icon img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; -webkit-user-drag: none; }
 .development-app-initials { display: inline-flex; width: 100%; height: 100%; align-items: center; justify-content: center; background: #ffffff0c; border-radius: 4px; color: #bfcbdd; font-size: 9px; font-weight: 600; }
 .development-app-icon [hidden] { display: none; }

@@ -9,7 +9,7 @@ const source=(await readFile(new URL('../cmd/devjay/frontend/app.js',import.meta
 
 // Exercise the real snapshot renderer with a small DOM and the Wails boundary.
 function app(search='') {
- let document;
+ let document, clock=0;
  class Element {
   constructor(tag){this.tag=tag;this.children=[];this.dataset={};this.style={};this.className='';this.attrs={};this.textContent='';this.listeners={};
    this.classList={add:c=>{this.className+=' '+c;},contains:c=>this.className.split(' ').includes(c),toggle:(c,on)=>{const all=new Set(this.className.split(' '));on?all.add(c):all.delete(c);this.className=[...all].join(' ');}};
@@ -36,7 +36,7 @@ function app(search='') {
  const events={},calls=[];
  let drag, bridgeReport;
  const noop=()=>{};
- const context={document,location:{search},URLSearchParams,setTimeout,clearTimeout,nextNotice,
+ const context={document,location:{search},URLSearchParams,setTimeout,clearTimeout,nextNotice,performance:{now:()=>clock},
   window:{addEventListener:noop,getSelection:()=>({isCollapsed:true})},
   Events:{On:(name,fn)=>events[name]=fn,Emit:(...args)=>{calls.push(args);return Promise.resolve();}},Window:{},
   createBridge:(send,report)=>{bridgeReport=report;return {emit:async(n,d)=>{await send(`devjay:${n}`,d);report('');},reply:noop};},
@@ -46,7 +46,7 @@ function app(search='') {
   installPanelDrag:(_list,options)=>{drag=options;},installCardActivation,installDragOriginGuard:noop,installCardHover:noop,installCardMenu:noop,
  };
  vm.runInNewContext(source,context);
- return {document,root,calls,reportBridge:(text,error)=>bridgeReport(text,error),event:(name,data)=>events[name]?.({data}),get drag(){return drag;},snapshot:s=>events['devjay:snapshot']({data:s}),click:target=>{
+ return {document,root,calls,advance:ms=>{clock+=ms;},reportBridge:(text,error)=>bridgeReport(text,error),event:(name,data)=>events[name]?.({data}),get drag(){return drag;},snapshot:s=>events['devjay:snapshot']({data:s}),click:target=>{
   const event={button:0,defaultPrevented:false,target};
   for(let node=target;node;node=node.parent)for(const listener of node.listeners.click || [])listener(event);
  }};
@@ -137,6 +137,68 @@ test('PR tags live in card headers, open the PR, and disappear when the PR is go
  }
 });
 
+test('failed CI marks only its PR tag, preserves review state, and opens the same PR',async()=>{
+ for(const search of ['', '?site=a']) {
+  const view=app(search), item=site('a');
+  item.git={branch:'feature',github:'PR #1234 · Approved; PR #1235 · Review required',pullRequests:[
+   {number:1234,state:'Approved',ciState:'failure'},
+   {number:1235,state:'Review required',ciState:'success'},
+  ]};
+  view.snapshot({...state([item]),preferences:{showIDEStatus:false}});
+  const [failed,passed]=view.root.querySelectorAll('.pr-tag');
+  assert.equal(failed.textContent,'× #1234');
+  assert.equal(failed.classList.contains('ci-failed'),true);
+  assert.equal(failed.dataset.appTooltip,'PR #1234 · Approved · CI failed');
+  assert.equal(failed.attrs['aria-label'],'Open PR #1234 · Approved · CI failed');
+  assert.equal(passed.textContent,'#1235');assert.equal(passed.classList.contains('ci-failed'),false);
+  assert.equal(passed.dataset.appTooltip,'PR #1235 · Review required · CI passed');
+  assert.equal(view.calls.some(([name])=>name==='devjay:activate'||name==='devjay:pr-open'),false);
+  await failed.onclick();view.click(failed);
+  assert.equal(view.calls.filter(([name])=>name==='devjay:pr-open').length,1);
+  assert.equal(view.calls.find(([name])=>name==='devjay:pr-open')[1].number,1234);
+  assert.equal(view.calls.some(([name])=>name==='devjay:activate'||name==='devjay:viewer-open'),false);
+ }
+});
+
+test('CI-only updates clear failure on rerun or success and refresh the native PR tooltip',()=>{
+ for(const search of ['', '?site=a']) {
+  const view=app(search), item=site('a');
+  const show=ciState=>view.snapshot(state([{...item,git:{branch:'feature',pullRequests:[{number:1234,state:'Open',ciState}]}}]));
+  const tag=()=>view.root.querySelector('.pr-tag');
+  const refreshes=()=>view.calls.filter(([name])=>name==='devjay:app-tooltip-refresh').length;
+  show('failure');const first=tag();assert.equal(refreshes(),1);
+  show('failure');assert.equal(tag(),first);assert.equal(refreshes(),1);
+  show('pending');assert.notEqual(tag(),first);assert.equal(tag().textContent,'◷ #1234');
+  assert.equal(tag().classList.contains('ci-failed'),false);assert.equal(refreshes(),2);
+  assert.match(tag().dataset.appTooltip,/CI running or queued/);
+  show('success');assert.equal(tag().textContent,'#1234');assert.equal(tag().classList.contains('ci-failed'),false);
+  assert.equal(refreshes(),3);assert.match(tag().attrs['aria-label'],/CI passed/);
+  show('unknown');assert.doesNotMatch(tag().attrs['aria-label'],/passed|failed/);
+  assert.equal(tag().classList.contains('ci-failed'),false);assert.equal(refreshes(),4);
+  view.snapshot(state([item]));assert.equal(tag(),null);assert.equal(refreshes(),5);
+ }
+});
+
+test('CI outcomes distinguish action required, cancellation, neutral checks, and missing data',()=>{
+ const view=app(),item=site('a');
+ const cases=[
+  ['action_required','! #1234','CI needs attention',true],
+  ['cancelled','⊘ #1234','CI cancelled',false],
+  ['neutral','#1234','CI checks skipped or neutral',false],
+  ['none','#1234','No CI checks reported',false],
+  [undefined,'#1234','CI status unavailable',false],
+  ['unexpected','#1234','CI status unavailable',false],
+ ];
+ for(const [ciState,text,label,red] of cases) {
+  view.snapshot(state([{...item,git:{pullRequests:[{number:1234,state:'Draft',isDraft:true,ciState}]}}]));
+  const tag=view.root.querySelector('.pr-tag');
+  assert.equal(tag.textContent,text);assert.equal(tag.classList.contains('ci-failed'),red);
+  assert.equal(tag.dataset.appTooltip,`PR #1234 · Draft · ${label}`);
+ }
+ view.snapshot(state([{...item,git:{pullRequests:[{number:1234,state:'Merged'}]}}]));
+ assert.equal(view.root.querySelector('.pr-tag').dataset.appTooltip,'PR #1234 · Merged');
+});
+
 test('edit and commit badges retain their category for click and context menus',async()=>{
  const view=app(),item=site('a');
  item.git={branch:'feature',ahead:2,behind:3,changes:25};view.snapshot(state([item]));
@@ -207,12 +269,38 @@ test('agent presence updates without app or Git changes and keeps full app and a
    {name:'ChatGPT',bundleID:'com.openai.chat'},
    {name:'Claude',bundleID:'com.anthropic.claudefordesktop',agents:[]},
   ]);
-  assert.deepEqual(appLabels(view),['GoLand with Claude Code and Codex','iTerm2 with Codex','ChatGPT','Claude']);
-  assert.deepEqual(indicator().querySelectorAll('[data-app-tooltip]').map(node=>node.dataset.appTooltip),['GoLand with Claude Code and Codex','iTerm2 with Codex','ChatGPT','Claude']);
+  assert.deepEqual(appLabels(view),['GoLand with Claude Code and Codex','iTerm2 with Codex']);
+  assert.deepEqual(indicator().querySelectorAll('[data-app-tooltip]').map(node=>node.dataset.appTooltip),['GoLand with Claude Code and Codex','iTerm2 with Codex']);
   assert.doesNotMatch(indicator().textContent,/working|waiting|idle|blocked/i);
   assert.equal(view.calls.some(([name])=>name==='devjay:activate'),false,'presence updates do not activate a Site');
   show([{...goLand,agents:[]}]);
   assert.deepEqual(appLabels(view),['GoLand'],'cleared agent readings do not retain stale labels');
+ }
+});
+
+test('recognized agent pairs hide unpaired apps without mutating observations and restore all apps when pairs disappear',()=>{
+ for(const search of ['', '?site=a']) {
+  const view=app(search), item={...site('a'),developmentAppsKnown:true};
+  const observed=Object.freeze([
+   Object.freeze({name:'ChatGPT'}),
+   Object.freeze({name:'GoLand',agents:Object.freeze(['Claude Code'])}),
+   Object.freeze({name:'VS Code',agents:Object.freeze(['Other Agent'])}),
+   Object.freeze({name:'iTerm2',agents:Object.freeze(['Codex'])}),
+   Object.freeze({name:'Claude',agents:Object.freeze([])}),
+  ]);
+  const before=JSON.stringify(observed);
+  view.snapshot(state([{...item,developmentApps:observed}]));
+  assert.deepEqual(appLabels(view),['GoLand with Claude Code','iTerm2 with Codex']);
+  assert.equal(JSON.stringify(observed),before,'filtering leaves snapshot apps and agent arrays intact');
+  const unpaired=observed.map(app=>app.name==='GoLand'||app.name==='iTerm2'?{...app,agents:[]}:app);
+  view.snapshot(state([{...item,developmentApps:unpaired}]));
+  assert.deepEqual(appLabels(view),['ChatGPT','GoLand','VS Code with Other Agent','iTerm2','Claude'],'unknown agents alone do not hide other observed apps');
+  view.snapshot(state([{...item,developmentApps:observed}]));
+  assert.deepEqual(appLabels(view),['GoLand with Claude Code','iTerm2 with Codex'],'returning pairs restore the filtered groups in original order');
+  view.snapshot(state([{...item,developmentAppsKnown:false,developmentApps:observed}]));
+  assert.equal(view.root.querySelector('.development-app').textContent,'App unknown');
+  assert.deepEqual(appLabels(view),[],'unknown observations never show stale paired apps');
+  assert.equal(view.calls.some(([name])=>name==='devjay:activate'),false);
  }
 });
 
@@ -344,7 +432,7 @@ test('concise hover targets cover only grouped capsules or single icons',()=>{
   assert.equal(indicator.closest('[data-app-tooltip]'),undefined,'row whitespace and outer padding are not hover targets');
   assert.equal(indicator.title,undefined);
   const groups=indicator.querySelectorAll('[data-app-tooltip]');
-  assert.deepEqual(groups.map(group=>group.dataset.appTooltip),['GoLand with Claude Code and Codex','iTerm2 with Codex','ChatGPT']);
+  assert.deepEqual(groups.map(group=>group.dataset.appTooltip),['GoLand with Claude Code and Codex','iTerm2 with Codex']);
   for(const group of groups) {
    assert.equal(group.title,undefined);
    assert.equal(group.attrs['aria-label'],group.dataset.appTooltip);
@@ -353,11 +441,16 @@ test('concise hover targets cover only grouped capsules or single icons',()=>{
   }
   assert.equal(groups[0].attrs.role,'img');
   assert.equal(groups[0].classList.contains('has-agents'),true);
-  assert.equal(groups[2].classList.contains('has-agents'),false);
-  assert.equal(groups[2].querySelector('.development-app-agents'),null);
   for(const group of groups) for(const child of [...group.querySelectorAll('img'),...group.querySelectorAll('.development-app-initials')]) {
    assert.equal(child.closest('[data-app-tooltip]'),group,'all child icons use their owning app’s single hover target');
   }
+  view.snapshot(state([{...item,developmentApps:[{name:'ChatGPT',icon:appIcon}]}]));
+  const single=view.root.querySelector('.development-app-group');
+  assert.equal(single.dataset.appTooltip,'ChatGPT');
+  assert.equal(single.classList.contains('has-agents'),false);
+  assert.equal(single.querySelector('.development-app-agents'),null);
+  assert.equal(single.querySelector('img').closest('[data-app-tooltip]'),single);
+  assert.equal(single.parent.closest('[data-app-tooltip]'),undefined);
   assert.equal(view.calls.some(([name])=>name==='devjay:activate'),false);
  }
 });
@@ -371,7 +464,7 @@ test('bundled agent icons preserve host association and order independently of i
    {name:'iTerm2',agents:['Other Agent']},
   ]}]));
   const groups=view.root.querySelectorAll('.development-app-group');
-  assert.equal(groups.length,3);
+  assert.equal(groups.length,2);
   assert.deepEqual(groups[0].querySelectorAll('img').map(img=>[img.src,img.width,img.height]),[[appIcon,22,22],['/icons/claude.png',16,16],['/icons/codex.png',16,16]]);
   assert.deepEqual(groups[1].querySelectorAll('img').map(img=>img.src),['/icons/codex.png','/icons/claude.png']);
   const agent=groups[0].querySelector('.development-agent-icon');
@@ -380,7 +473,8 @@ test('bundled agent icons preserve host association and order independently of i
   image.onload();assert.equal(fallback.hidden,true);
   image.onerror();assert.equal(fallback.hidden,false);assert.equal(agent.querySelector('img'),null);
   assert.equal(fallback.closest('[data-app-tooltip]'),groups[0]);
-  assert.equal(groups[2].querySelector('.development-agent-icon').querySelector('.development-app-initials').textContent,'OA');
+  view.snapshot(state([{...site('a'),developmentAppsKnown:true,developmentApps:[{name:'iTerm2',agents:['Other Agent']}]}]));
+  assert.equal(view.root.querySelector('.development-agent-icon').querySelector('.development-app-initials').textContent,'OA');
  }
 });
 
@@ -420,6 +514,296 @@ test('tooltip refresh follows rendered app content and visibility changes, witho
   assert.equal(view.root.querySelector('.development-app'),null);
   view.snapshot(state([changed]));assert.equal(updates().length,4);
   view.snapshot(state([{...changed,path:'/tmp/moved',position:{label:'Desktop 4'}}]));assert.equal(updates().length,5);
+ }
+});
+
+test('confirmed waiting-only changes mark the relevant agents and refresh or clear stationary hover',()=>{
+ for(const search of ['', '?site=a']) {
+  const view=app(search), item={...site('a'),developmentAppsKnown:true};
+  const host={name:'GoLand',agents:['Claude Code','Codex'],icon:appIcon};
+  const show=waitingAgents=>view.snapshot(state([{...item,developmentApps:[{...host,waitingAgents}]}]));
+  const group=()=>view.root.querySelector('.development-app-group');
+  const refreshes=()=>view.calls.filter(([name])=>name==='devjay:app-tooltip-refresh').length;
+  show(undefined);
+  assert.equal(group().classList.contains('needs-input'),false);
+  assert.equal(group().querySelector('.development-agent-input'),null);
+  const before=group();
+  show(['Claude Code']);
+  assert.notEqual(group(),before,'waiting-only metadata changes rebuild the indicator');
+  assert.equal(refreshes(),2);
+  assert.equal(group().classList.contains('needs-input'),true);
+  assert.equal(group().dataset.appTooltip,'GoLand with Claude Code and Codex · Claude Code needs input');
+  assert.equal(group().attrs['aria-label'],group().dataset.appTooltip);
+  const agentIcons=group().querySelectorAll('.development-agent-icon');
+  assert.equal(agentIcons[0].querySelector('.development-agent-input').textContent,'?');
+  assert.equal(agentIcons[1].querySelector('.development-agent-input'),null);
+  assert.equal(group().querySelector('.development-app-icon').querySelector('.development-agent-input'),null,'host icon has no question marker');
+  const unchanged=group();
+  show(['Claude Code']);assert.equal(group(),unchanged);assert.equal(refreshes(),2);
+  show(['Claude Code','Codex']);
+  assert.equal(group().querySelectorAll('.development-agent-input').length,2);
+  assert.equal(group().dataset.appTooltip,'GoLand with Claude Code and Codex · Claude Code and Codex need input');
+  show([]);
+  assert.equal(refreshes(),4);
+  assert.equal(group().classList.contains('needs-input'),false);
+  assert.equal(group().querySelector('.development-agent-input'),null);
+  assert.equal(group().dataset.appTooltip,'GoLand with Claude Code and Codex');
+  show(['Codex']);
+  assert.equal(group().querySelectorAll('.development-agent-icon')[0].querySelector('.development-agent-input'),null);
+  assert.ok(group().querySelectorAll('.development-agent-icon')[1].querySelector('.development-agent-input'));
+  show(undefined);
+  assert.equal(refreshes(),6);
+  assert.equal(group().classList.contains('needs-input'),false);
+  assert.doesNotMatch(group().dataset.appTooltip,/input|active|idle|not waiting/i,'missing waiting metadata makes no activity claim');
+  assert.equal(view.calls.some(([name])=>name==='devjay:activate'),false);
+ }
+});
+
+test('confirmed working updates the correct agent, clears on missing status, and refreshes hover without attention',()=>{
+ for(const search of ['', '?site=a']) {
+  const view=app(search), item={...site('a'),developmentAppsKnown:true};
+  const host={name:'GoLand',agents:['Claude Code','Codex'],icon:appIcon};
+  const show=workingAgents=>view.snapshot(state([{...item,developmentApps:[{...host,workingAgents}]}]));
+  const group=()=>view.root.querySelector('.development-app-group');
+  const refreshes=()=>view.calls.filter(([name])=>name==='devjay:app-tooltip-refresh').length;
+  show(undefined);assert.equal(group().querySelector('.development-app-working-dots'),null);
+  show(['Claude Code']);
+  assert.equal(group().classList.contains('is-working'),true);
+  assert.equal(group().querySelector('.development-app-working-dots').children.length,3);
+  assert.equal(group().querySelector('.development-app-working-dots').textContent,'');
+  assert.equal(group().dataset.appTooltip,'GoLand with Claude Code and Codex · Claude Code is working');
+  assert.equal(group().attrs['aria-label'],group().dataset.appTooltip);
+  const icons=group().querySelectorAll('.development-agent-icon');
+  assert.equal(icons[0].querySelector('.development-agent-working').textContent,'▶');
+  assert.equal(icons[1].querySelector('.development-agent-working'),null);
+  assert.equal(refreshes(),2);
+  const before=group();show(['Claude Code']);assert.equal(group(),before);assert.equal(refreshes(),2);
+  show(['Claude Code','Codex']);
+  assert.equal(group().querySelectorAll('.development-agent-working').length,2);
+  assert.equal(group().dataset.appTooltip,'GoLand with Claude Code and Codex · Claude Code and Codex are working');
+  assert.equal(group().classList.contains('waiting-attention'),false);
+  assert.equal(view.root.querySelector('.card-waiting-glow'),null);
+  const label=group().querySelector('.development-app-working-dots');
+  assert.equal(label.closest('[data-app-tooltip]'),group());assert.equal(label.attrs['aria-hidden'],'true');
+  assert.equal(label.onclick,undefined);assert.equal(label.tabIndex,undefined);
+  assert.equal(view.calls.some(([name])=>name==='devjay:activate'),false);
+  view.click(label);
+  assert.deepEqual(view.calls.filter(([name])=>name==='devjay:activate'),search?[]:[['devjay:activate','a']]);
+  show(undefined);
+  assert.equal(refreshes(),4);
+  assert.equal(group().classList.contains('is-working'),false);
+  assert.equal(group().querySelector('.development-agent-working'),null);
+  assert.equal(group().querySelector('.development-app-working-dots'),null);
+  assert.equal(group().dataset.appTooltip,'GoLand with Claude Code and Codex');
+ }
+});
+
+test('waiting takes priority over working while mixed agents retain individual state and pulse history',()=>{
+ for(const search of ['', '?site=a']) {
+  const view=app(search), host={name:'GoLand',agents:['Claude Code','Codex']};
+  const show=(workingAgents,waitingAgents)=>view.snapshot(state([{...site('a'),developmentAppsKnown:true,developmentApps:[{...host,workingAgents,waitingAgents}]}]));
+  const group=()=>view.root.querySelector('.development-app-group');
+  show(['Claude Code','Codex'],[]);assert.equal(view.root.querySelector('.card-waiting-glow'),null);
+  show(['Claude Code','Codex'],['Claude Code']);
+  assert.equal(group().classList.contains('needs-input'),true);assert.equal(group().classList.contains('is-working'),false);
+  assert.equal(group().querySelector('.development-app-working-dots'),null,'mixed state must not show whole-group working dots');
+  assert.equal(group().querySelectorAll('.development-agent-input').length,1);
+  assert.equal(group().querySelectorAll('.development-agent-working').length,1);
+  assert.equal(group().dataset.appTooltip,'GoLand with Claude Code and Codex · Claude Code needs input · Codex is working');
+  assert.equal(group().style.animationDelay,'0ms');
+  view.advance(1200);show([],['Claude Code']);
+  assert.equal(group().style.animationDelay,'-1200ms','working changes do not restart waiting attention');
+  show(['Claude Code'],[]);
+  assert.equal(group().classList.contains('is-working'),true);assert.equal(group().querySelector('.development-agent-input'),null);
+  assert.equal(view.root.querySelector('.card-waiting-glow'),null);
+  show([],['Claude Code']);assert.equal(group().style.animationDelay,'0ms','a new wait after work gets attention');
+ }
+});
+
+test('working never leaks through absent agents, unknown observations, or disabled app status',()=>{
+ for(const search of ['', '?site=a']) {
+  const view=app(search), item={...site('a'),developmentAppsKnown:true};
+  for(const host of [
+   {name:'GoLand',agents:['Claude Code'],workingAgents:['Codex','Other Agent']},
+   {name:'iTerm2',agents:['Other Agent'],workingAgents:['Other Agent']},
+   {name:'ChatGPT',workingAgents:['Codex']},
+  ]) {
+   view.snapshot(state([{...item,developmentApps:[host]}]));
+   assert.equal(view.root.querySelector('.development-agent-working'),null);
+   assert.equal(view.root.querySelector('.development-app-working-dots'),null);
+   assert.doesNotMatch(appLabels(view).join(' '),/working/);
+  }
+  const observed={...item,developmentApps:[{name:'GoLand',agents:['Codex'],workingAgents:['Codex']}]};
+  view.snapshot(state([observed]));assert.ok(view.root.querySelector('.development-agent-working'));
+  view.snapshot(state([{...observed,developmentAppsKnown:false}]));assert.equal(view.root.querySelector('.development-agent-working'),null);
+  view.snapshot(state([observed]));
+  view.snapshot({...state([observed]),preferences:{showIDEStatus:false}});assert.equal(view.root.querySelector('.development-app'),null);
+ }
+});
+
+test('unknown or stale waiting names never highlight an app or an absent agent',()=>{
+ for(const search of ['', '?site=a']) {
+  const view=app(search);
+  for(const host of [
+   {name:'GoLand',agents:['Claude Code'],waitingAgents:['Codex','Other Agent']},
+   {name:'iTerm2',agents:['Other Agent'],waitingAgents:['Other Agent']},
+   {name:'ChatGPT',waitingAgents:['Codex']},
+  ]) {
+   view.snapshot(state([{...site('a'),developmentAppsKnown:true,developmentApps:[host]}]));
+   const group=view.root.querySelector('.development-app-group');
+   assert.equal(group.classList.contains('needs-input'),false);
+   assert.equal(group.querySelector('.development-agent-input'),null);
+   assert.doesNotMatch(group.dataset.appTooltip,/needs? input/);
+  }
+  view.snapshot(state([{...site('a'),developmentAppsKnown:true,developmentApps:[{name:'GoLand',agents:['Claude Code'],waitingAgents:['Claude Code','Codex','Other Agent']}]}]));
+  const group=view.root.querySelector('.development-app-group');
+  assert.equal(group.dataset.appTooltip,'GoLand with Claude Code · Claude Code needs input');
+  assert.equal(group.querySelectorAll('.development-agent-input').length,1);
+ }
+});
+
+test('waiting markers remain decorative within their agent icons and preserve capsule hover and passive clicks',()=>{
+ for(const search of ['', '?site=a']) {
+  const view=app(search);
+  const snapshot=state([{...site('a'),developmentAppsKnown:true,developmentApps:[{name:'GoLand',agents:['Claude Code','Codex'],waitingAgents:['Claude Code','Codex']}]}]);
+  view.snapshot(snapshot);
+  const group=view.root.querySelector('.development-app-group');
+  assert.equal(view.root.querySelectorAll('[data-app-tooltip]').length,1);
+  assert.equal(group.parent.closest('[data-app-tooltip]'),undefined);
+  for(const marker of group.querySelectorAll('.development-agent-input')) {
+   assert.equal(marker.parent.classList.contains('development-agent-icon'),true);
+   assert.equal(marker.closest('[data-app-tooltip]'),group);
+   assert.equal(marker.attrs['aria-hidden'],'true');
+   assert.equal(marker.onclick,undefined);assert.equal(marker.tabIndex,undefined);
+   view.click(marker);
+  }
+  assert.deepEqual(view.calls.filter(([name])=>name==='devjay:activate'),search?[]:[['devjay:activate','a'],['devjay:activate','a']]);
+  assert.equal(view.calls.some(([name])=>name==='devjay:viewer-open'),false);
+  view.snapshot({...snapshot,preferences:{showIDEStatus:false}});
+  assert.equal(view.root.querySelector('.development-agent-input'),null,'turning status off hides waiting presentation too');
+ }
+});
+
+test('new waiting pulses once and rebuilt cards preserve the original four-second phase and deadline',()=>{
+ for(const search of ['', '?site=a']) {
+  const view=app(search), host={name:'GoLand',bundleID:'goland',agents:['Claude Code','Codex']};
+  const item={...site('a'),developmentAppsKnown:true,developmentApps:[host]};
+  const show=(waitingAgents,branch='main')=>view.snapshot(state([{...item,git:{branch},developmentApps:[{...host,waitingAgents}]}]));
+  const group=()=>view.root.querySelector('.development-app-group');
+  show([]);assert.equal(group().classList.contains('waiting-attention'),false);
+  show(['Claude Code']);
+  assert.equal(group().classList.contains('waiting-attention'),true);
+  assert.equal(group().style.animationDelay,'0ms');
+  assert.equal(view.root.querySelector('.card-waiting-glow').style.animationDelay,'0ms');
+  const first=group();
+  view.advance(1250);show(['Claude Code']);
+  assert.equal(group(),first,'ordinary unchanged snapshots retain the running animation');
+  show(['Claude Code'],'git-changed');
+  assert.notEqual(group(),first);
+  assert.equal(group().style.animationDelay,'-1250ms','a Git rebuild resumes the elapsed phase');
+  assert.equal(view.root.querySelector('.card-waiting-glow').style.animationDelay,'-1250ms','the card glow shares the capsule phase');
+  for(let i=1;i<=5;i++) {
+   view.advance(500);show(['Claude Code'],`branch-${i}`);
+   assert.equal(group().style.animationDelay,`${-(1250+i*500)}ms`);
+  }
+  view.advance(250);show(['Claude Code'],'deadline');
+  assert.equal(group().classList.contains('waiting-attention'),false,'renders cannot extend the four-second deadline');
+  assert.equal(view.root.querySelector('.card-waiting-glow'),null,'rebuilt cards do not retain an expired glow');
+  assert.equal(group().classList.contains('needs-input'),true,'waiting stays amber after attention ends');
+  assert.match(group().dataset.appTooltip,/Claude Code needs input/);
+  view.advance(30000);show(['Claude Code'],'much-later');
+  assert.equal(group().classList.contains('waiting-attention'),false,'long-lived waiting does not repeat');
+  assert.equal(view.calls.some(([name])=>name==='devjay:activate'),false);
+ }
+});
+
+test('each newly waiting agent can request attention without replaying existing waiting agents',()=>{
+ const view=app(), host={name:'GoLand',bundleID:'goland',agents:['Claude Code','Codex']};
+ const show=waitingAgents=>view.snapshot(state([{...site('a'),developmentAppsKnown:true,developmentApps:[{...host,waitingAgents}]}]));
+ const group=()=>view.root.querySelector('.development-app-group');
+ show(['Claude Code']);view.advance(5000);
+ show(['Claude Code','Codex']);
+ assert.equal(group().classList.contains('waiting-attention'),true);
+ assert.equal(group().style.animationDelay,'0ms','new Codex waiting starts a new pulse for this capsule');
+ view.advance(1000);show(['Claude Code']);
+ assert.equal(group().classList.contains('waiting-attention'),false,'clearing the new agent does not replay the older waiting agent');
+ show(['Claude Code','Codex']);
+ assert.equal(group().style.animationDelay,'0ms','Codex waiting again is a new transition');
+ view.advance(700);show(['Claude Code','Codex','Unknown Agent']);
+ assert.equal(group().style.animationDelay,'-700ms','unsupported waiting metadata does not trigger attention');
+});
+
+test('removal, unknown observation, and disabling status clear waiting transition history',()=>{
+ for(const search of ['', '?site=a']) {
+  for(const clear of ['waiting','agent','app','site','unknown','disabled']) {
+   const view=app(search), host={name:'GoLand',bundleID:'goland',agents:['Claude Code'],waitingAgents:['Claude Code']};
+   const item={...site('a'),developmentAppsKnown:true,developmentApps:[host]}, initial=state([item]);
+   const group=()=>view.root.querySelector('.development-app-group');
+   view.snapshot(initial);view.advance(5000);
+   const cleared=clear==='disabled'?{...initial,preferences:{showIDEStatus:false}}:
+    clear==='site'?state([]):state([{...item,...(clear==='unknown'?{developmentAppsKnown:false}:{developmentApps:clear==='app'?[]:[{...host,...(clear==='agent'?{agents:[]}:{waitingAgents:[]})}]})}]);
+   view.snapshot(cleared);view.advance(100);view.snapshot(initial);
+   assert.equal(group().classList.contains('waiting-attention'),true,`${search} ${clear}: returning waiting is new`);
+   assert.equal(group().style.animationDelay,'0ms');
+  }
+ }
+});
+
+test('a different Site or app does not restart another capsule and deferred drag renders retain elapsed attention',()=>{
+ const view=app(), host={name:'GoLand',bundleID:'goland',agents:['Claude Code'],waitingAgents:['Claude Code']};
+ const a={...site('a'),developmentAppsKnown:true,developmentApps:[host]}, b={...site('b'),developmentAppsKnown:true,developmentApps:[host]};
+ view.snapshot(state([a]));view.advance(1700);view.snapshot(state([a,b]));
+ let groups=view.root.querySelectorAll('.development-app-group');
+ assert.equal(groups[0].style.animationDelay,'0ms','unchanged existing DOM keeps its original animation');
+ assert.equal(groups[1].style.animationDelay,'0ms','the new Site starts independently');
+ const terminal={name:'iTerm2',bundleID:'iterm',agents:['Codex'],waitingAgents:['Codex']};
+ view.advance(500);view.snapshot(state([{...a,developmentApps:[host,terminal]},b]));
+ groups=view.root.querySelectorAll('.development-app-group');
+ assert.equal(groups[0].style.animationDelay,'-2200ms');
+ assert.equal(groups[1].style.animationDelay,'0ms','the new host starts independently');
+ view.drag.busy(true);
+ view.snapshot(state([{...a,developmentApps:[{...host,waitingAgents:[]}]}]));
+ view.snapshot(state([a]));
+ view.advance(900);view.drag.busy(false);
+ const current=view.root.querySelector('.development-app-group');
+ assert.notEqual(current,groups[0],'a clear/resume transition during drag rebuilds even when the final metadata matches');
+ assert.equal(current.style.animationDelay,'-900ms','the deferred render does not start a fresh four seconds');
+});
+
+test('attention CSS is finite, keeps the capsule geometry stable, and disables motion when requested',async()=>{
+ const css=await readFile(new URL('../cmd/devjay/frontend/style.css',import.meta.url),'utf8');
+ assert.match(css,/\.development-app-group\.waiting-attention\s*\{\s*animation:\s*development-app-attention 4s ease-in-out;\s*\}/);
+ const frames=css.match(/@keyframes development-app-attention\s*\{([\s\S]*?)\n\}/)?.[1];
+ assert.ok(frames);
+ assert.match(frames,/0%, 50%, 100%/);
+ assert.doesNotMatch(frames,/transform|scale|width|height|padding|margin|opacity/,'attention only adjusts color and an inset highlight');
+ assert.match(css,/@media \(prefers-reduced-motion: reduce\)\s*\{\s*\.development-app-group\.waiting-attention\s*\{\s*animation: none;/);
+ assert.match(css,/\.card-waiting-glow\s*\{[^}]*position: absolute;[^}]*pointer-events: none;[^}]*inset: 2px;[^}]*overflow: hidden;[^}]*animation: card-waiting-attention 4s ease-in-out;/);
+ assert.match(css,/\.card-waiting-glow::before\s*\{[^}]*radial-gradient\([^;]*;[^}]*animation: card-waiting-radiance 4s ease-in-out; animation-delay: inherit;/);
+ assert.match(css,/@media \(prefers-reduced-motion: reduce\)\s*\{[^}]*\}[^}]*\.card-waiting-glow, \.card-waiting-glow::before\s*\{\s*animation: none;/);
+});
+
+test('the radiating glow is one decorative card child and clears with waiting or visibility',()=>{
+ for(const search of ['', '?site=a']) {
+  const view=app(search), host={name:'GoLand',agents:['Claude Code','Codex'],waitingAgents:['Claude Code','Codex']};
+  const item={...site('a'),developmentAppsKnown:true,developmentApps:[host]};
+  view.snapshot(state([item]));
+  const glow=view.root.querySelector('.card-waiting-glow');
+  assert.ok(glow);
+  assert.equal(view.root.querySelectorAll('.card-waiting-glow').length,1,'both waiting agents share one card glow');
+  assert.equal(glow.parent.firstElementChild,glow,'the glow is independent of the capsule hit target');
+  assert.equal(glow.attrs['aria-hidden'],'true');
+  assert.equal(glow.dataset.appTooltip,undefined);
+  assert.equal(glow.title,undefined);assert.equal(glow.onclick,undefined);assert.equal(glow.tabIndex,undefined);
+  assert.equal(glow.textContent,'');
+  assert.equal(view.root.querySelectorAll('[data-app-tooltip]').length,1,'the glow creates no new hover area');
+  assert.equal(view.root.querySelector('.development-app').parent.children.at(-1).className,'development-app');
+  view.snapshot(state([{...item,developmentApps:[{...host,waitingAgents:[]}]}]));
+  assert.equal(view.root.querySelector('.card-waiting-glow'),null);
+  view.snapshot(state([item]));
+  view.snapshot({...state([item]),preferences:{showIDEStatus:false}});
+  assert.equal(view.root.querySelector('.card-waiting-glow'),null);
+  assert.equal(view.calls.some(([name])=>name==='devjay:activate'),false);
  }
 });
 
