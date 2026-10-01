@@ -298,7 +298,8 @@ func watchGitWithControl(ctx context.Context, path string, control *gitWatchCont
 		if workCtx.Err() != nil {
 			return
 		}
-		s.Rebased = rebased.check(workCtx, s, m)
+		history := rebased.check(workCtx, s, m)
+		s.Rebased, s.BranchWork = history.rebased, history.work
 		s.CanReplaceRemote = canReplaceFromRemote(workCtx, s, m)
 		if workCtx.Err() != nil {
 			return

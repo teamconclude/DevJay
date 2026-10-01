@@ -27,8 +27,12 @@ import "C"
 import (
 	"encoding/json"
 	"github.com/wailsapp/wails/v3/pkg/application"
+	"sync/atomic"
 	"unsafe"
 )
+
+// A later explicit window request cancels a pending app-focus handoff.
+var windowNavigationGeneration atomic.Uint64
 
 // Collect native state in one main-thread visit instead of one per property.
 func readWindowSnapshot(items map[string]siteRuntime, panel, settings *application.WebviewWindow) (map[string]DesktopPosition, map[string]cardState, map[string]bool, bool, map[string]uint32) {
@@ -93,6 +97,7 @@ func setPanelPreference(window *application.WebviewWindow, name string, enabled 
 }
 
 func focusSite(window *application.WebviewWindow) {
+	windowNavigationGeneration.Add(1)
 	application.InvokeSync(func() { C.devjay_focus_site(window.NativeWindow()) })
 }
 
@@ -110,6 +115,7 @@ func saveWindowLayout(window *application.WebviewWindow) {
 }
 
 func showSettingsWindow(window, parent *application.WebviewWindow) {
+	windowNavigationGeneration.Add(1)
 	// Native ordering alone leaves Wails' Hidden flag set, which suppresses
 	// windowShouldClose. Show through Wails before native sizing/placement.
 	window.Show()
@@ -150,6 +156,7 @@ func fitControlPanel(window *application.WebviewWindow, config SiteConfig) {
 }
 
 func showSuggestionsWindow(window, parent *application.WebviewWindow, anchor *cardAnchor) {
+	windowNavigationGeneration.Add(1)
 	window.Show()
 	if anchor == nil || !anchor.valid() {
 		anchor = &cardAnchor{}
@@ -164,6 +171,7 @@ func showSuggestionsWindow(window, parent *application.WebviewWindow, anchor *ca
 }
 
 func showViewerWindow(window, parent *application.WebviewWindow, anchor *cardAnchor) {
+	windowNavigationGeneration.Add(1)
 	window.Show()
 	if anchor == nil || !anchor.valid() {
 		anchor = &cardAnchor{}

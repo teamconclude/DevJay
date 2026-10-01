@@ -10,6 +10,7 @@ export function cardMenuTarget(target) {
     number: Number.isSafeInteger(number) && number > 0 ? number : 0, bundleID: content?.dataset.appBundle || '',
     ...(content?.dataset.baseBranch ? {baseBranch:content.dataset.baseBranch} : {}),
     ...(content?.dataset.publishRebased === 'true' ? {publishRebased:true} : {}),
+    ...(['update', 'push'].includes(content?.dataset.gitAction) ? {gitAction:content.dataset.gitAction} : {}),
     ...(content?.dataset.publishButton === 'true' ? {publishButton:true} : {})};
 }
 

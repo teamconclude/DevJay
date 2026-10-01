@@ -3,7 +3,7 @@ package main
 /*
 #cgo LDFLAGS: -framework AppKit -framework WebKit
 #include <stdlib.h>
-int devjay_card_menu(void *window, double x, double y, const char *first, const char *second, const char *settings, const char *quit, const char *rebase, const char *rebaseDisabled);
+int devjay_card_menu(void *window, double x, double y, const char *first, const char *second, const char *settings, const char *quit, const char *action, const char *disabledReason, const char *hint);
 */
 import "C"
 
@@ -16,18 +16,16 @@ import (
 
 // Run off the manager queue: AppKit tracks the menu synchronously until it is
 // dismissed. A per-popup result avoids mutable context-menu callback targets.
-func showCardMenu(window *application.WebviewWindow, req cardMenuRequest, rebase *cardGitOption) cardMenuAction {
+func showCardMenu(window *application.WebviewWindow, req cardMenuRequest, option *cardGitOption) cardMenuAction {
 	labels := cardMenuLabels(req)
-	rebaseTitle, rebaseReason := "", ""
-	if rebase != nil {
-		rebaseTitle, rebaseReason = "Rebase and push…", rebase.DisabledReason
-		if rebase.Kind == "publish" {
-			rebaseTitle = "Push rebased branch…"
-		}
+	actionTitle, actionReason, hintText := "", "", ""
+	if option != nil {
+		actionTitle, actionReason, hintText = option.title(), option.DisabledReason, option.tooltip()
 	}
-	rebaseLabel, disabled := C.CString(rebaseTitle), C.CString(rebaseReason)
-	defer C.free(unsafe.Pointer(rebaseLabel))
+	actionLabel, disabled, hint := C.CString(actionTitle), C.CString(actionReason), C.CString(hintText)
+	defer C.free(unsafe.Pointer(actionLabel))
 	defer C.free(unsafe.Pointer(disabled))
+	defer C.free(unsafe.Pointer(hint))
 	first, second, settings := C.CString(labels[0]), C.CString(labels[1]), C.CString(labels[2])
 	quit := C.CString(labels[3])
 	defer C.free(unsafe.Pointer(first))
@@ -36,7 +34,7 @@ func showCardMenu(window *application.WebviewWindow, req cardMenuRequest, rebase
 	defer C.free(unsafe.Pointer(quit))
 	var selected C.int
 	application.InvokeSync(func() {
-		selected = C.devjay_card_menu(window.NativeWindow(), C.double(req.X), C.double(req.Y), first, second, settings, quit, rebaseLabel, disabled)
+		selected = C.devjay_card_menu(window.NativeWindow(), C.double(req.X), C.double(req.Y), first, second, settings, quit, actionLabel, disabled, hint)
 	})
 	return cardMenuAction(selected)
 }
@@ -84,9 +82,9 @@ func (m *siteManager) registerCardMenuEvents() {
 				return
 			}
 			req = resolveCardMenuRequest(req, site.Git)
-			rebase := makeCardGitOption(req, site.Git)
-			if rebase != nil && (m.actionBusy() || (m.action != nil && m.action.Status == "preparing")) {
-				rebase.DisabledReason = "Another Git action is running. Wait for it to finish."
+			option := makeCardGitOption(req, site.Git)
+			if option != nil && (m.actionBusy() || (m.action != nil && m.action.Status == "preparing")) {
+				option.DisabledReason = "Another Git action is running. Wait for it to finish."
 			}
 			if req.BundleID != "" {
 				app, ok := m.requestedDevelopmentApp(req.SiteID, req.BundleID)
@@ -97,7 +95,7 @@ func (m *siteManager) registerCardMenuEvents() {
 			}
 			menuOpen = true
 			go func() {
-				selected := showCardMenu(parent, req, rebase)
+				selected := showCardMenu(parent, req, option)
 				m.send(func() {
 					menuOpen = false
 					currentParent, currentSite := m.cardMenuSource(req, sender)
@@ -105,7 +103,10 @@ func (m *siteManager) registerCardMenuEvents() {
 						return
 					}
 					if selected == cardMenuGitAction {
-						if action, ok := rebase.request(req.SiteID, site.Git); ok {
+						if m.actionBusy() || (m.action != nil && m.action.Status == "preparing") {
+							return
+						}
+						if action, ok := option.request(req.SiteID, site.Git); ok {
 							action.Anchor = req.Anchor
 							m.prepareAction(action, site, parent)
 						}

@@ -54,6 +54,7 @@ type siteManager struct {
 	editorGeneration                                         uint64
 	editorBrowsing                                           bool
 	developmentApps                                          developmentAppMonitor
+	appActivationGeneration                                  uint64
 	viewers                                                  map[string]*gitViewerWindow
 	viewerSequence                                           uint64
 	prOpening                                                bool

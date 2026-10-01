@@ -36,7 +36,8 @@ test('feature upstream and default-branch comparisons are independent', () => {
  const both = siteSuggestions({git:{...feature,behind:2}});
  assert.deepEqual(both.map(s=>s.kind),['update','rebase-push']);
  assert.equal(both[1].blocked,true); assert.match(both[1].warning,/own remote first/);
- assert.equal(siteSuggestions({git:{...feature,changes:1}})[0].blocked,true);
+ const dirty=siteSuggestions({git:{...feature,changes:1}})[0];
+ assert.equal(dirty.blocked,true);assert.equal(dirty.warning,'Commit or stash your local edits before rebasing.');
  assert.deepEqual(siteSuggestions({git:{...feature,base:{...feature.base,behind:0}}}),[]);
  assert.equal(siteSuggestions({git:{...feature,defaultBranch:'develop',mergedPR:{number:1,sameHead:true,base:'develop'}}}).length,1);
  assert.equal(siteSuggestions({git:{...feature,defaultBranch:'develop',mergedPR:{number:1,sameHead:true,base:'develop'}}})[0].kind,'merged');
@@ -114,8 +115,10 @@ test('diverged or locally ahead targets never offer remote replacement and remot
 
 test('blocked branch switches show saved local-work guidance and can reopen the chooser without mutation',()=>withDocument(()=>{
  const root=new Element('root'),calls=[],render=mountSuggestedActions(root,()=>{},(...args)=>calls.push(args)),state=branchState();
+ state.sites[0].git.changes=2;
  render({...state,action:{siteID:'site',kind:'switch',status:'failed',message:'Commit or stash local changes before switching.',files:['file.txt'],currentBranch:'feature',currentHead:'head123456'}});
  assert.ok(nodes(root).some(n=>n.textContent==='Commit or stash local changes before switching.'));
+ assert.match(classNode(root,'suggestion-preview').textContent,/Stash unfinished edits in your Git client/);
  assert.ok(nodes(root).some(n=>n.textContent==='file.txt'));assert.equal(classNode(root,'suggestion-primary').hidden,true);
  const back=classNode(root,'branch-back');assert.equal(back.hidden,false);back.onclick();back.onclick();
  assert.deepEqual(calls,[['branches-open',{siteID:'site'}]]);
@@ -185,7 +188,7 @@ test('viewer action buttons follow live checkout, preserve warnings and prepare 
  let button=nodes(root).find(n=>n.tag==='button');
  assert.equal(button.textContent,'Update develop');assert.equal(button.disabled,true);
  button.onclick();assert.equal(calls.length,0);
- assert.ok(nodes(root).some(n=>n.textContent?.includes('Commit or stash')));
+ assert.ok(nodes(root).some(n=>n.textContent==='Commit or stash your local edits before updating this branch.'));
  render({...site,git:{...site.git,changes:0,head:'new-current'}});
  button=nodes(root).find(n=>n.tag==='button');button.onclick();button.onclick();
  assert.deepEqual(calls,[{siteID:'c2',kind:'update',branch:'develop',head:'new-current',deleteBranch:false}]);
@@ -255,10 +258,10 @@ test('optional merged-branch deletion requires a newly prepared confirmation',()
  const state={suggestedSite:'site',sites:[site],action:{siteID:'site',kind:'merged',status:'ready',plan}};
  render(state);
  const checkbox=nodes(root).find(n=>n.tag==='input'&&n.type==='checkbox'&&n.className==='');assert.equal(checkbox.checked,false);checkbox.checked=true;checkbox.onchange();
- assert.deepEqual(calls,[['action-prepare',{siteID:'site',kind:'merged',branch:'feature',head:'oldhead12',deleteBranch:true}]]);
+ assert.deepEqual(calls,[['action-prepare',{siteID:'site',kind:'merged',branch:'feature',head:'oldhead12',targetBranch:'develop',deleteBranch:true}]]);
  nodes(root).find(n=>n.tag==='button'&&n.textContent==='Return to develop').onclick();assert.equal(calls.length,1);
  render({...state,action:{...state.action,plan:{...plan,id:'new',deleteBranch:true}}});
- nodes(root).find(n=>n.tag==='button'&&n.textContent==='Return to develop').onclick();assert.deepEqual(calls[1],['action-confirm','new']);
+ nodes(root).find(n=>n.tag==='button'&&n.textContent==='Return to develop & delete branch').onclick();assert.deepEqual(calls[1],['action-confirm','new']);
 }));
 
 test('verified remote rewrites offer replacement instead of an unsafe update or push',()=>{
@@ -368,7 +371,7 @@ test('combined rebase and push has one compact verified confirmation and manual-
  assert.equal(calls.length,0);confirm.onclick();confirm.onclick();assert.deepEqual(calls,[['action-confirm','token']]);
  render({...state,action:{siteID:'a',kind:'rebase-push',status:'failed',message:'Conflicts found. Long technical explanation.',files:['file']}});
  assert.equal(confirm.hidden,true);assert.equal(nodes(root).some(n=>n.textContent==='✓ Safe to continue'),false);
- assert.ok(nodes(root).some(n=>n.textContent==='Conflicts found. Finish manually with Claude or Astra.'));
+ assert.ok(nodes(root).some(n=>n.textContent==='Conflicts found.'));
  assert.equal(classNode(root,'action-details').tag,'details');
  assert.equal(classNode(root,'action-details').open,undefined);
 }));

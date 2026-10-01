@@ -18,7 +18,7 @@ const viewerPageSize = 100
 const viewerDiffLimit = 256 << 10
 
 type ViewCommit struct {
-	Presence string `json:"presence,omitempty"` // incoming, outgoing, shared, unlinked, or unknown; local in legacy remote views.
+	Presence string `json:"presence,omitempty"` // incoming, outgoing, inherited, shared, unlinked, or unknown; local in legacy remote views.
 	ID       string `json:"id"`
 	Author   string `json:"author"`
 	Date     string `json:"date"`
@@ -61,6 +61,7 @@ type GitView struct {
 	Captured      string       `json:"captured"`
 	RemoteNote    string       `json:"remoteNote"`
 	Rebased       bool         `json:"rebased"`
+	BranchWork    *BranchWork  `json:"branchWork,omitempty"`
 	Commits       []ViewCommit `json:"commits"`
 	Files         []ViewFile   `json:"files"`
 	Commit        string       `json:"commit"`
@@ -76,6 +77,7 @@ type GitView struct {
 	Error         string       `json:"error"`
 	Loading       bool         `json:"loading"`
 	root          string
+	base          *BranchBase
 }
 
 func validViewKind(kind string) bool {
@@ -221,6 +223,7 @@ func loadGitViewSelection(ctx context.Context, v *GitView, refresh bool, selecti
 	v.Commits = []ViewCommit{}
 	v.More = false
 	v.IncomingCount = -1
+	v.BranchWork = nil
 	v.HistoryNote = ""
 	v.Merge = false
 	v.FilesLimited = false
@@ -236,6 +239,7 @@ func loadGitViewSelection(ctx context.Context, v *GitView, refresh bool, selecti
 			return errors.New("Could not read the checkout. Try Refresh.")
 		}
 		v.Branch, v.Tracking = s.Branch, s.Tracking
+		v.base, v.BranchWork = s.Base, nil
 		v.Head = m.OID
 		if m.Initial {
 			v.Head = ""
@@ -461,6 +465,32 @@ func markBranchPresence(ctx context.Context, v *GitView) {
 			v.Commits[i].Presence = "shared"
 		}
 	}
+	v.BranchWork = nil
+	if v.IncomingCount <= 0 || v.Counts == nil || v.Counts.Local == nil {
+		return
+	}
+	work := readBranchWork(ctx, v.root, v.Head, v.Upstream, v.base, *v.Counts.Local)
+	if work == nil {
+		return
+	}
+	if work.Inherited > 0 {
+		// The same pinned default tip explains inherited commits in the list.
+		// Keep every remote-only ID visible, even if its patch looks familiar.
+		out, err := viewerGit(ctx, v.root, "rev-list", v.base.Head, "--not", v.Upstream, "--")
+		if err != nil {
+			return
+		}
+		inherited := make(map[string]bool)
+		for _, id := range strings.Fields(string(out)) {
+			inherited[id] = true
+		}
+		for i := range v.Commits {
+			if v.Commits[i].Presence == "outgoing" && inherited[v.Commits[i].ID] {
+				v.Commits[i].Presence = "inherited"
+			}
+		}
+	}
+	v.BranchWork = work
 }
 
 // Use the same pinned revisions as the history page. Reading the incoming set

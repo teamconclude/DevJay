@@ -35,15 +35,22 @@ export function remoteHistoryContext(v) {
 export function localHistoryContext(v) {
   return `Local-only commits compared with ${v.tracking || 'the upstream'}${v.comparisonOnly ? ' · No upstream configured; cached comparison' : ''}`;
 }
-export function commitPresenceLabel(presence) {
+export function commitPresenceLabel(presence, v = {}) {
+  if (presence === 'inherited') return `✓ On ${v.branchWork?.base || 'default branch'}`;
+  if (v.counts?.local > 0 && v.incomingCount > 0) {
+    if (presence === 'outgoing') return '↑ Local only';
+    if (presence === 'incoming') return '↓ Remote only';
+  }
   return {incoming:'↓ Incoming',outgoing:'↑ Not pushed',shared:'✓ On remote',unlinked:'Local',local:'✓ Already local',unknown:'Local status unknown'}[presence] || '';
 }
 
 export function branchHistoryContext(v) {
   if(!v.upstream)return 'Branch history · No remote comparison available';
-  const outgoing=Number.isInteger(v.counts?.local)?`${v.counts.local} ${v.comparisonOnly?'local-only':'not pushed'}`:'Outgoing comparison unavailable';
-  const incoming=v.incomingCount>=0?`${v.incomingCount} incoming`:'Incoming comparison unavailable';
-  return `${v.branch || 'Branch'} · ${outgoing} · ${incoming} · ${v.tracking}${v.comparisonOnly?' · No upstream configured; cached comparison':''}`;
+  const diverged=v.counts?.local>0&&v.incomingCount>0;
+  const outgoing=Number.isInteger(v.counts?.local)?`${v.branchWork?.local ?? v.counts.local} ${v.comparisonOnly||diverged?'local-only':'not pushed'}`:'Outgoing comparison unavailable';
+  const incoming=v.incomingCount>=0?`${v.incomingCount} ${diverged?'remote-only':'incoming'}`:'Incoming comparison unavailable';
+  const inherited=v.branchWork?.inherited?` · ${v.branchWork.inherited} additional commits already on ${v.branchWork.base}`:'';
+  return `${v.branch || 'Branch'} · ${outgoing} · ${incoming} · ${v.tracking}${inherited}${v.comparisonOnly?' · No upstream configured; cached comparison':''}`;
 }
 
 export function sameDiffSelection(previous, next) {
@@ -100,8 +107,36 @@ export function mountGitViewer(root, request, suggestions, openBranches) {
     node.classList.add('git-summary');
     node.title=`${counts.added} lines added, ${counts.removed} lines removed${counts.binary?`; ${counts.binary} binary file changes excluded from line counts`:''}${counts.partial?'; totals are incomplete because some files could not be counted or the list is limited':''}. Staged and unstaged changes are counted separately.`;
   }
-  let state=null, renderedVersion=null, renderedState=null;
-  const send=(operation,extra={})=>{if(state)request({version:state.version,operation,...extra});};
+  let state=null, renderedVersion=null, renderedState=null, initialFocus=true;
+  let commitRowsKey=null, fileRowsKey=null;
+  const send=(operation,extra={})=>{if(state&&!state.loading)request({version:state.version,operation,...extra});};
+  // Keep focus on the list itself: replacing rows or loading another diff must
+  // not lose the next arrow key. Only the selected option enters the details.
+  function navigableList(label) {
+    const list=el('div','git-scroll-list');list.tabIndex=0;
+    list.setAttribute('role','listbox');list.setAttribute('aria-label',label);
+    list.title='↑/↓ to select · Home/End for first/last';
+    const selected=()=>list.querySelector('.selected');
+    list.onfocus=()=>selected()?.scrollIntoView({block:'nearest',inline:'nearest'});
+    list.onkeydown=event=>{
+      if(event.altKey||event.ctrlKey||event.metaKey||event.shiftKey||event.isComposing||event.defaultPrevented)return;
+      if(!['ArrowUp','ArrowDown','Home','End'].includes(event.key))return;
+      event.preventDefault();
+      if(!state||state.loading)return;
+      const items=[...list.querySelectorAll('button')];
+      if(!items.length)return;
+      const current=items.indexOf(selected());
+      const index=event.key==='Home'?0:event.key==='End'?items.length-1:
+        current<0?0:Math.max(0,Math.min(items.length-1,current+(event.key==='ArrowDown'?1:-1)));
+      if(index!==current)items[index].click();
+    };
+    return list;
+  }
+  function listOption(list,item,id,selected) {
+    item.id=id;item.tabIndex=-1;item.setAttribute('role','option');
+    item.classList.toggle('selected',selected);item.setAttribute('aria-selected',String(selected));
+    if(selected)list.setAttribute('aria-activedescendant',id);
+  }
   const header=el('header','git-view-header');
   const title=el('div','git-view-title');
   const name=el('strong',''),branch=el('span','git-current-branch');
@@ -109,19 +144,24 @@ export function mountGitViewer(root, request, suggestions, openBranches) {
   let openingBranches=false;
   const canSwitch=()=>!!openBranches && !!state?.head && !!state?.branch && !['Detached HEAD','(detached)'].includes(state.branch);
   const updateBranchButton=()=>{switchBranch.hidden=!canSwitch();switchBranch.disabled=openingBranches||!!state?.loading;};
-  const switchBranch=button('Switch branch…',async()=>{
-    if(switchBranch.disabled||!canSwitch())return;
+  const switchBranch=button('Switch...',async()=>{
+    if(switchBranch.disabled||state?.loading||!canSwitch())return;
     openingBranches=true;updateBranchButton();
     try { await openBranches(state.siteID); }
     finally { openingBranches=false;updateBranchButton(); }
   },'git-switch-branch');
-  switchBranch.setAttribute('aria-haspopup','dialog');switchBranch.hidden=true;
+  switchBranch.setAttribute('aria-haspopup','dialog');switchBranch.setAttribute('aria-label','Switch branch');switchBranch.title='Switch branch';switchBranch.hidden=true;
   const branchRow=el('div','git-view-branch');
   const branchName=el('div','git-branch-name');branchName.append(branch,switchBranch);
   branchRow.append(el('span','git-toolbar-label','Current branch'),branchName);
   const tabs=el('nav','git-view-tabs');tabs.setAttribute('aria-label','Changes to inspect');
   for(const [kind,label] of [['edits','Changes'],['branch','History']]) {
-    const tab=button('',()=>send('mode',{kind}));tab.dataset.kind=kind;
+    const tab=button('',()=>{tab.focus({preventScroll:true});send('mode',{kind});});tab.dataset.kind=kind;
+    tab.onkeydown=event=>{
+      if(event.key==='ArrowDown'&&!event.altKey&&!event.ctrlKey&&!event.metaKey&&!event.shiftKey&&!state?.loading){
+        event.preventDefault();(state?.kind==='edits'?fileList:commitList).focus();
+      }
+    };
     tab.append(el('span','',label),el('span','git-tab-count','…'));tabs.append(tab);
   }
   const refresh=button('Refresh',()=>send('refresh'));
@@ -136,13 +176,13 @@ export function mountGitViewer(root, request, suggestions, openBranches) {
   const detailPanes=el('div','git-detail-panes');
   const statusbar=el('footer','git-view-status');
   const commits=el('aside','git-view-commits');commits.setAttribute('aria-label','Commits');
-  const commitList=el('div','git-scroll-list');
+  const commitList=navigableList('Branch history');
   const pagination=el('div','git-view-pagination');
   const previous=button('Previous',()=>send('page',{page:state.page-1}));
   const pageLabel=el('span','muted');const next=button('Next',()=>send('page',{page:state.page+1}));
   pagination.append(previous,pageLabel,next);commits.append(commitList,pagination);
   const files=el('aside','git-view-files');files.setAttribute('aria-label','Changed files');
-  const fileHeading=el('h2','','Files'),fileList=el('div','git-scroll-list');files.append(fileHeading,fileList);
+  const fileHeading=el('h2','','Files'),fileList=navigableList('Changed files');files.append(fileHeading,fileList);
   const content=el('section','git-view-content');
   const commitDetail=el('div','git-commit-detail');
   const diffHeader=el('div','git-diff-header');
@@ -160,6 +200,11 @@ export function mountGitViewer(root, request, suggestions, openBranches) {
     const changedContext=state?.siteID!==v.siteID||state?.kind!==v.kind;
     state=v;
     renderEditor(v);
+    root.setAttribute('aria-busy',String(v.loading));
+    commitList.setAttribute('aria-busy',String(v.loading));fileList.setAttribute('aria-busy',String(v.loading));
+    // Selecting a row reads its diff asynchronously. Keep the current frame
+    // intact until it arrives, instead of flashing loading text and controls.
+    if(v.loading&&renderedState?.siteID===v.siteID&&renderedState?.kind===v.kind)return;
     const edits=v.kind==='edits';
     commits.hidden=edits;panes.classList.toggle('edits-only',edits);
     // Move the same file list between the sidebar and selected-commit details.
@@ -170,7 +215,8 @@ export function mountGitViewer(root, request, suggestions, openBranches) {
     }
     if(changedContext&&v.loading){
       commitList.replaceChildren();fileList.replaceChildren();commitDetail.replaceChildren();diff.replaceChildren();
-      renderedState=null;renderedVersion=null;
+      commitList.removeAttribute('aria-activedescendant');fileList.removeAttribute('aria-activedescendant');
+      renderedState=null;renderedVersion=null;commitRowsKey=null;fileRowsKey=null;
       diffTitle.textContent='';note.hidden=true;fileHeading.textContent='Files';
       previous.disabled=true;next.disabled=true;pageLabel.textContent='';
     }
@@ -187,7 +233,9 @@ export function mountGitViewer(root, request, suggestions, openBranches) {
       tab.querySelector('.git-tab-count').hidden=tab.dataset.kind!=='edits';
       tab.title=category.description;
     });
-    root.setAttribute('aria-busy',String(v.loading));panes.inert=v.loading;refresh.disabled=v.loading;
+    // Inert would discard keyboard focus on every read. Keep the list focused
+    // while loading; send() guards read requests and the editor disables itself.
+    refresh.disabled=v.loading;
     error.hidden=!v.error;error.textContent=v.error||'';
     const capture=v.captured?new Date(v.captured).toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit'}):'';
     context.replaceChildren();
@@ -195,9 +243,11 @@ export function mountGitViewer(root, request, suggestions, openBranches) {
     if(!edits){
       if(v.loading)context.append(el('span','muted','Loading history…'));
       else {
-        const outgoing=Number.isInteger(v.counts?.local)?v.counts.local:null;
-        if(outgoing>0)context.append(el('span','git-history-count outgoing',`↑ ${outgoing} ${v.comparisonOnly?'local only':'not pushed'}`));
-        if(v.incomingCount>0)context.append(el('span','git-history-count incoming',`↓ ${v.incomingCount} incoming`));
+        const outgoing=v.branchWork?.local ?? (Number.isInteger(v.counts?.local)?v.counts.local:null);
+        const diverged=v.counts?.local>0&&v.incomingCount>0;
+        if(diverged)context.append(el('span','git-history-count',v.rebased?'Rebased':'History differs'));
+        if(outgoing>0)context.append(el('span','git-history-count outgoing',`↑ ${outgoing} ${v.comparisonOnly||diverged?'local only':'not pushed'}`));
+        if(v.incomingCount>0)context.append(el('span','git-history-count incoming',`↓ ${v.incomingCount} ${diverged?'remote only':'incoming'}`));
         if(outgoing===0&&v.incomingCount===0)context.append(el('span','muted',v.comparisonOnly?'Matches comparison history':'Matches last fetched history'));
         else if(!context.children.length)context.append(el('span','muted',v.upstream?'Branch history':'Local history'));
       }
@@ -205,7 +255,8 @@ export function mountGitViewer(root, request, suggestions, openBranches) {
     }
     statusbar.textContent=[v.loading?'Refreshing…':edits?'Uncommitted changes':v.tracking?`Compared with ${v.tracking}`:'Local history',
       !v.loading&&capture?`Read at ${capture}`:'',v.comparisonOnly?'No upstream configured':'',v.remoteNote,v.historyNote,
-      v.rebased?'Rebased history: equivalent changes can have different commit IDs.':''].filter(Boolean).join(' · ');
+      v.rebased?'Rebased history: equivalent changes can have different commit IDs.':v.counts?.local>0&&v.incomingCount>0?'History differs: remote-only commits may be older versions after a rebase.':'',
+      v.branchWork?.inherited?`${v.branchWork.inherited} additional commits already on ${v.branchWork.base}`:''].filter(Boolean).join(' · ');
     // Keep scroll and text selection intact for duplicate/loading-only emissions.
     if(v.loading)return;
     if(renderedVersion===v.version)return;
@@ -216,59 +267,75 @@ export function mountGitViewer(root, request, suggestions, openBranches) {
     const fileScroll=sameList&&renderedState?.commit===v.commit?fileList.scrollTop:0;
     const sameDiff=sameDiffSelection(previousState,v);
     const diffScroll=sameDiff?{top:diff.scrollTop,left:diff.scrollLeft}:{top:0,left:0};
-    const focusFile=fileList.contains(document.activeElement),focusCommit=commitList.contains(document.activeElement);
     const focusedPart=partTabs.contains(document.activeElement)?document.activeElement?.dataset.group:null;
     renderedState=v;
-    commitList.replaceChildren();
-    let sharedStarted=false;
-    for(const commit of v.commits||[]) {
-      const day=historyDay(commit.date);
-      const shared=commit.presence==='shared'||commit.presence==='local';
-      if(shared&&!sharedStarted&&(v.commits||[]).some(c=>c.presence==='incoming'||c.presence==='outgoing')){
-        commitList.append(el('div','git-history-divider','Shared history'));sharedStarted=true;
+    const nextCommitRowsKey=JSON.stringify([v.siteID,v.kind,v.page,v.commits,v.comparisonOnly,v.branchWork?.base,v.counts?.local>0&&v.incomingCount>0,v.tracking]);
+    if(commitRowsKey!==nextCommitRowsKey){
+      commitRowsKey=nextCommitRowsKey;
+      commitList.replaceChildren();
+      let sharedStarted=false;
+      for(const commit of v.commits||[]) {
+        const day=historyDay(commit.date);
+        const shared=commit.presence==='shared'||commit.presence==='local';
+        if(shared&&!sharedStarted&&(v.commits||[]).some(c=>c.presence==='incoming'||c.presence==='outgoing')){
+          commitList.append(el('div','git-history-divider','Shared history'));sharedStarted=true;
+        }
+        const item=button('',()=>{commitList.focus({preventScroll:true});send('commit',{commit:commit.id});},'git-commit');
+        listOption(commitList,item,`git-commit-${commitList.children.length}`,commit.id===v.commit);
+        item.classList.toggle('incoming',commit.presence==='incoming');item.classList.toggle('outgoing',commit.presence==='outgoing');
+        const marker=el('span','git-history-dot');marker.setAttribute('aria-hidden','true');
+        const copy=el('span','git-commit-copy');
+        copy.append(el('strong','git-commit-subject',commit.subject||'(No subject)'));
+        const metadata=el('span','git-commit-meta');
+        metadata.append(el('span','git-commit-author',commit.author||'Unknown author'),el('span','git-commit-date',day),el('span','git-commit-sha',commit.id.slice(0,7)));
+        copy.append(metadata);
+        const label=v.comparisonOnly?{outgoing:'↑ Local only',shared:'Shared'}[commit.presence]:'';
+        const presence=label||commitPresenceLabel(commit.presence,v);
+        // Ordinary shared commits need no repeated badge; retain the full state in
+        // the accessible name and tooltip so presence never depends on color.
+        if(!shared&&presence)copy.append(el('span',`git-commit-presence ${commit.presence}`,presence));
+        item.append(marker,copy);
+        item.title=[commit.subject,commit.author,day,commit.id,presence].filter(Boolean).join('\n');
+        item.setAttribute('aria-label',[commit.subject,commit.author,day,presence].filter(Boolean).join(', '));
+        commitList.append(item);
       }
-      const item=button('',()=>send('commit',{commit:commit.id}),'git-commit');
-      item.classList.toggle('selected',commit.id===v.commit);item.setAttribute('aria-pressed',String(commit.id===v.commit));
-      item.classList.toggle('incoming',commit.presence==='incoming');item.classList.toggle('outgoing',commit.presence==='outgoing');
-      const marker=el('span','git-history-dot');marker.setAttribute('aria-hidden','true');
-      const copy=el('span','git-commit-copy');
-      copy.append(el('strong','git-commit-subject',commit.subject||'(No subject)'));
-      const metadata=el('span','git-commit-meta');
-      metadata.append(el('span','git-commit-author',commit.author||'Unknown author'),el('span','git-commit-date',day),el('span','git-commit-sha',commit.id.slice(0,7)));
-      copy.append(metadata);
-      const label=v.comparisonOnly?{outgoing:'↑ Local only',shared:'Shared'}[commit.presence]:'';
-      const presence=label||commitPresenceLabel(commit.presence);
-      // Ordinary shared commits need no repeated badge; retain the full state in
-      // the accessible name and tooltip so presence never depends on color.
-      if(!shared&&presence)copy.append(el('span',`git-commit-presence ${commit.presence}`,presence));
-      item.append(marker,copy);
-      item.title=[commit.subject,commit.author,day,commit.id,presence].filter(Boolean).join('\n');
-      item.setAttribute('aria-label',[commit.subject,commit.author,day,presence].filter(Boolean).join(', '));
-      commitList.append(item);
-      if(focusCommit&&commit.id===v.commit)item.focus({preventScroll:true});
+      if(!(v.commits||[]).length)commitList.append(el('p','git-empty',v.kind==='branch'?'No commits yet.':v.kind==='remote'?'No remote history available.':`No local-only commits compared with ${v.tracking||'the remote history'}.`));
     }
-    if(!(v.commits||[]).length)commitList.append(el('p','git-empty',v.kind==='branch'?'No commits yet.':v.kind==='remote'?'No remote history available.':`No local-only commits compared with ${v.tracking||'the remote history'}.`));
+    commitList.removeAttribute('aria-activedescendant');
+    commitList.querySelectorAll('button').forEach((item,index)=>listOption(commitList,item,item.id,v.commits[index].id===v.commit));
     previous.disabled=v.page===0;next.disabled=!v.more;pageLabel.textContent=`Page ${v.page+1}`;
-    summaryHeading(fileHeading,v.files||[],null,v.filesLimited);fileList.replaceChildren();
+    summaryHeading(fileHeading,v.files||[],null,v.filesLimited);
     const rows=edits?changeFileRows(v.files||[],v.file):(v.files||[]).map((file,index)=>({path:file.path,file,index,selected:index===v.file,parts:[{file,index}]}));
-    for(const row of rows) {
-      const {file,index}=row;
-      const item=button('',()=>send('file',{file:index}),'git-file');
-      item.classList.toggle('selected',row.selected);item.setAttribute('aria-pressed',String(row.selected));
-      const status=file.status.startsWith('R')?'R':file.status[0];
-      const copy=el('span','git-file-copy');
-      const slash=file.path.lastIndexOf('/');
-      copy.append(el('span','git-file-name',file.path.slice(slash+1)));
-      if(slash>=0)copy.append(el('span','git-file-directory',file.path.slice(0,slash)));
-      if(edits){
-        const labels=row.parts.map(part=>changePartLabel(part.file.group));
-        copy.append(el('span','git-file-parts',labels.join(' · ')));
+    const nextFileRowsKey=JSON.stringify([v.siteID,v.kind,v.commit,v.files,rows.map(row=>row.file.status),v.filesLimited,!!v.error]);
+    if(fileRowsKey!==nextFileRowsKey){
+      fileRowsKey=nextFileRowsKey;
+      fileList.replaceChildren();
+      for(const row of rows) {
+        const {file,index}=row;
+        const item=button('',()=>{fileList.focus({preventScroll:true});send('file',{file:index});},'git-file');
+        listOption(fileList,item,`git-file-${index}`,row.selected);
+        const status=file.status.startsWith('R')?'R':file.status[0];
+        const copy=el('span','git-file-copy');
+        const slash=file.path.lastIndexOf('/');
+        copy.append(el('span','git-file-name',file.path.slice(slash+1)));
+        if(slash>=0)copy.append(el('span','git-file-directory',file.path.slice(0,slash)));
+        if(edits){
+          const labels=row.parts.map(part=>changePartLabel(part.file.group));
+          copy.append(el('span','git-file-parts',labels.join(' · ')));
+        }
+        item.append(el('span',`git-file-status status-${status}`,status),copy);
+        item.title=row.parts.map(part=>part.file.oldPath?`${part.file.oldPath} → ${part.file.path}`:part.file.path).filter((path,index,all)=>all.indexOf(path)===index).join('\n');
+        item.setAttribute('aria-label',`${file.path}, ${row.parts.map(part=>changePartLabel(part.file.group)).join(' and ')} (${file.status})`);fileList.append(item);
       }
-      item.append(el('span',`git-file-status status-${status}`,status),copy);
-      item.title=row.parts.map(part=>part.file.oldPath?`${part.file.oldPath} → ${part.file.path}`:part.file.path).filter((path,index,all)=>all.indexOf(path)===index).join('\n');
-      item.setAttribute('aria-label',`${file.path}, ${row.parts.map(part=>changePartLabel(part.file.group)).join(' and ')} (${file.status})`);fileList.append(item);
-      if(focusFile&&row.selected)item.focus({preventScroll:true});
+      if(!(v.files||[]).length)fileList.append(el('p','git-empty',v.error?'File list unavailable.':v.kind==='edits'?'No uncommitted changes.':v.commit?'This commit has no changed files.':'Select a commit.'));
+      if(v.filesLimited)fileList.append(el('p','git-empty','Showing the first 2,000 files.'));
     }
+    fileList.removeAttribute('aria-activedescendant');
+    fileList.querySelectorAll('button').forEach((item,index)=>{
+      const row=rows[index];
+      listOption(fileList,item,item.id,row.selected);
+      item.onclick=()=>{fileList.focus({preventScroll:true});send('file',{file:row.index});};
+    });
     partTabs.replaceChildren();
     const selectedRow=edits?rows.find(row=>row.selected):null;
     partTabs.hidden=!selectedRow;
@@ -282,9 +349,13 @@ export function mountGitViewer(root, request, suggestions, openBranches) {
       }
       if(selectedRow.parts.length>1)partTabs.append(el('span','muted','This file has staged and working changes.'));
     }
-    if(!(v.files||[]).length)fileList.append(el('p','git-empty',v.error?'File list unavailable.':v.kind==='edits'?'No uncommitted changes.':v.commit?'This commit has no changed files.':'Select a commit.'));
-    if(v.filesLimited)fileList.append(el('p','git-empty','Showing the first 2,000 files.'));
     commitList.scrollTop=commitScroll;fileList.scrollTop=fileScroll;
+    if(document.activeElement===commitList&&(!sameList||previousState?.commit!==v.commit))commitList.onfocus();
+    if(document.activeElement===fileList&&(!sameList||!sameDiff))fileList.onfocus();
+    if(initialFocus){
+      initialFocus=false;
+      if(document.activeElement===document.body||document.activeElement===root)(edits?fileList:commitList).focus({preventScroll:true});
+    }
     commitDetail.hidden=v.kind==='edits'||!v.commit;
     const sameCommitDetail=previousState?.siteID===v.siteID&&previousState?.kind===v.kind&&previousState?.commit===v.commit&&
       previousState?.message===v.message&&previousState?.parent===v.parent&&previousState?.merge===v.merge&&
@@ -299,7 +370,7 @@ export function mountGitViewer(root, request, suggestions, openBranches) {
           const meta=el('div','git-detail-meta');
           meta.append(el('span','',selectedCommit.author||'Unknown author'),el('span','',historyDay(selectedCommit.date)),el('code','',v.commit.slice(0,8)));
           const label=v.comparisonOnly?{outgoing:'↑ Local only',shared:'Shared'}[selectedCommit.presence]:'';
-          meta.append(el('span',`git-commit-presence ${selectedCommit.presence}`,label||commitPresenceLabel(selectedCommit.presence)));
+          meta.append(el('span',`git-commit-presence ${selectedCommit.presence}`,label||commitPresenceLabel(selectedCommit.presence,v)));
           commitDetail.append(meta);
         }
         if(v.merge)commitDetail.append(el('p','muted',`Merge commit · compared with first parent ${v.parent.slice(0,8)}`));

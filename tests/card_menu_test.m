@@ -14,7 +14,8 @@ static NSInteger chosenIndex;
 static int popupCount;
 static NSPoint expectedPoint;
 static BOOL singleAction;
-static BOOL rebaseAction, rebaseDisabled, publishAction, directPublish;
+static BOOL rebaseAction, rebaseDisabled, publishAction, directPublish, mergedAction;
+static NSString *syncTitle;
 
 // Exercise the real menu, targets and cleanup without displaying or tracking
 // a menu in the user's desktop. Actual inactive-window behavior needs UI QA.
@@ -22,15 +23,16 @@ static BOOL selectTestItem(NSMenu *menu, SEL selector, NSMenuItem *item, NSPoint
     (void)selector; (void)item;
     assert(menu.numberOfItems == (directPublish ? 4 : (singleAction ? 4 : 5) + (rebaseAction ? 1 : 0)));
     if (!directPublish) {
-        assert([[menu itemAtIndex:0].title isEqualToString:singleAction ? @"Show GoLand" : @"View changes"]);
-        if (!singleAction) assert([[menu itemAtIndex:1].title isEqualToString:@"View changes in new window"]);
+        assert([[menu itemAtIndex:0].title isEqualToString:mergedAction ? @"Open PR #42 in browser" : singleAction ? @"Show GoLand" : @"View changes"]);
+        if (!singleAction) assert([[menu itemAtIndex:1].title isEqualToString:mergedAction ? @"Open PR #42 in new browser tab" : @"View changes in new window"]);
     }
     NSInteger separator = directPublish ? 1 : (singleAction ? 1 : 2) + (rebaseAction ? 1 : 0);
     if (rebaseAction) {
         NSMenuItem *rebase = [menu itemAtIndex:directPublish ? 0 : 2];
-        assert([rebase.title isEqualToString:publishAction ? @"Push rebased branch…" : @"Rebase and push…"]);
+        assert([rebase.title isEqualToString:syncTitle ?: (mergedAction ? @"Return to develop & delete branch…" : publishAction ? @"Push rebased branch…" : @"Rebase and push…")]);
         assert(rebase.tag == 5 && rebase.enabled == !rebaseDisabled);
         assert(rebase.toolTip.length > 0);
+        if (!rebaseDisabled) assert([rebase.toolTip isEqualToString:@"Check remote before confirmation."]);
     }
     assert([menu itemAtIndex:separator].separatorItem);
     assert([[menu itemAtIndex:separator + 1].title isEqualToString:@"DevJay settings…"]);
@@ -61,45 +63,58 @@ int main(void) {
             if (index == 2) continue;
             chosenIndex = index;
             int expected = index < 0 ? 0 : (index >= 3 ? (int)index : (int)index + 1);
-            assert(devjay_card_menu(window, 22, 41, first, second, settings, quit, "", "") == expected);
+            assert(devjay_card_menu(window, 22, 41, first, second, settings, quit, "", "", "Check remote before confirmation.") == expected);
         }
         assert(popupCount == 5);
         singleAction = YES;
         for (NSInteger index = 0; index < 4; index++) {
             if (index == 1) continue;
             chosenIndex = index;
-            assert(devjay_card_menu(window, 22, 41, "Show GoLand", "", settings, quit, "", "") == index + 1);
+            assert(devjay_card_menu(window, 22, 41, "Show GoLand", "", settings, quit, "", "", "Check remote before confirmation.") == index + 1);
         }
         assert(popupCount == 8);
         singleAction = NO;
-        assert(devjay_card_menu(NULL, 22, 41, first, second, settings, quit, "", "") == 0);
-        assert(devjay_card_menu(window, -1, 41, first, second, settings, quit, "", "") == 0);
-        assert(devjay_card_menu(window, 301, 41, first, second, settings, quit, "", "") == 0);
-        assert(devjay_card_menu(window, 22, 181, first, second, settings, quit, "", "") == 0);
-        assert(devjay_card_menu(window, NAN, 41, first, second, settings, quit, "", "") == 0);
-        assert(devjay_card_menu(window, 22, 41, "\xff", second, settings, quit, "", "") == 0);
+        assert(devjay_card_menu(NULL, 22, 41, first, second, settings, quit, "", "", "Check remote before confirmation.") == 0);
+        assert(devjay_card_menu(window, -1, 41, first, second, settings, quit, "", "", "Check remote before confirmation.") == 0);
+        assert(devjay_card_menu(window, 301, 41, first, second, settings, quit, "", "", "Check remote before confirmation.") == 0);
+        assert(devjay_card_menu(window, 22, 181, first, second, settings, quit, "", "", "Check remote before confirmation.") == 0);
+        assert(devjay_card_menu(window, NAN, 41, first, second, settings, quit, "", "", "Check remote before confirmation.") == 0);
+        assert(devjay_card_menu(window, 22, 41, "\xff", second, settings, quit, "", "", "Check remote before confirmation.") == 0);
         assert(popupCount == 8);
         rebaseAction = YES;
         const int results[] = {1, 2, 5, 0, 3, 4};
         for (NSInteger index = 0; index < 6; index++) {
             if (index == 3) continue;
             chosenIndex = index;
-            assert(devjay_card_menu(window, 22, 41, first, second, settings, quit, "Rebase and push…", "") == results[index]);
+            assert(devjay_card_menu(window, 22, 41, first, second, settings, quit, "Rebase and push…", "", "Check remote before confirmation.") == results[index]);
         }
         rebaseDisabled = YES; chosenIndex = -1;
-        assert(devjay_card_menu(window, 22, 41, first, second, settings, quit, "Rebase and push…", "Commit or stash local work first.") == 0);
+        assert(devjay_card_menu(window, 22, 41, first, second, settings, quit, "Rebase and push…", "Commit or stash local work first.", "Check remote before confirmation.") == 0);
         assert(popupCount == 14);
         publishAction = YES; rebaseDisabled = NO; chosenIndex = 2;
-        assert(devjay_card_menu(window, 22, 41, first, second, settings, quit, "Push rebased branch…", "") == 5);
+        assert(devjay_card_menu(window, 22, 41, first, second, settings, quit, "Push rebased branch…", "", "Check remote before confirmation.") == 5);
         rebaseDisabled = YES; chosenIndex = -1;
-        assert(devjay_card_menu(window, 22, 41, first, second, settings, quit, "Push rebased branch…", "Commit or stash local work first.") == 0);
+        assert(devjay_card_menu(window, 22, 41, first, second, settings, quit, "Push rebased branch…", "Commit or stash local work first.", "Check remote before confirmation.") == 0);
         assert(popupCount == 16);
         directPublish = YES; rebaseDisabled = NO; chosenIndex = 0;
-        assert(devjay_card_menu(window, 22, 41, "", "", settings, quit, "Push rebased branch…", "") == 5);
+        assert(devjay_card_menu(window, 22, 41, "", "", settings, quit, "Push rebased branch…", "", "Check remote before confirmation.") == 5);
         rebaseDisabled = YES; chosenIndex = -1;
-        assert(devjay_card_menu(window, 22, 41, "", "", settings, quit, "Push rebased branch…", "Commit or stash local work first.") == 0);
-        assert(devjay_card_menu(window, 22, 41, "", "", settings, quit, "", "") == 0);
+        assert(devjay_card_menu(window, 22, 41, "", "", settings, quit, "Push rebased branch…", "Commit or stash local work first.", "Check remote before confirmation.") == 0);
+        assert(devjay_card_menu(window, 22, 41, "", "", settings, quit, "", "", "Check remote before confirmation.") == 0);
         assert(popupCount == 18);
+        directPublish = NO; mergedAction = YES; rebaseDisabled = NO; chosenIndex = 2;
+        assert(devjay_card_menu(window, 22, 41, "Open PR #42 in browser", "Open PR #42 in new browser tab", settings, quit, "Return to develop & delete branch…", "", "Check remote before confirmation.") == 5);
+        rebaseDisabled = YES; chosenIndex = -1;
+        assert(devjay_card_menu(window, 22, 41, "Open PR #42 in browser", "Open PR #42 in new browser tab", settings, quit, "Return to develop & delete branch…", "Commit or stash local work first.", "Check remote before confirmation.") == 0);
+        assert(popupCount == 20);
+        mergedAction = NO; publishAction = NO; rebaseDisabled = NO; chosenIndex = 2;
+        syncTitle = @"Fetch and update develop…";
+        assert(devjay_card_menu(window, 22, 41, first, second, settings, quit, syncTitle.UTF8String, "", "Check remote before confirmation.") == 5);
+        rebaseDisabled = YES; chosenIndex = -1;
+        assert(devjay_card_menu(window, 22, 41, first, second, settings, quit, syncTitle.UTF8String, "Commit or stash local edits before updating this branch.", "") == 0);
+        syncTitle = @"Push 2 commits…"; rebaseDisabled = NO; chosenIndex = 2;
+        assert(devjay_card_menu(window, 22, 41, first, second, settings, quit, syncTitle.UTF8String, "", "Check remote before confirmation.") == 5);
+        assert(popupCount == 23);
         method_setImplementation(method, original);
         puts("Native card menu regressions passed");
     }

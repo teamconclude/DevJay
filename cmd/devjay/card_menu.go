@@ -15,6 +15,7 @@ type cardMenuRequest struct {
 	BaseBranch     string      `json:"baseBranch,omitempty"`
 	PublishRebased bool        `json:"publishRebased,omitempty"`
 	PublishButton  bool        `json:"publishButton,omitempty"`
+	GitAction      string      `json:"gitAction,omitempty"`
 	appName        string
 	X              float64 `json:"x"`
 	Y              float64 `json:"y"`
@@ -65,14 +66,58 @@ func normalizeCardMenuRequest(req cardMenuRequest) (cardMenuRequest, bool) {
 		(req.BaseBranch == "" || (req.Kind == "branch" && req.Number == 0 && req.BundleID == "" && len(req.BaseBranch) <= 1024 && !strings.ContainsAny(req.BaseBranch, "\x00\r\n"))) &&
 		(!req.PublishRebased || (req.Kind == "branch" && req.Number == 0 && req.BundleID == "" && req.BaseBranch == "")) &&
 		(!req.PublishButton || req.PublishRebased) &&
+		(req.GitAction == "" || ((req.GitAction == "update" || req.GitAction == "push") && req.Kind == "branch" && req.Number == 0 && req.BundleID == "" && req.BaseBranch == "" && !req.PublishRebased)) &&
 		validCoordinate(req.X) && validCoordinate(req.Y) && req.Anchor.valid()
 }
 
 type cardGitOption struct {
 	Kind, Branch, Head, Target, Tracking, DisabledReason string
+	MergedNumber                                         int
+	Commits                                              int
 }
 
 func makeCardGitOption(req cardMenuRequest, git GitStatus) *cardGitOption {
+	// A metric identifies the intended operation, never its eligibility.
+	if req.GitAction != "" {
+		if req.Kind != "branch" || req.Number != 0 || req.BundleID != "" || req.BaseBranch != "" || req.PublishRebased {
+			return nil
+		}
+		return makeCardSyncOption(req.GitAction, git)
+	}
+	if !req.PublishRebased && req.BaseBranch == "" && req.BundleID == "" &&
+		git.MergedPR != nil && git.MergedPR.SameHead && git.MergedPR.Number > 0 &&
+		git.MergedPR.Head == git.Head && git.DefaultBranch != "" && git.MergedPR.Base == git.DefaultBranch &&
+		!git.IsMainBranch && git.Branch != git.DefaultBranch && (req.Number == 0 || req.Number == git.MergedPR.Number) {
+		option := &cardGitOption{Kind: "merged", Branch: git.Branch, Head: git.Head, Target: git.DefaultBranch, Tracking: git.Tracking, MergedNumber: git.MergedPR.Number}
+		switch {
+		case git.LocalNote != "" || git.Head == "" || git.Branch == "" || git.Branch == "(detached)" || git.Branch == "Detached HEAD":
+			option.DisabledReason = "Local branch status is unavailable. Refresh the Site."
+		case git.Conflicts > 0:
+			option.DisabledReason = "Resolve local conflicts before returning to the default branch."
+		case git.Changes > 0:
+			option.DisabledReason = "Commit or stash local edits before deleting this branch."
+		}
+		return option
+	}
+	// Ordinary card/branch menus offer one next step. Specific status rows keep
+	// their own action, and app/PR menus retain their dedicated purpose.
+	if req.Number == 0 && req.BundleID == "" && req.BaseBranch == "" && !req.PublishRebased {
+		switch {
+		case git.Rebased:
+			req.Kind, req.PublishRebased = "branch", true
+		case git.Behind > 0:
+			return makeCardSyncOption("update", git)
+		case git.Base != nil && git.Base.Behind > 0 && !git.IsMainBranch:
+			rebase := makeCardGitOption(cardMenuRequest{Kind: "branch", BaseBranch: git.Base.Branch}, git)
+			push := makeCardSyncOption("push", git)
+			if rebase != nil && rebase.DisabledReason != "" && push != nil && push.DisabledReason == "" {
+				return push
+			}
+			return rebase
+		default:
+			return makeCardSyncOption("push", git)
+		}
+	}
 	if req.PublishRebased {
 		if req.Kind != "branch" || req.Number != 0 || req.BundleID != "" || req.BaseBranch != "" || !git.Rebased || git.IsMainBranch {
 			return nil
@@ -113,18 +158,95 @@ func makeCardGitOption(req cardMenuRequest, git GitStatus) *cardGitOption {
 	return option
 }
 
+func makeCardSyncOption(kind string, git GitStatus) *cardGitOption {
+	option := &cardGitOption{Kind: kind, Branch: git.Branch, Head: git.Head, Tracking: git.Tracking}
+	switch kind {
+	case "update":
+		if git.Behind <= 0 || git.Tracking == "" || git.Rebased || git.CanReplaceRemote {
+			return nil
+		}
+		option.Target = git.Tracking
+	case "push":
+		if git.Ahead <= 0 || git.Behind != 0 || git.PushTarget == "" || git.Rewritten || git.Rebased || git.CanReplaceRemote {
+			return nil
+		}
+		option.Target, option.Commits = git.PushTarget, git.Ahead
+	default:
+		return nil
+	}
+	switch {
+	case git.LocalNote != "" || git.Head == "" || git.Branch == "" || git.Branch == "(detached)" || git.Branch == "Detached HEAD":
+		option.DisabledReason = "Local branch status is unavailable. Refresh the Site."
+	case git.Conflicts > 0:
+		option.DisabledReason = "Resolve local conflicts before continuing."
+	case kind == "update" && (git.Ahead > 0 || git.Rewritten):
+		option.DisabledReason = "Local and remote history differ. Review branch history and update manually."
+	case kind == "update" && git.Changes > 0:
+		option.DisabledReason = "Commit or stash local edits before updating this branch."
+	}
+	return option
+}
+
+func (option *cardGitOption) title() string {
+	if option == nil {
+		return ""
+	}
+	switch option.Kind {
+	case "update":
+		return "Fetch and update " + option.Branch + "…"
+	case "push":
+		if option.Commits == 1 {
+			return "Push 1 commit…"
+		}
+		return fmt.Sprintf("Push %d commits…", option.Commits)
+	case "merged":
+		return "Return to " + option.Target + " & delete branch…"
+	case "publish":
+		return "Push rebased branch…"
+	default:
+		return "Rebase and push…"
+	}
+}
+
+func (option *cardGitOption) tooltip() string {
+	if option.DisabledReason != "" {
+		return option.DisabledReason
+	}
+	switch option.Kind {
+	case "push":
+		return "Check the remote, then confirm pushing committed work. Local edits stay on your computer."
+	case "update":
+		return "Fetch the latest commits, then confirm a fast-forward update. Requires a clean checkout and no local-only commits."
+	default:
+		return "Fetch the latest commits and check for conflicts before a separate confirmation."
+	}
+}
+
 // A newer remote tip is expected: preparation fetches it. A different local
 // branch/commit or default-branch identity requires reopening the menu.
 func (option *cardGitOption) request(siteID string, git GitStatus) (ActionRequest, bool) {
 	if option == nil || option.DisabledReason != "" {
 		return ActionRequest{}, false
 	}
-	current := makeCardGitOption(cardMenuRequest{Kind: "branch", BaseBranch: option.Target, PublishRebased: option.Kind == "publish"}, git)
-	if current == nil || current.DisabledReason != "" || current.Branch != option.Branch || current.Head != option.Head || current.Tracking != option.Tracking {
+	menu := cardMenuRequest{Kind: "branch", BaseBranch: option.Target, PublishRebased: option.Kind == "publish"}
+	if option.Kind == "update" || option.Kind == "push" {
+		menu.BaseBranch, menu.GitAction = "", option.Kind
+	}
+	if option.Kind == "merged" {
+		menu.BaseBranch, menu.Number = "", option.MergedNumber
+	}
+	current := makeCardGitOption(menu, git)
+	if current == nil || current.DisabledReason != "" || current.Kind != option.Kind || current.Branch != option.Branch || current.Head != option.Head || current.Tracking != option.Tracking || current.Target != option.Target || current.MergedNumber != option.MergedNumber {
 		return ActionRequest{}, false
+	}
+	if option.Kind == "merged" {
+		return ActionRequest{SiteID: siteID, Kind: "merged", Branch: option.Branch, Head: option.Head, TargetBranch: option.Target, DeleteBranch: true}, true
 	}
 	if option.Kind == "publish" {
 		return ActionRequest{SiteID: siteID, Kind: "publish", Branch: option.Branch, Head: option.Head}, true
+	}
+	if option.Kind == "update" || option.Kind == "push" {
+		return ActionRequest{SiteID: siteID, Kind: option.Kind, Branch: option.Branch, Head: option.Head}, true
 	}
 	remote, found := strings.CutSuffix(option.Tracking, "/"+option.Target)
 	if !found || remote == "" {

@@ -14,7 +14,21 @@ test('local edits, outgoing and incoming commits stay distinct without duplicate
  const s = cardStatus({...clean,summary:'Diverged · 8 ahead / 4 behind',ahead:8,behind:4,changes:2});
  assert.deepEqual(s.local.map(n => n.value),[8,2]);
  assert.deepEqual(s.remote.map(n => n.value),[4]);
- assert.equal(s.alert,null); assert.equal(s.quiet,'');
+ assert.equal(s.alert.text,'History differs'); assert.equal(s.quiet,'');
+});
+test('diverged branch counts exclude inherited default history without claiming a safe rebase', () => {
+ const git={...clean,summary:'Diverged · 1131 ahead / 11 behind',ahead:1131,behind:11,changes:2,branchWork:{local:11,inherited:1120,base:'origin/develop'}};
+ const s=cardStatus(git);
+ assert.deepEqual(s.local.map(n=>[n.value,n.label]),[[11,'local only'],[2,'edits']]);
+ assert.equal(s.remote[0].label,'remote only');assert.equal(s.remote[0].value,11);
+ assert.equal(s.alert.text,'History differs');assert.equal(s.alert.publishRebased,undefined);
+ assert.match(s.alert.title,/1120 additional commits already on origin\/develop/);
+ assert.match(s.alert.title,/manually/);
+ const unavailable=cardStatus({...git,branchWork:null});
+ assert.equal(unavailable.local[0].value,1131);assert.equal(unavailable.local[0].label,'local only');
+ const allInherited=cardStatus({...git,branchWork:{...git.branchWork,local:0,inherited:1131}});
+ assert.equal(allInherited.local.length,1);assert.equal(allInherited.local[0].label,'edits');
+ assert.equal(allInherited.remote[0].value,11);assert.equal(allInherited.alert.text,'History differs');
 });
 test('branches without an upstream show counts against an explicit remote comparison', () => {
  const s=cardStatus({...clean,summary:'No upstream branch',changes:1,comparison:{tracking:'origin/main',ahead:3,behind:2},base:{tracking:'origin/main',branch:'main',behind:2}});

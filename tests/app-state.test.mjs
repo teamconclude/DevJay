@@ -109,6 +109,20 @@ test('only the newer-default-branch line adds rebase context while clicks still 
  }
 });
 
+test('incoming and outgoing metrics carry their own menu action without changing ordinary clicks',async()=>{
+ for(const search of ['', '?site=a']) {
+  const view=app(search),item=site('a','feature');
+  item.git={...item.git,head:'head',ahead:2,behind:3,base:{branch:'develop',tracking:'origin/develop',behind:4}};
+  view.snapshot(state([item]));
+  const metrics=view.root.querySelectorAll('.metric');
+  assert.deepEqual(metrics.map(node=>cardMenuTarget(node.children.at(-1)).gitAction),['push','update']);
+  assert.equal(cardMenuTarget(view.root.querySelector('.branch')).gitAction,undefined);
+  for(const node of metrics) await node.onclick();
+  assert.deepEqual(view.calls.filter(([name])=>name==='devjay:viewer-open').map(([,req])=>req.kind),['branch','branch']);
+  assert.equal(view.calls.some(([name])=>name==='devjay:action-prepare'||name==='devjay:action-confirm'),false);
+ }
+});
+
 test('Changes and History clicks send the originating card bounds for placement',async()=>{
  for (const search of ['', '?site=a']) {
   const view=app(search), item=site('a','feature');
@@ -984,18 +998,35 @@ test('settings, viewer, and action snapshots never request app tooltip refresh',
  }
 });
 
-test('approved card PRs are green unless CI needs attention, and drafts remain neutral',()=>{
+test('approved and merged card PRs are green unless CI needs attention, and drafts remain neutral',()=>{
  for(const search of ['', '?site=a']) {
   const view=app(search);
   for(const [stateName,isDraft,ciState,tone] of [
    ['Approved',false,'success','pr-approved'],['Approved',false,'pending','pr-approved'],
    ['Approved',false,'failure','ci-failed'],['Approved',false,'action_required','ci-failed'],
+   ['Merged',false,undefined,'pr-merged'],['Merged',false,'success','pr-merged'],['Merged',false,'failure','ci-failed'],
    ['Approved',true,'success',''],['Review required',false,'success',''],
   ]) {
    view.snapshot(state([{...site('a'),git:{branch:'feature',pullRequests:[{number:42,state:stateName,isDraft,ciState}]}}]));
    const tag=view.root.querySelector('.pr-tag');
    assert.equal(tag.classList.contains('pr-approved'),tone==='pr-approved');
+   assert.equal(tag.classList.contains('pr-merged'),tone==='pr-merged');
    assert.equal(tag.classList.contains('ci-failed'),tone==='ci-failed');
   }
+ }
+});
+
+test('merged cards explicitly say PR merged and preserve browser click and menu targets',async()=>{
+ for(const search of ['', '?site=a']) {
+  const view=app(search),item=site('a','feature');
+  item.git={...item.git,summary:'Remote branch removed',tone:'warning',head:'head',defaultBranch:'develop',
+   pullRequests:[{number:42,state:'Merged'}],mergedPR:{number:42,head:'head',sameHead:true,base:'develop'}};
+  view.snapshot(state([item]));
+  const row=view.root.querySelector('.pr-status');
+  assert.equal(row.textContent,'✓PR merged');
+  assert.equal(cardMenuTarget(row.children[1]).number,42);
+  await row.onclick();
+  assert.deepEqual(JSON.parse(JSON.stringify(view.calls.filter(([name])=>name==='devjay:pr-open'))),[['devjay:pr-open',{siteID:'a',number:42}]]);
+  assert.equal(view.calls.some(([name])=>name==='devjay:action-prepare'||name==='devjay:action-confirm'),false);
  }
 });

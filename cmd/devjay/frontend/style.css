@@ -54,7 +54,7 @@ h2 {
 .warning {
   color:#e4be7d}
 .merged {
-  color:#c6a6ef}
+  color:#94d8b0}
 .info {
   color:#96bfff}
 .muted {
@@ -293,8 +293,8 @@ html:not([data-local-drag-press]) .strip *, html:not([data-local-drag-press]) .w
 .card-prs { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; flex-shrink: 0; max-width: 45%; }
 .pr-tag { padding: 2px 6px; border: 1px solid #b39aff45; border-radius: 5px; background: #aa85ff1a; color: #d1baff; font-size: 13px; font-weight: 600; line-height: 17px; white-space: nowrap; --wails-draggable: no-drag; }
 .pr-tag:hover, .pr-tag.status-hover { background: #aa85ff33; border-color: #b39aff80; }
-.pr-tag.pr-approved { border-color: #74cba380; background: #4ca77b26; color: #9be0b9; }
-.pr-tag.pr-approved:hover, .pr-tag.pr-approved.status-hover { border-color: #9be0b9; background: #4ca77b40; }
+.pr-tag.pr-approved, .pr-tag.pr-merged { border-color: #74cba380; background: #4ca77b26; color: #9be0b9; }
+.pr-tag.pr-approved:hover, .pr-tag.pr-approved.status-hover, .pr-tag.pr-merged:hover, .pr-tag.pr-merged.status-hover { border-color: #9be0b9; background: #4ca77b40; }
 .pr-tag.ci-failed { border-color: #ef878999; background: #e3535a26; color: #ffb7ba; }
 .pr-tag.ci-failed:hover, .pr-tag.ci-failed.status-hover { border-color: #ffb0b2; background: #e3535a40; }
 
@@ -407,7 +407,7 @@ body[data-monitor-visible="false"] .development-app-working-dots > span { animat
 .branch-choice-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; width: 100%; }
 .branch-choice-prs { display: flex; gap: 8px; font-size: 11px; line-height: 15px; color: #a7b2c3; min-width: 0; max-width: 100%; overflow: hidden; }
 .branch-pr { color: #d1baff; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.branch-pr.pr-approved { color: #9be0b9; }
+.branch-pr.pr-approved, .branch-pr.pr-merged { color: #9be0b9; }
 .branch-pr.ci-failed { color: #ffb7ba; }
 .branch-pr-note { white-space: nowrap; }
 .branch-choice-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -426,15 +426,20 @@ button.status-line { padding: 0; border: 0; border-radius: 3px; background: tran
 button.status-line:hover { text-decoration: underline; }
 .git-viewer #app { --git-sidebar-width: clamp(220px, 27vw, 292px); height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
 .git-viewer [hidden] { display: none !important; }
-.git-view-header { display: flex; align-items: stretch; min-height: 70px; border-bottom: 1px solid #343c48; background: #20252e; flex-shrink: 0; }
+.git-view-header { display: grid; grid-template-columns: var(--git-sidebar-width) minmax(130px, 1fr) auto auto auto; grid-template-rows: minmax(78px, auto); align-items: stretch; border-bottom: 1px solid #343c48; background: #20252e; flex-shrink: 0; }
+.git-view-header:has(.git-suggestion-warning) { grid-template-columns: var(--git-sidebar-width) minmax(130px, max-content) minmax(0, 1fr) auto auto; }
+.git-view-header:has(.git-suggestion-warning) > .git-view-branch { max-width: clamp(130px, calc(50vw - 240px), 330px); }
+.git-view-header:has(.git-suggestion-warning) .git-suggestion-header { max-width: clamp(130px, calc(50vw - 250px), 420px); }
+.git-view-header > .git-view-title { grid-column: 1; grid-row: 1; }
+.git-view-header > .git-view-branch { grid-column: 2; grid-row: 1; }
 .git-view-title { display: flex; flex-direction: column; justify-content: center; gap: 5px; width: var(--git-sidebar-width); flex-shrink: 0; padding: 13px 18px; border-right: 1px solid #343c48; overflow: hidden; }
 .git-view-title strong { font-size: 15px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .git-toolbar-label { font-size: 10px; color: #a3acb9; }
 .git-view-branch { display: flex; flex-direction: column; justify-content: center; gap: 5px; padding: 12px 18px; min-width: 130px; flex: 1; overflow: hidden; }
-.git-branch-name { display: flex; align-items: center; flex-wrap: wrap; gap: 5px 9px; min-width: 0; }
-.git-current-branch { font-size: 13px; font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.git-switch-branch { padding: 2px 5px; font-size: 10px; white-space: nowrap; background: transparent; border-color: #454f5e; --wails-draggable: no-drag; }
-.git-view-header > button { align-self: center; margin: 10px 14px 10px 8px; font-size: 11px; padding: 6px 9px; background: transparent; }
+.git-branch-name { display: flex; align-items: center; gap: 5px 9px; min-width: 0; }
+.git-current-branch { min-width: 0; font-size: 13px; font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.git-switch-branch { flex-shrink: 0; padding: 2px 5px; font-size: 10px; white-space: nowrap; background: transparent; border-color: #454f5e; --wails-draggable: no-drag; }
+.git-view-header > button { grid-column: 5; grid-row: 1; align-self: center; margin: 10px 14px 10px 8px; font-size: 11px; padding: 6px 9px; background: transparent; }
 .git-view-tabs { display: flex; flex-shrink: 0; border-bottom: 1px solid #343c48; background: #1b2028; }
 .git-view-tabs button { display: inline-flex; flex: 1; justify-content: center; align-items: center; gap: 7px; white-space: nowrap; padding: 13px 8px; background: transparent; border: 0; border-radius: 0; color: #a8b2c1; font-size: 12px; }
 .git-view-tabs button.selected { box-shadow: inset 0 -2px #80b8ff; color: #f0f5fc; background: #252d39; }
@@ -467,6 +472,7 @@ button.status-line:hover { text-decoration: underline; }
 .git-commit.incoming:not(.selected) { color: #b2bdcc; }
 .git-commit:hover, .git-file:hover { background: #222d3b; }
 .git-commit.selected, .git-file.selected { background: #273b54; box-shadow: inset 3px 0 #88baff; }
+.git-scroll-list:focus { outline: none; }
 .git-history-divider { border-top: 1px solid #343f4e; margin-top: 8px; padding: 12px 15px 0; color: #a3b0c2; font-size: 10px; }
 .git-view-pagination { display: flex; gap: 8px; align-items: center; justify-content: space-between; padding: 9px 12px; border-top: 1px solid #303a49; font-size: 10px; }
 .git-view-pagination button { padding: 4px 7px; font-size: 10px; background: transparent; }
@@ -518,8 +524,9 @@ button.status-link:hover, button.status-link.status-hover, button.status-link:fo
 }
 /* Give the text the card’s available width before applying truncation. */
 button.status-line.status-link { padding: 2px 0; margin: -2px 0; width: 100%; flex-shrink: 0; }
-.git-view-suggestions { display: flex; flex-direction: column; justify-content: center; padding: 10px 8px; flex: 0 1 auto; max-width: 35%; max-height: 130px; overflow: auto; }
-.git-suggestion-header { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+/* Keep notes between Switch and the actions; wrapping never adds a toolbar row. */
+.git-view-suggestions { display: contents; }
+.git-suggestion-header { grid-column: 4; grid-row: 1; display: flex; align-items: center; min-width: 0; max-width: min(38vw, 420px); padding: 10px 8px; }
 .git-suggestion-header strong { font-size: 12px; }
 .git-suggestion-header .muted { font-size: 11px; }
 .git-commit-presence { align-self: flex-start; border-radius: 4px; padding: 1px 0; font-size: 10px; }
@@ -532,7 +539,8 @@ button.status-line.status-link { padding: 2px 0; margin: -2px 0; width: 100%; fl
 .git-suggestion-buttons { margin-left: auto; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
 .git-suggestion-buttons .suggestion-secondary { color: #a7b2c3; background: transparent; border-color: #435066; }
 .git-suggestion-buttons .suggestion-secondary:hover { color: #edf1f7; background: #ffffff0c; }
-.git-suggestion-warning { margin: 6px 0 0; font-size: 10px; line-height: 1.4; overflow-wrap: anywhere; }
+.git-suggestion-warning { grid-column: 3; grid-row: 1; align-self: center; min-width: 0; margin: 0; padding: 0 8px; font-size: 11px; line-height: 1.4; }
+.git-suggestion-warning > span { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
 .git-view-suggestions button { font-size: 11px; padding: 7px 10px; overflow-wrap: anywhere; }
 
 .git-diff-header { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
@@ -540,6 +548,7 @@ button.status-line.status-link { padding: 2px 0; margin: -2px 0; width: 100%; fl
 .file-editor-controls { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px; margin-left: auto; }
 
 .file-editor-controls button { font-size: 11px; padding: 5px 9px; }
+.file-editor-controls button.editor-pending:disabled { opacity: 1; }
 .file-editor-message { flex-basis: 100%; max-width: 420px; font-size: 11px; font-weight: 400; }
 
 .editor-settings-row { display: flex; flex-wrap: wrap; gap: 12px; }

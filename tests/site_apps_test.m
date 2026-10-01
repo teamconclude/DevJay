@@ -12,6 +12,7 @@
 @property(nonatomic) NSUInteger activations;
 - (NSString *)bundleIdentifier;
 - (BOOL)activateWithOptions:(NSApplicationActivationOptions)options;
+- (BOOL)activateFromApplication:(NSRunningApplication *)application options:(NSApplicationActivationOptions)options;
 @end
 @implementation ActivationTestApp
 - (NSString *)bundleIdentifier { return @"com.jetbrains.goland"; }
@@ -20,6 +21,28 @@
     self.activations++;
     return self.succeeds;
 }
+- (BOOL)activateFromApplication:(NSRunningApplication *)application options:(NSApplicationActivationOptions)options {
+    (void)application;
+    return [self activateWithOptions:options];
+}
+@end
+
+@interface ActivationTestWindow : NSObject
+@property(nonatomic) NSInteger windowNumber;
+@property(nonatomic, getter=isVisible) BOOL visible;
+@property(nonatomic, getter=isMiniaturized) BOOL miniaturized;
+@property(nonatomic, getter=isOnActiveSpace) BOOL onActiveSpace;
+@end
+@implementation ActivationTestWindow
+@end
+
+@interface ActivationTestHost : NSObject
+@property(nonatomic, getter=isActive) BOOL active;
+@property(nonatomic, assign) NSWindow *keyWindow;
+- (void)yieldActivationToApplication:(NSRunningApplication *)application;
+@end
+@implementation ActivationTestHost
+- (void)yieldActivationToApplication:(NSRunningApplication *)application { (void)application; }
 @end
 static ActivationTestApp *activationApp;
 static id findActivationApp(id cls, SEL selector, pid_t pid) {
@@ -43,6 +66,36 @@ static void checkAppActivation(void) {
     activationApp.succeeds = NO;
     assert(!devjay_activate_development_app(42, "com.jetbrains.goland"));
     assert(activationApp.activations == 2);
+
+    // A matching app is not enough: the Site must be active before handoff.
+    NSApplication *originalHost = NSApp;
+    ActivationTestHost *host = [[[ActivationTestHost alloc] init] autorelease];
+    ActivationTestWindow *site = [[[ActivationTestWindow alloc] init] autorelease];
+    host.active = YES; host.keyWindow = (NSWindow *)site;
+    NSApp = (NSApplication *)host;
+    site.windowNumber = 7; site.visible = YES;
+    activationApp.succeeds = YES;
+    activationApp.activations = 0;
+    assert(devjay_development_app_available(42, "com.jetbrains.goland"));
+    assert(devjay_activate_development_app_on_site(site, 7, 42, "com.jetbrains.goland") == 0);
+    assert(activationApp.activations == 0);
+    site.onActiveSpace = YES;
+    assert(devjay_activate_development_app_on_site(site, 7, 42, "com.jetbrains.goland") == 1);
+    assert(activationApp.activations == 1);
+    host.keyWindow = nil;
+    assert(devjay_activate_development_app_on_site(site, 7, 42, "com.jetbrains.goland") == -2);
+    host.keyWindow = (NSWindow *)site; host.active = NO;
+    assert(devjay_activate_development_app_on_site(site, 7, 42, "com.jetbrains.goland") == -2);
+    host.active = YES;
+    assert(devjay_activate_development_app_on_site(site, 8, 42, "com.jetbrains.goland") == -1);
+    site.miniaturized = YES;
+    assert(devjay_activate_development_app_on_site(site, 7, 42, "com.jetbrains.goland") == -1);
+    site.miniaturized = NO; site.visible = NO;
+    assert(devjay_activate_development_app_on_site(site, 7, 42, "com.jetbrains.goland") == -1);
+    site.visible = YES; activationApp.terminated = YES;
+    assert(devjay_activate_development_app_on_site(site, 7, 42, "com.jetbrains.goland") == -1);
+    assert(activationApp.activations == 1);
+    NSApp = originalHost;
     method_setImplementation(method, original);
 }
 

@@ -12,6 +12,7 @@ export function prCheckIndicator(pr) {
 }
 export function prTagTone(pr) {
   if (['failure','action_required'].includes(pr.ciState)) return 'ci-failed';
+  if (pr.state === 'Merged') return 'pr-merged';
   return pr.state === 'Approved' && !pr.isDraft ? 'pr-approved' : '';
 }
 export function prDescription(pr) {

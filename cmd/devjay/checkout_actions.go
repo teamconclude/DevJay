@@ -194,8 +194,8 @@ func prepareCheckoutAction(ctx context.Context, path string, req ActionRequest, 
 		if m.DefaultBranch == "" || s.IsMainBranch {
 			return nil, errors.New("Could not determine a different default branch.")
 		}
-		if req.Kind == "rebase" && ((req.TargetBranch != "" && req.TargetBranch != m.DefaultBranch) || (req.TargetRemote != "" && req.TargetRemote != m.DefaultRemote)) {
-			return nil, errors.New("The default branch changed. Open the rebase action again.")
+		if (req.TargetBranch != "" && req.TargetBranch != m.DefaultBranch) || (req.TargetRemote != "" && req.TargetRemote != m.DefaultRemote) {
+			return nil, errors.New("The default branch changed. Open the action again.")
 		}
 		p.Target, p.remote, p.remoteRef, p.trackingRef = m.DefaultBranch, m.DefaultRemote, "refs/heads/"+m.DefaultBranch, m.DefaultRef
 		if _, err := git(ctx, path, "check-ref-format", "--branch", p.Target); err != nil {

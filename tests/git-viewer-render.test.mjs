@@ -25,15 +25,18 @@ function viewer(openBranches) {
     get parentNode(){return this.parent;}
     insertBefore(node,next){node.remove();node.parent=this;const index=this.children.indexOf(next);this.children.splice(index<0?this.children.length:index,0,node);}
     remove(){if(this.parent){const nodes=this.parent.children;nodes.splice(nodes.indexOf(this),1);this.parent=null;}}
-    replaceChildren(...nodes){if(this.contains(document.activeElement))document.activeElement=document.body;for(const node of this.children)node.parent=null;this.children=[];this._text='';this.scrollTop=0;this.scrollLeft=0;this.append(...nodes);}
+    replaceChildren(...nodes){if(this.children.some(node=>node.contains(document.activeElement)))document.activeElement=document.body;for(const node of this.children)node.parent=null;this.children=[];this._text='';this.scrollTop=0;this.scrollLeft=0;this.append(...nodes);}
     set textContent(text){this.replaceChildren();this._text=String(text);}
     get textContent(){return (this._text||'')+this.children.map(node=>node.textContent).join('');}
     contains(node){return node===this||this.children.some(child=>child.contains(node));}
     setAttribute(key,value){this.attrs[key]=value;}
+    removeAttribute(key){delete this.attrs[key];}
     matches(selector){return selector.startsWith('.')?this.classList.contains(selector.slice(1)):this.tag===selector;}
     querySelectorAll(selector){return this.children.flatMap(child=>[...(child.matches(selector)?[child]:[]),...child.querySelectorAll(selector)]);}
     querySelector(selector){return this.querySelectorAll(selector)[0]||null;}
-    focus(){document.activeElement=this;}
+    focus(){if(document.activeElement!==this){document.activeElement=this;this.onfocus?.();}}
+    click(){if(!this.disabled)this.onclick?.();}
+    scrollIntoView(){this.revealed=(this.revealed||0)+1;}
   }
   const body=new Element('body'),root=new Element('main');
   document={body,activeElement:body,createElement:tag=>new Element(tag),createDocumentFragment:()=>new Element('fragment')};
@@ -114,7 +117,8 @@ test('Changes window opens branch selection for its Site and restores the button
   await button.onclick();assert.deepEqual(calls,['one']);
   finish(new Error('Bridge unavailable'));await assert.rejects(opening,/Bridge unavailable/);
   assert.equal(button.disabled,false);
-  view.render(state({head:'head',loading:true}));assert.equal(button.disabled,true);
+  view.render(state({head:'head',loading:true}));
+  await button.onclick();assert.deepEqual(calls,['one']); // Guard loading without flashing the toolbar.
   for(const change of [{head:''},{head:'head',branch:'Detached HEAD'},{head:'head',branch:'(detached)'},{head:'head',branch:''}]){
    view.render(state(change));assert.equal(button.hidden,true);
   }
@@ -131,10 +135,10 @@ test('branch view presents one history with explicit markers and subdued incomin
  assert.equal(tabs.children.length,2);
  assert.match(tabs.textContent,/Changes1History3/);
  assert.doesNotMatch(tabs.textContent,/Local commits|Remote commits/);
- assert.match(view.root.querySelector('.git-view-context').textContent,/1 not pushed.*1 incoming/);
+ assert.match(view.root.querySelector('.git-view-context').textContent,/History differs.*1 local only.*1 remote only/);
  const commits=view.root.querySelectorAll('.git-commit');
- assert.ok(commits[0].classList.contains('incoming'));assert.match(commits[0].textContent,/↓ Incoming/);
- assert.match(commits[1].textContent,/↑ Not pushed/);assert.doesNotMatch(commits[2].textContent,/On remote/);assert.match(commits[2].attrs['aria-label'],/On remote/);
+ assert.ok(commits[0].classList.contains('incoming'));assert.match(commits[0].textContent,/↓ Remote only/);
+ assert.match(commits[1].textContent,/↑ Local only/);assert.doesNotMatch(commits[2].textContent,/On remote/);assert.match(commits[2].attrs['aria-label'],/On remote/);
  view.render(state({version:2,kind:'branch',comparisonOnly:true,commits:[{id:'outgoing',presence:'outgoing'}]}));
  assert.match(view.root.querySelector('.git-commit').textContent,/Local only/);
  assert.doesNotMatch(view.root.querySelector('.git-commit').textContent,/Not pushed/);
@@ -149,7 +153,7 @@ test('Changes has one selectable row per path and keeps staged and working diffs
  assert.equal(files.parentNode,sidebar);
  assert.equal(view.root.querySelectorAll('.git-file').length,3);
  const row=view.root.querySelectorAll('.git-file').find(n=>n.textContent.includes('shared.go'));
- assert.match(row.textContent,/Staged · Working tree/);assert.equal(row.attrs['aria-pressed'],'true');
+ assert.match(row.textContent,/Staged · Working tree/);assert.equal(row.attrs['aria-selected'],'true');
  const parts=view.root.querySelector('.git-change-parts').querySelectorAll('button');
  assert.deepEqual(parts.map(n=>n.textContent),['Staged','Working tree']);
  parts[0].onclick();
@@ -177,4 +181,122 @@ test('Changes and History navigation sends only a mode request and clean changes
  view.render(state({version:2,files:[],file:-1,counts:null,error:'Checkout unavailable'}));
  assert.match(view.root.querySelector('.git-detail-empty').textContent,/Changes unavailable/);
  assert.doesNotMatch(view.root.querySelector('.git-detail-empty').textContent,/working tree is clean/);
+});
+
+function key(target,key,modifiers={}) {
+ const event={key,preventDefault(){this.defaultPrevented=true;},...modifiers};
+ target.onkeydown?.(event);return !!event.defaultPrevented;
+}
+
+test('arrow selection keeps history rows and surrounding text steady while the diff loads',()=>{
+ const view=viewer(),initial=state({kind:'branch',commit:'a',message:'First commit',tracking:'origin/main',incomingCount:0,
+  commits:[{id:'a',subject:'First commit',presence:'shared'},{id:'b',subject:'Next commit',presence:'shared'}]});
+ view.render(initial);
+ const list=view.root.querySelector('.git-view-commits').querySelector('.git-scroll-list');
+ const rows=list.querySelectorAll('button'),context=view.root.querySelector('.git-view-context'),status=view.root.querySelector('.git-view-status');
+ const contextNode=context.children[0],statusText=status.textContent,diff=view.root.querySelector('.git-diff'),line=diff.children[0];
+ list.scrollTop=80;
+ key(list,'ArrowDown');view.render({...initial,version:2,loading:true,editor:null});
+ assert.equal(context.children[0],contextNode);assert.equal(status.textContent,statusText);assert.equal(diff.children[0],line);
+ assert.deepEqual(list.querySelectorAll('button'),rows);assert.equal(list.scrollTop,80);
+ view.render({...initial,version:2,commit:'b',message:'Next commit',diff:'@@ -1 +1 @@\n-new commit'});
+ assert.deepEqual(list.querySelectorAll('button'),rows);assert.equal(rows[1].attrs['aria-selected'],'true');
+ assert.equal(rows[0].attrs['aria-selected'],'false');assert.equal(list.scrollTop,80);
+ assert.match(view.root.querySelector('.git-commit-detail').textContent,/Next commit/);
+ assert.match(diff.textContent,/new commit/);
+ // An actual history change still replaces the rows and updates their labels.
+ view.render({...initial,version:3,commits:[{id:'new',subject:'New remote commit',presence:'incoming'},...initial.commits]});
+ assert.notEqual(list.querySelectorAll('button')[0],rows[0]);assert.match(list.textContent,/New remote commit/);
+});
+
+test('file selection reuses rows while preserving staged and working selection intents',()=>{
+ const view=viewer(),initial=state({files:[{...file('a.go'),group:'Staged'},file('a.go'),file('b.go')],file:0});
+ view.render(initial);
+ const list=view.root.querySelector('.git-view-files').querySelector('.git-scroll-list'),rows=list.querySelectorAll('button');
+ view.render({...initial,version:2,loading:true});view.render({...initial,version:2,file:1});
+ assert.deepEqual(list.querySelectorAll('button'),rows);rows[0].click();assert.equal(view.requests.at(-1).file,1);
+ view.render({...initial,version:3,file:0});rows[0].click();assert.equal(view.requests.at(-1).file,0);
+ view.render({...initial,version:4,file:2});key(list,'ArrowUp');assert.equal(view.requests.at(-1).file,1);
+});
+
+test('history arrows select across incoming/shared rows, retain focus through loading, and reveal the selection',()=>{
+ const view=viewer(),initial=state({kind:'branch',commit:'incoming',commits:[
+  {id:'incoming',subject:'Incoming',presence:'incoming'},
+  {id:'shared',subject:'Shared',presence:'shared'},
+  {id:'older',subject:'Older',presence:'shared'},
+ ]});
+ view.render(initial);
+ const list=view.root.querySelector('.git-view-commits').querySelector('.git-scroll-list');
+ assert.equal(view.document.activeElement,list);assert.equal(list.attrs.role,'listbox');
+ assert.equal(key(list,'ArrowDown'),true);
+ assert.equal(view.requests[0].operation,'commit');assert.equal(view.requests[0].commit,'shared');assert.equal(view.requests[0].version,1);
+ view.render({...initial,version:2,loading:true});
+ assert.equal(view.document.activeElement,list);assert.notEqual(view.root.querySelector('.git-view-panes').inert,true);
+ key(list,'ArrowDown');assert.equal(view.requests.length,1);
+ view.render({...initial,version:2,commit:'shared'});
+ const selected=list.querySelector('.selected');
+ assert.equal(view.document.activeElement,list);assert.equal(list.attrs['aria-activedescendant'],selected.id);
+ assert.equal(selected.attrs['aria-selected'],'true');assert.equal(selected.tabIndex,-1);assert.ok(selected.revealed);
+ key(list,'ArrowDown');assert.equal(view.requests[1].commit,'older');assert.equal(view.requests[1].version,2);
+ view.render({...initial,version:3,commit:'older'});
+ key(list,'ArrowDown');assert.equal(view.requests.length,2); // Do not wrap or fetch another page.
+ key(list,'ArrowUp');assert.equal(view.requests[2].commit,'shared');
+ key(list,'Home');assert.equal(view.requests[3].commit,'incoming');
+ view.render({...initial,version:4});
+ key(list,'ArrowUp');assert.equal(view.requests.length,4);
+ key(list,'End');assert.equal(view.requests[4].commit,'older');
+});
+
+test('file arrows follow displayed paths, not backend indices or staged duplicates',()=>{
+ const view=viewer(),initial=state({files:[file('z.go'),{...file('a.go'),group:'Staged'},file('a.go'),file('m.go')],file:2});
+ view.render(initial);
+ const list=view.root.querySelector('.git-view-files').querySelector('.git-scroll-list');
+ assert.equal(view.document.activeElement,list);
+ assert.equal(list.querySelectorAll('button').length,3);
+ key(list,'ArrowDown');assert.equal(view.requests[0].file,3);assert.equal(view.requests[0].operation,'file');
+ view.render({...initial,version:2,file:3});
+ key(list,'ArrowUp');assert.equal(view.requests[1].file,2); // Working-tree part of the preceding path.
+ key(list,'End');assert.equal(view.requests[2].file,0);
+ view.render({...initial,version:3,file:0});
+ key(list,'Home');assert.equal(view.requests[3].file,2);
+ // Clicking a row returns focus from the diff to the list, including on WebKit.
+ view.root.querySelector('.git-diff').focus();list.querySelectorAll('button')[1].click();
+ assert.equal(view.document.activeElement,list);assert.equal(view.requests.at(-1).file,3);
+});
+
+test('list navigation does not steal focus, swallow modified keys, or request reads while loading',()=>{
+ const view=viewer(),initial=state({files:[file('a.go'),file('b.go')]});
+ const refresh=view.root.querySelector('.git-view-header').querySelectorAll('button').at(-1);
+ refresh.focus();view.render(initial);assert.equal(view.document.activeElement,refresh);
+ const list=view.root.querySelector('.git-view-files').querySelector('.git-scroll-list');
+ for(const modifiers of [{altKey:true},{ctrlKey:true},{metaKey:true},{shiftKey:true},{isComposing:true},{defaultPrevented:true}]){
+  const event={key:'ArrowDown',preventDefault(){assert.fail('Modified key intercepted');},...modifiers};
+  list.onkeydown(event);
+ }
+ assert.equal(key(list,'Tab'),false);assert.equal(key(list,'ArrowLeft'),false);
+ const diff=view.root.querySelector('.git-diff');diff.focus();assert.equal(key(diff,'ArrowDown'),false);
+ view.render({...initial,version:2,loading:true});
+ list.querySelectorAll('button')[1].click();view.root.querySelector('.git-view-tabs').querySelectorAll('button')[1].click();
+ assert.equal(view.requests.length,0);
+ diff.focus();view.render({...initial,version:2});assert.equal(view.document.activeElement,diff);
+ list.focus();list.scrollTop=120;const revealed=list.querySelector('.selected').revealed;
+ view.render({...initial,version:3});assert.equal(view.document.activeElement,list);assert.equal(list.scrollTop,120);
+ assert.equal(list.querySelector('.selected').revealed,revealed); // An unchanged refresh must not move the scroll.
+ view.render({...initial,version:4,files:[],file:-1});
+ assert.equal(list.attrs['aria-activedescendant'],undefined);key(list,'ArrowDown');key(list,'End');assert.equal(view.requests.length,0);
+});
+
+test('history files navigate independently and ArrowDown from a category enters its list',()=>{
+ const view=viewer(),initial=state({kind:'branch',commit:'a',commits:[{id:'a'},{id:'b'}],files:[file('a.go'),file('b.go')]});
+ view.render(initial);
+ const files=view.root.querySelector('.git-view-files').querySelector('.git-scroll-list');files.focus();
+ key(files,'ArrowDown');assert.equal(view.requests[0].operation,'file');assert.equal(view.requests[0].file,1);
+ view.render({...initial,version:2,file:1});assert.equal(view.document.activeElement,files);
+ const tabs=view.root.querySelector('.git-view-tabs').querySelectorAll('button');
+ tabs[0].click();assert.equal(view.document.activeElement,tabs[0]);assert.equal(view.requests[1].operation,'mode');
+ view.render(state({version:3,loading:true}));view.render(state({version:3}));
+ assert.equal(key(tabs[0],'ArrowDown'),true);assert.equal(view.document.activeElement,files);
+ tabs[1].click();view.render({...initial,version:4,loading:true});view.render({...initial,version:4});
+ key(tabs[1],'ArrowDown');assert.equal(view.document.activeElement,view.root.querySelector('.git-view-commits').querySelector('.git-scroll-list'));
+ assert.equal(view.requests.length,3);
 });

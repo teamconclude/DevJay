@@ -22,7 +22,7 @@ static WKWebView *card_menu_webview(NSView *view) {
 
 // Invoked on AppKit's main thread. The target and menu belong to this single
 // tracking loop; no registrations or callbacks survive its return.
-int devjay_card_menu(void *pointer, double x, double y, const char *first, const char *second, const char *settings, const char *quit, const char *rebase, const char *rebaseDisabled) {
+int devjay_card_menu(void *pointer, double x, double y, const char *first, const char *second, const char *settings, const char *quit, const char *action, const char *actionDisabled, const char *hint) {
     if (![NSThread isMainThread] || !pointer || !isfinite(x) || !isfinite(y)) return 0;
     @autoreleasepool {
         NSWindow *window = (NSWindow *)pointer;
@@ -32,15 +32,16 @@ int devjay_card_menu(void *pointer, double x, double y, const char *first, const
         NSString *secondTitle = second ? [NSString stringWithUTF8String:second] : nil;
         NSString *settingsTitle = settings ? [NSString stringWithUTF8String:settings] : nil;
         NSString *quitTitle = quit ? [NSString stringWithUTF8String:quit] : nil;
-        NSString *rebaseTitle = rebase ? [NSString stringWithUTF8String:rebase] : @"";
-        NSString *disabledReason = rebaseDisabled ? [NSString stringWithUTF8String:rebaseDisabled] : @"";
-        if (!firstTitle || !secondTitle || !settingsTitle.length || !quitTitle.length || !rebaseTitle || !disabledReason) return 0;
-        if (!firstTitle.length && (secondTitle.length || !rebaseTitle.length)) return 0;
+        NSString *actionTitle = action ? [NSString stringWithUTF8String:action] : @"";
+        NSString *disabledReason = actionDisabled ? [NSString stringWithUTF8String:actionDisabled] : @"";
+        NSString *hintText = hint ? [NSString stringWithUTF8String:hint] : @"";
+        if (!firstTitle || !secondTitle || !settingsTitle.length || !quitTitle.length || !actionTitle || !disabledReason || !hintText) return 0;
+        if (!firstTitle.length && (secondTitle.length || !actionTitle.length)) return 0;
 
         DevJayCardMenuSelection *selection = [[[DevJayCardMenuSelection alloc] init] autorelease];
         NSMenu *menu = [[[NSMenu alloc] initWithTitle:@""] autorelease];
         menu.autoenablesItems = NO;
-        NSArray<NSString *> *titles = @[firstTitle, secondTitle, rebaseTitle, settingsTitle, quitTitle];
+        NSArray<NSString *> *titles = @[firstTitle, secondTitle, actionTitle, settingsTitle, quitTitle];
         const NSInteger tags[] = {1, 2, 5, 3, 4};
         for (NSUInteger index = 0; index < titles.count; index++) {
             if (!titles[index].length) continue;
@@ -50,7 +51,7 @@ int devjay_card_menu(void *pointer, double x, double y, const char *first, const
             item.tag = tags[index];
             if (index == 2) {
                 item.enabled = !disabledReason.length;
-                item.toolTip = disabledReason.length ? disabledReason : @"Fetch the latest commits and check for conflicts before a separate confirmation.";
+                item.toolTip = disabledReason.length ? disabledReason : hintText;
             }
             [menu addItem:item];
         }

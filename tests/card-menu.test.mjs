@@ -11,6 +11,8 @@ test('right-click targets category, heading, PR or app, with desktop navigation 
   for (const kind of ['auto','edits','branch','local','remote']) assert.equal(cardMenuTarget(target({viewKind:kind})).kind,kind);
   assert.equal(cardMenuTarget(target({prNumber:'1234'})).number,1234);
   assert.equal(cardMenuTarget(target({appBundle:'com.jetbrains.goland'})).bundleID,'com.jetbrains.goland');
+  for(const gitAction of ['update','push']) assert.equal(cardMenuTarget(target({viewKind:'branch',gitAction})).gitAction,gitAction);
+  assert.equal(cardMenuTarget(target({viewKind:'branch',gitAction:'replace'})).gitAction,undefined);
   assert.deepEqual(cardMenuTarget(target({viewKind:'arbitrary',prNumber:'NaN'})), {siteID:'site-a',kind:'site',number:0,bundleID:''});
   assert.equal(cardMenuTarget(target(null,'')),null);
 });

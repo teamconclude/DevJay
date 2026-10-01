@@ -20,6 +20,7 @@ type GitStatus struct {
 	Comparison    *HistoryComparison `json:"comparison,omitempty"`
 	PushTarget    string             `json:"pushTarget,omitempty"`
 	Rebased       bool               `json:"rebased,omitempty"`
+	BranchWork    *BranchWork        `json:"branchWork,omitempty"`
 	Branch        string             `json:"branch"`
 	Head          string             `json:"head,omitempty"`
 	Base          *BranchBase        `json:"base,omitempty"`
@@ -366,7 +367,10 @@ func applyLocalReading(s GitStatus, m gitMeta, cache *remoteCache, last *GitStat
 	if m.key() != cache.Key {
 		*cache = remoteCache{Key: m.key()}
 	}
-	if m.Comparable && s.Behind == 0 {
+	// A remote commit may be amended before this checkout ever takes it.
+	// If the local tip is still contained in the upstream, this is an ordinary
+	// incoming update. An old remote event must not block its fast-forward.
+	if m.Comparable && (s.Ahead == 0 || s.Behind == 0) {
 		cache.Rewritten = false
 	}
 	*last = describeGit(s, m, *cache)
@@ -440,6 +444,7 @@ func describeGit(s GitStatus, m gitMeta, c remoteCache) GitStatus {
 	}
 	if c.Missing {
 		s.Rebased = false
+		s.BranchWork = nil
 		s.CanReplaceRemote = false
 	}
 	if s.Rebased && s.Conflicts == 0 {
@@ -448,7 +453,7 @@ func describeGit(s GitStatus, m gitMeta, c remoteCache) GitStatus {
 			s.Summary = "Rebased · remote not verified"
 		}
 	}
-	s.Rewritten = (c.Rewritten && (!m.Comparable || s.Behind > 0)) || s.CanReplaceRemote
+	s.Rewritten = (c.Rewritten && (!m.Comparable || (s.Ahead > 0 && s.Behind > 0))) || s.CanReplaceRemote
 	s.GitHub = c.GitHub
 	s.PullRequests = c.PullRequests
 	s.Reviews = c.Reviews

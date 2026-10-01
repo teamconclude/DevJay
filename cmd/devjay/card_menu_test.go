@@ -74,7 +74,7 @@ func TestCardRebaseRequiresTheClickedBaseAndUnchangedCheckout(t *testing.T) {
 			t.Fatalf("accepted changed/blocked checkout: %+v", current)
 		}
 	}
-	for _, req := range []cardMenuRequest{{Kind: "branch"}, {Kind: "edits", BaseBranch: "develop"}, {Kind: "branch", BaseBranch: "main"}, {Kind: "branch", BaseBranch: "develop", Number: 4}, {Kind: "branch", BaseBranch: "develop", BundleID: "app"}} {
+	for _, req := range []cardMenuRequest{{Kind: "edits", BaseBranch: "develop"}, {Kind: "branch", BaseBranch: "main"}, {Kind: "branch", BaseBranch: "develop", Number: 4}, {Kind: "branch", BaseBranch: "develop", BundleID: "app"}} {
 		if makeCardGitOption(req, status()) != nil {
 			t.Fatal("rebase offered on another target")
 		}
@@ -113,6 +113,50 @@ func TestCardMenuActionLabels(t *testing.T) {
 		if got := cardMenuLabels(test.req); got != test.labels {
 			t.Errorf("menu for %#v = %#v, want %#v", test.req, got, test.labels)
 		}
+	}
+}
+
+func TestMergedCardMenuPreparesDeletionAndRejectsChangedState(t *testing.T) {
+	status := func() GitStatus {
+		return GitStatus{Branch: "feature", Head: "head", DefaultBranch: "develop", Tracking: "origin/feature",
+			MergedPR: &MergedPullRequest{Number: 42, Head: "head", SameHead: true, Base: "develop"}}
+	}
+	var option *cardGitOption
+	for _, menu := range []cardMenuRequest{{Kind: "site"}, {Kind: "branch"}, {Kind: "edits"}, {Kind: "site", Number: 42}} {
+		option = makeCardGitOption(menu, status())
+		if option == nil || option.DisabledReason != "" || option.title() != "Return to develop & delete branch…" {
+			t.Fatalf("missing merged action: %+v", option)
+		}
+		action, ok := option.request("site", status())
+		if !ok || action.Kind != "merged" || action.SiteID != "site" || action.Branch != "feature" || action.Head != "head" || action.TargetBranch != "develop" || !action.DeleteBranch {
+			t.Fatalf("wrong preparation: %+v", action)
+		}
+		if menu.Number > 0 && cardMenuLabels(menu)[0] != "Open PR #42 in browser" {
+			t.Fatal("cleanup displaced the default browser action")
+		}
+	}
+	for _, change := range []func(*GitStatus){
+		func(s *GitStatus) { s.Changes = 1 }, func(s *GitStatus) { s.Conflicts = 1 }, func(s *GitStatus) { s.LocalNote = "cached" },
+		func(s *GitStatus) { s.Head = "new" }, func(s *GitStatus) { s.Branch = "other" }, func(s *GitStatus) { s.Tracking = "other/feature" },
+		func(s *GitStatus) { s.DefaultBranch = "main" }, func(s *GitStatus) { s.DefaultBranch = "" }, func(s *GitStatus) { s.IsMainBranch = true },
+		func(s *GitStatus) { s.MergedPR.SameHead = false }, func(s *GitStatus) { s.MergedPR.Head = "other" },
+		func(s *GitStatus) { s.MergedPR.Base = "main" }, func(s *GitStatus) { s.MergedPR.Number = 43 }, func(s *GitStatus) { s.MergedPR = nil },
+	} {
+		current := status()
+		change(&current)
+		if _, ok := option.request("site", current); ok {
+			t.Fatalf("stale or blocked cleanup accepted: %+v", current)
+		}
+	}
+	for _, menu := range []cardMenuRequest{{Kind: "site", Number: 43}, {Kind: "site", BundleID: "app"}, {Kind: "branch", BaseBranch: "develop"}, {Kind: "branch", PublishRebased: true}} {
+		if makeCardGitOption(menu, status()) != nil {
+			t.Fatal("cleanup offered for a different action target")
+		}
+	}
+	dirty := status()
+	dirty.Changes = 1
+	if option := makeCardGitOption(cardMenuRequest{Kind: "branch"}, dirty); option == nil || option.DisabledReason == "" {
+		t.Fatal("dirty merged branch must explain why cleanup is disabled")
 	}
 }
 

@@ -28,10 +28,11 @@ func trackedFixture(t *testing.T) string {
 
 func TestFailedLocalReadRetainsStatusAndCache(t *testing.T) {
 	repo := trackedFixture(t)
-	// Keep an incoming tip so a recorded rewrite remains relevant.
+	// Keep divergent tips so a recorded rewrite remains relevant.
 	fixtureGit(t, repo, "commit", "--allow-empty", "-m", "incoming")
 	fixtureGit(t, repo, "push")
 	fixtureGit(t, repo, "reset", "--hard", "HEAD~1")
+	fixtureGit(t, repo, "commit", "--allow-empty", "-m", "local work")
 	ctx := context.Background()
 	s, m := inspectLocal(ctx, repo)
 	if m.ReadError != nil || m.Ref == "" {

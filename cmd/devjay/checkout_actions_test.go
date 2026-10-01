@@ -272,6 +272,49 @@ func TestReturnRequiresExactMergedHeadAndBaseEvenWhenKeepingBranch(t *testing.T)
 	}
 }
 
+func TestMergedCardActionAfterRemoteDeletion(t *testing.T) {
+	repo, seed := rebaseFixture(t, false)
+	head := fixtureGit(t, repo, "rev-parse", "HEAD")
+	// Model a real merged PR whose remote feature branch has been removed.
+	fixtureGit(t, seed, "fetch", "origin", "feature")
+	fixtureGit(t, seed, "merge", "--no-edit", "origin/feature")
+	fixtureGit(t, seed, "push")
+	fixtureGit(t, seed, "push", "origin", "--delete", "feature")
+	merged := &MergedPullRequest{Number: 42, Head: head, Base: "develop", SameHead: true, MergedAt: time.Now().Add(time.Second)}
+	status := GitStatus{Branch: "feature", Head: head, DefaultBranch: "develop", Tracking: "origin/feature", MergedPR: merged}
+	option := makeCardGitOption(cardMenuRequest{Kind: "site", Number: 42}, status)
+	req, ok := option.request("site", status)
+	if !ok {
+		t.Fatal("missing merged cleanup request")
+	}
+	before := checkoutFingerprint(t, repo)
+	changed := req
+	changed.TargetBranch = "main"
+	if _, err := prepareCheckoutAction(context.Background(), repo, changed, merged); err == nil || !strings.Contains(err.Error(), "default branch changed") {
+		t.Fatalf("changed menu destination accepted: %v", err)
+	}
+	plan, err := prepareCheckoutAction(context.Background(), repo, req, merged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after := checkoutFingerprint(t, repo)
+	for _, key := range []string{"head", "status", "file", "feature", ".git/index", ".git/config"} {
+		if before[key] != after[key] {
+			t.Fatalf("preparing cleanup changed %s", key)
+		}
+	}
+	result := applyCheckoutAction(context.Background(), plan)
+	if result.Status != "complete" || fixtureGit(t, repo, "branch", "--show-current") != "develop" || fixtureGit(t, repo, "rev-parse", "HEAD") != fixtureGit(t, seed, "rev-parse", "HEAD") {
+		t.Fatalf("cleanup did not return to updated develop: %+v", result)
+	}
+	if remaining, err := refHead(context.Background(), repo, "refs/heads/feature"); err != nil || remaining != "" {
+		t.Fatalf("local branch not deleted: %q %v", remaining, err)
+	}
+	if fixtureGit(t, repo, "rev-parse", result.Recovery) != head {
+		t.Fatal("missing recovery commits")
+	}
+}
+
 func TestRebaseStopsForIgnoredCollisionAndNewUpstream(t *testing.T) {
 	for _, scenario := range []string{"ignored", "upstream"} {
 		t.Run(scenario, func(t *testing.T) {

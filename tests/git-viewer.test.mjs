@@ -4,7 +4,7 @@ import {readFile} from 'node:fs/promises';
 let source=await readFile(new URL('../cmd/devjay/frontend/git-viewer.js',import.meta.url),'utf8');
 const editorSource=await readFile(new URL('../cmd/devjay/frontend/file-editor.js',import.meta.url),'utf8');
 source=source.replace('./file-editor.js',`data:text/javascript;base64,${Buffer.from(editorSource).toString('base64')}`);
-const {diffRows,summarizeFiles,remoteHistoryContext,localHistoryContext,commitPresenceLabel,viewCategory,sameDiffSelection}=await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
+const {diffRows,summarizeFiles,remoteHistoryContext,localHistoryContext,commitPresenceLabel,branchHistoryContext,viewCategory,sameDiffSelection}=await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
 test('unified diff rows retain independent old and new line numbers',()=>{
  const rows=diffRows('--- a/file\n+++ b/file\n@@ -3,2 +3,3 @@\n context\n-old\n+new\n+added\n\\ No newline at end of file');
  assert.deepEqual(rows.slice(3,7).map(r=>[r.kind,r.old,r.current]),[['context',3,3],['delete',4,''],['add','',4],['add','',5]]);
@@ -72,4 +72,16 @@ test('refresh keeps a selected diff by path and section when list indices shift'
  for(const changes of [{kind:'remote'},{siteID:'two'},{commit:'changed'},{files:[{...selected,group:'staged'}]},{files:[{...selected,path:'new.go'}]},{file:-1}]) {
   assert.equal(sameDiffSelection(base,{...base,...changes}),false);
  }
+});
+
+
+test('diverged history distinguishes branch work from inherited commits and remote versions',()=>{
+ const v={branch:'feature',tracking:'origin/feature',upstream:'remote',counts:{local:1131},incomingCount:11,branchWork:{local:11,inherited:1120,base:'origin/develop'}};
+ assert.match(branchHistoryContext(v),/11 local-only · 11 remote-only/);
+ assert.match(branchHistoryContext(v),/1120 additional commits already on origin\/develop/);
+ assert.doesNotMatch(branchHistoryContext(v),/not pushed|incoming/);
+ assert.equal(commitPresenceLabel('inherited',v),'✓ On origin/develop');
+ assert.equal(commitPresenceLabel('outgoing',v),'↑ Local only');
+ assert.equal(commitPresenceLabel('incoming',v),'↓ Remote only');
+ assert.equal(commitPresenceLabel('incoming',{...v,counts:{local:0}}),'↓ Incoming');
 });

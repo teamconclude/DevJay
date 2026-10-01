@@ -243,6 +243,7 @@ function details(site, parent, showIDEStatus) {
     if (title) { row.classList.add('review-row'); row.title = title; row.setAttribute('aria-label', `${label}: ${title}`); }
     for (const item of values) {
       const badge = statusButton(item.view, `metric ${item.tone}`, prNumber); badge.title = item.title; badge.setAttribute('aria-label', `View ${item.title}`);
+      if (item.gitAction) badge.dataset.gitAction = item.gitAction;
       const symbol = el('span', 'metric-symbol', item.symbol); symbol.setAttribute('aria-hidden', 'true');
       if (item.symbol) badge.append(symbol);
       if (item.value !== '') badge.append(el('strong', '', item.value));
@@ -263,7 +264,8 @@ function details(site, parent, showIDEStatus) {
     for (const label of status.pr.split('; ')) {
       const number = Number(/^PR #(\d+)/.exec(label)?.[1]);
       const prNumber = pullRequests.some(pr => pr.number === number) ? number : null;
-      line(singlePR ? label.replace(/^PR #\d+ · /, '') : label, `pr-status ${status.prTone}`, status.prTone === 'good' ? '✓' : '⑂', status.prTitle, 'edits', prNumber);
+      const text = singlePR ? label.replace(/^PR #\d+ · /, '') : label;
+      line(text === 'Merged' ? 'PR merged' : text, `pr-status ${status.prTone}`, ['good', 'merged'].includes(status.prTone) ? '✓' : '⑂', status.prTitle, 'edits', prNumber);
     }
   }
   if (status.prNote) line(status.prNote, 'freshness muted', '·', status.prTitle, 'edits', singlePR);

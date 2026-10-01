@@ -27,3 +27,18 @@ test('same-version state updates disable unavailable files and show errors',()=>
  render({...state,loading:true});assert.equal(open.disabled,true);
  render({...state,editor:{...state.editor,busy:true}});assert.equal(open.textContent,'Opening…');assert.equal(open.disabled,true);
 });
+
+test('diff loading and editor discovery keep the editor label stable without enabling stale opens',()=>{
+ const {render,requests,open,message}=setup();render({...state,siteID:'one'});
+ const title=open.title,text=message.textContent;
+ for(const loading of [true,false]){
+  render({...state,siteID:'one',version:9,loading,editor:null});
+  assert.equal(open.textContent,'Open in GoLand');assert.equal(open.title,title);assert.equal(message.textContent,text);
+  assert.equal(open.disabled,true);assert.equal(open.className,'editor-pending');open.onclick();
+ }
+ assert.equal(requests.length,0);
+ render({...state,siteID:'one',version:9,editor:{...state.editor,canOpen:false,note:'File not present'}});
+ assert.equal(open.disabled,true);assert.equal(open.className,'');assert.equal(message.textContent,'File not present');
+ render({...state,siteID:'two',version:10,editor:null});
+ assert.equal(open.textContent,'Open in editor');assert.equal(message.textContent,'');
+});
