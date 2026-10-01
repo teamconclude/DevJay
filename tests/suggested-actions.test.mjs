@@ -20,21 +20,21 @@ test('return suggestion is absent for changed, conflicted, stale, reused or wron
  }
 });
 
-const {siteSuggestions, suggestionSteps, mountSuggestedActions, mountViewerSuggestions, recommendedActions} = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
+const {siteSuggestions, suggestionSteps, actionLabels, mountSuggestedActions, mountViewerSuggestions, recommendedActions} = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
 test('default branch behind upstream suggests a fast-forward update', () => {
  const [s] = siteSuggestions({git:{branch:'develop',isMainBranch:true,tracking:'origin/develop',behind:3}});
  assert.equal(s.kind,'update'); assert.equal(s.blocked,false);
  assert.match(suggestionSteps(s).join(' '), /Fast-forward develop/);
- for (const patch of [{ahead:1},{rewritten:true},{changes:1},{localNote:'cached'},{remoteNote:'offline'}]) {
+ for (const patch of [{ahead:1},{rewritten:true},{changes:1},{localNote:'cached'}]) {
   assert.equal(siteSuggestions({git:{branch:'develop',tracking:'origin/develop',behind:3,...patch}})[0].blocked,true);
  }
 });
 test('feature upstream and default-branch comparisons are independent', () => {
- const feature = {branch:'feature',tracking:'origin/feature',base:{branch:'develop',tracking:'origin/develop',behind:6}};
+ const feature = {branch:'feature',tracking:'origin/feature',pushTarget:'origin/feature',base:{branch:'develop',tracking:'origin/develop',behind:6}};
  const [s] = siteSuggestions({git:feature});
- assert.equal(s.kind,'rebase'); assert.equal(s.target,'develop'); assert.equal(s.blocked,false);
+ assert.equal(s.kind,'rebase-push'); assert.equal(s.target,'develop'); assert.equal(s.blocked,false);
  const both = siteSuggestions({git:{...feature,behind:2}});
- assert.deepEqual(both.map(s=>s.kind),['update','rebase']);
+ assert.deepEqual(both.map(s=>s.kind),['update','rebase-push']);
  assert.equal(both[1].blocked,true); assert.match(both[1].warning,/own remote first/);
  assert.equal(siteSuggestions({git:{...feature,changes:1}})[0].blocked,true);
  assert.deepEqual(siteSuggestions({git:{...feature,base:{...feature.base,behind:0}}}),[]);
@@ -162,13 +162,28 @@ test('a recognized rebase never suggests pulling its old upstream history', () =
  assert.equal(siteSuggestions({git:{...git,rebased:false}})[0].kind,'update');
 });
 
+test('rebased publication prepares separately and explains conflict checks and exact lease',()=>withDocument(()=>{
+ const git={rebased:true,branch:'feature',head:'new-head',ahead:2,behind:1,tracking:'origin/feature',pushTarget:'origin/feature'};
+ const [suggestion]=siteSuggestions({git});
+ assert.equal(suggestion.kind,'publish');assert.equal(suggestion.blocked,false);
+ for(const change of [{changes:1},{conflicts:1},{localNote:'cached'}]) assert.equal(siteSuggestions({git:{...git,...change}})[0].blocked,true);
+ assert.match(suggestionSteps(suggestion).join(' '),/Claude or Astra/);
+ assert.match(suggestionSteps(suggestion).join(' '),/force-with-lease tied to its exact confirmed commit/);
+ const root=new Element('section'),calls=[];
+ const render=mountViewerSuggestions(root,request=>calls.push(request));render({id:'a',git});
+ const button=nodes(root).find(n=>n.textContent==='Push rebased branch');
+ assert.equal(calls.length,0);button.onclick();
+ assert.deepEqual(calls,[{siteID:'a',kind:'publish',branch:'feature',head:'new-head',deleteBranch:false}]);
+ assert.deepEqual(actionLabels({kind:'publish'}),{title:'Push rebased branch',button:'Push rebased branch'});
+}));
+
 test('viewer action buttons follow live checkout, preserve warnings and prepare only',()=>withDocument(()=>{
  const root=new Element('section'),calls=[];
  const render=mountViewerSuggestions(root,request=>calls.push(request));
  const site={id:'c2',git:{branch:'develop',head:'current',tracking:'origin/develop',behind:3,changes:2}};
  render(site);assert.equal(root.hidden,false);assert.equal(calls.length,0);
  let button=nodes(root).find(n=>n.tag==='button');
- assert.equal(button.textContent,'Update branch');assert.equal(button.disabled,true);
+ assert.equal(button.textContent,'Update develop');assert.equal(button.disabled,true);
  button.onclick();assert.equal(calls.length,0);
  assert.ok(nodes(root).some(n=>n.textContent?.includes('Commit or stash')));
  render({...site,git:{...site.git,changes:0,head:'new-current'}});
@@ -187,9 +202,10 @@ test('local-only commits suggest an explicit normal push to origin', () => {
  for(const patch of [{behind:1},{ahead:0},{rebased:true},{rewritten:true},{pushTarget:''}]) {
   assert.equal(siteSuggestions({git:{...git,...patch}}).some(s=>s.kind==='push'),false);
  }
- for(const patch of [{changes:1},{conflicts:1},{localNote:'cached'}]) {
+ for(const patch of [{conflicts:1},{localNote:'cached'}]) {
   assert.equal(siteSuggestions({git:{...git,...patch}})[0].blocked,true);
  }
+ assert.equal(siteSuggestions({git:{...git,changes:3}})[0].blocked,false);
  // Offline status can be refreshed during push preparation; backend checks it afresh.
  assert.equal(siteSuggestions({git:{...git,remoteNote:'offline'}})[0].blocked,false);
 });
@@ -217,8 +233,8 @@ test('push button opens Confirm push and requires a separate confirmation',()=>w
 
 test('best action is rightmost, prerequisite actions win, and at most three are shown',()=>withDocument(()=>{
  const cases=[
-  {git:{branch:'feature',head:'sha',behind:2,tracking:'origin/feature',base:{branch:'develop',behind:5}},labels:['Rebase onto develop','Update branch']},
-  {git:{branch:'feature',head:'sha',ahead:2,behind:0,pushTarget:'origin/feature',base:{branch:'develop',behind:5}},labels:['Push 2 commits','Rebase onto develop']},
+  {git:{branch:'feature',head:'sha',behind:2,tracking:'origin/feature',pushTarget:'origin/feature',base:{branch:'develop',behind:5}},labels:['Rebase and push','Update feature']},
+  {git:{branch:'feature',head:'sha',ahead:2,behind:0,pushTarget:'origin/feature',base:{branch:'develop',behind:5}},labels:['Push 2 commits','Rebase and push']},
  ];
  for(const tc of cases){
   const root=new Element('section');mountViewerSuggestions(root,()=>{})({id:'site',git:tc.git});
@@ -226,7 +242,7 @@ test('best action is rightmost, prerequisite actions win, and at most three are 
   assert.deepEqual(buttons.map(b=>b.textContent),tc.labels);
   assert.equal(buttons.at(-1).className,'suggestion-primary');assert.equal(buttons[0].className,'suggestion-secondary');
  }
- const ranked=recommendedActions([{kind:'push'},{kind:'rebase'},{kind:'update'},{kind:'merged'}]);
+ const ranked=recommendedActions([{kind:'push'},{kind:'rebase-push'},{kind:'update'},{kind:'merged'}]);
  assert.equal(ranked.length,3);assert.equal(ranked.at(-1).kind,'merged');
  assert.equal(recommendedActions([{kind:'update',blocked:true},{kind:'push'}]).at(-1).kind,'push');
 }));
@@ -273,9 +289,9 @@ test('replacement requires explicit confirmation and never starts from rendering
  assert.deepEqual(calls[1],['action-confirm','replacement-token']);assert.equal(calls.length,2);
 }));
 
-test('a feature tracking the default branch can rebase when diverged',()=>{
+test('a feature tracking the default branch requires manual publication',()=>{
  const suggestions=siteSuggestions({git:{branch:'feature',ahead:1,behind:2,tracking:'origin/main',base:{branch:'main',tracking:'origin/main',behind:2}}});
- assert.equal(suggestions.find(s=>s.kind==='rebase').blocked,false);
+ assert.equal(suggestions.find(s=>s.kind==='rebase-push').blocked,true);
  assert.equal(suggestions.find(s=>s.kind==='update').blocked,true);
 });
 
@@ -321,3 +337,38 @@ test('PR enrichment cannot unlock a branch request in flight and delivery failur
   assert.equal(nodes(root).find(n=>n.attrs['aria-label']?.startsWith('main ·')).disabled,false);
  } finally {globalThis.document=previous;}
 });
+
+
+test('default branch update retries remote checks but still blocks edits and divergence',()=>{
+ for(const branch of ['main','master','develop']){
+  const git={branch,tracking:`origin/${branch}`,isMainBranch:true,ahead:0,behind:3};
+  for(const remoteNote of ['', 'Remote not checked yet', 'Remote check failed · cached comparison']){
+   const [suggestion]=siteSuggestions({git:{...git,remoteNote}});
+   assert.equal(suggestion.kind,'update');assert.equal(suggestion.blocked,false);
+  }
+  for(const change of [{changes:1},{conflicts:1},{ahead:1},{rewritten:true},{localNote:'unavailable'}]){
+   assert.equal(siteSuggestions({git:{...git,...change}})[0].blocked,true);
+  }
+ }
+});
+
+test('combined rebase and push has one compact verified confirmation and manual-only failures',()=>withDocument(()=>{
+ const root=new Element('root'),calls=[],render=mountSuggestedActions(root,()=>{},(...args)=>calls.push(args));
+ const state={suggestedSite:'a',sites:[{id:'a',name:'project',git:{branch:'feature'}}]};
+ const plan={id:'token',kind:'rebase-push',branch:'feature',head:'original-head',target:'origin/feature',targetHead:'remote-head',publishBase:'develop'};
+ render({...state,action:{siteID:'a',kind:'rebase-push',status:'preparing'}});
+ assert.equal(nodes(root).some(n=>n.textContent==='✓ Safe to continue'),false);
+ assert.equal(classNode(root,'suggestion-primary').hidden,true);
+ render({...state,action:{siteID:'a',status:'ready',plan}});
+ assert.ok(nodes(root).some(n=>n.textContent==='✓ Safe to continue'));
+ assert.ok(nodes(root).some(n=>n.textContent==='No Git conflicts found. Remote work is preserved.'));
+ assert.equal(nodes(root).some(n=>n.tag==='ol'),false);
+ assert.equal(classNode(root,'suggestion-preview').hidden,true);
+ const confirm=classNode(root,'suggestion-primary');assert.equal(confirm.textContent,'Rebase and push');
+ assert.equal(calls.length,0);confirm.onclick();confirm.onclick();assert.deepEqual(calls,[['action-confirm','token']]);
+ render({...state,action:{siteID:'a',kind:'rebase-push',status:'failed',message:'Conflicts found. Long technical explanation.',files:['file']}});
+ assert.equal(confirm.hidden,true);assert.equal(nodes(root).some(n=>n.textContent==='✓ Safe to continue'),false);
+ assert.ok(nodes(root).some(n=>n.textContent==='Conflicts found. Finish manually with Claude or Astra.'));
+ assert.equal(classNode(root,'action-details').tag,'details');
+ assert.equal(classNode(root,'action-details').open,undefined);
+}));

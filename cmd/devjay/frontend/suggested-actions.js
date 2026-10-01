@@ -12,6 +12,11 @@ function localWarning(git) {
   return '';
 }
 
+export function rebasedPublishWarning(git) {
+  return localWarning(git) || (!git.head || !git.branch ? 'Local branch status is unavailable. Refresh the Site.' : '') ||
+    (!git.pushTarget || git.isMainBranch || git.canReplaceRemote ? 'The remote destination or history needs manual review with Claude or Astra.' : '');
+}
+
 export function postMergeSuggestion(site) {
   if (!site?.git.mergedPR) return null;
   const git = site.git;
@@ -33,34 +38,48 @@ export function siteSuggestions(site) {
       status:'Remote history was rewritten; this local tip was previously published.',
       warning,blocked:!!warning}];
   }
-  if (site.git.rebased) return [];
+  if (site.git.rebased) {
+    if (!site.git.pushTarget) return [];
+    const warning = rebasedPublishWarning(site.git);
+    return [{kind:'publish',branch:site.git.branch,target:site.git.pushTarget,
+      title:'Push rebased branch',status:'Check the latest remote history for conflicts before publishing.',
+      warning,blocked:!!warning}];
+  }
   const git = site.git, suggestions = [], warning = localWarning(git);
   if (git.ahead > 0 && git.behind === 0 && git.pushTarget && !git.rewritten) {
     suggestions.push({kind: 'push', branch: git.branch, target: git.pushTarget,
       title: `Push ${git.ahead} ${git.ahead === 1 ? 'commit' : 'commits'} to ${git.pushTarget}`,
-      status: `${git.ahead} local ${git.ahead === 1 ? 'commit' : 'commits'} ready to publish`,
-      warning, blocked: !!warning});
+      status: `${git.ahead} ${git.ahead === 1 ? 'commit' : 'commits'} ready to push. Local edits stay on your computer.`,
+      warning: git.localNote || git.conflicts ? localWarning({...git,changes:0}) : '',
+      blocked: !!git.localNote || !!git.conflicts});
   }
   if (git.behind > 0 && git.tracking) {
-    const diverged = git.ahead > 0 || git.rewritten;
+    const diverged = git.ahead > 0 || !!git.rewritten;
     suggestions.push({kind: 'update', branch: git.branch, target: git.tracking,
       title: `Update ${git.branch} from ${git.tracking}`,
       status: `${git.behind} incoming ${git.behind === 1 ? 'commit' : 'commits'}`,
-      warning: warning || (diverged ? 'The branch has diverged or remote history was rewritten. Update manually; a fast-forward cannot be safely suggested.' : git.remoteNote || ''),
-      blocked: !!warning || diverged || !!git.remoteNote});
+      warning: warning || (diverged ? 'This branch has commits on both sides or rewritten history. Resolve it in your Git tool before updating.' : ''),
+      blocked: !!warning || diverged});
   }
   if (git.base?.behind > 0 && !git.isMainBranch) {
     const needsUpdate = git.behind > 0 && git.tracking !== git.base.tracking;
-    suggestions.push({kind: 'rebase', branch: git.branch, target: git.base.branch, tracking: git.base.tracking,
-      title: `Rebase onto the latest ${git.base.branch}`,
+    suggestions.push({kind: 'rebase-push', branch: git.branch, target: git.base.branch, tracking: git.base.tracking,
+      title: `Rebase onto ${git.base.branch} and push`,
       status: `${git.base.branch} · ${git.base.behind} newer ${git.base.behind === 1 ? 'commit' : 'commits'}`,
-      warning: warning || (needsUpdate ? 'Update this branch from its own remote first, then check the rebase.' : git.base.note || ''),
-      blocked: !!warning || needsUpdate});
+      warning: warning || (needsUpdate ? 'Update this branch from its own remote first, then check the rebase.' : !git.pushTarget ? 'Rebase and push manually with Claude or Astra: a matching origin upstream is required.' : git.base.note || ''),
+      blocked: !!warning || needsUpdate || !git.pushTarget});
   }
   return suggestions;
 }
 
 export function suggestionSteps(suggestion, deleteBranch) {
+  if (suggestion.kind === 'rebase-push') return [`Rebase ${suggestion.branch} onto the latest ${suggestion.publishBase || suggestion.target}, then push the branch.`, 'Stop if either branch changes. Keep recovery copies of the original commits.'];
+  if (suggestion.kind === 'publish') return [
+    `Fetch the branch and latest ${suggestion.publishBase || 'default branch'}. Test the remote rebase and verify its commits are preserved locally.`,
+    'Repeat the checks. Stop on conflicts or unverified history and resolve these manually with Claude or Astra.',
+    `Push to ${suggestion.target} using force-with-lease tied to its exact confirmed commit. Keep a local recovery copy.`,
+    'Keep local files unchanged. Never retry automatically or overwrite newer remote work.',
+  ];
   if (suggestion.kind === 'switch') return [
     'Check that the checkout has no local changes or untracked files. Stop if the checkout or target branch has changed.',
     suggestion.createTarget ? `Create local branch ${suggestion.target} from ${suggestion.remoteTarget} and switch to it.` :
@@ -80,13 +99,13 @@ export function suggestionSteps(suggestion, deleteBranch) {
     'Keep local files and branch unchanged. Never force-push or publish other branches or tags.',
   ];
   if (suggestion.kind === 'update') return [
-    'Check that local work is saved and fetch the branch from its remote.',
+    'Require a clean checkout, then fetch the latest commits from the remote.',
     `Fast-forward ${suggestion.branch} to ${suggestion.target}. Stop if the branches have diverged.`,
     'Keep all local work. Do not reset, stash, or push automatically.',
   ];
   if (suggestion.kind === 'rebase') return [
     `Fetch ${suggestion.tracking} and check the complete rebase in a temporary checkout.`,
-    'Repeat the conflict check against the confirmed commits. Stop and recommend a manual rebase if conflicts are found.',
+    'Repeat the conflict check against the confirmed commits. Stop for manual rebase and push with Claude or Astra if conflicts are found.',
     `Rebase ${suggestion.branch} onto the checked default-branch commit, preserving merges. Stop if the checkout or remote changes.`,
     'Do not push automatically. Previously pushed commits may need a separately confirmed force-with-lease push.',
   ];
@@ -101,6 +120,8 @@ export function actionLabels(plan) {
   if (plan.kind === 'switch') return {title:'Confirm branch switch',button:`Switch to ${plan.target || 'branch'}`};
   if (plan.kind === 'replace') return {title:'Confirm branch replacement',button:'Replace branch'};
   if (plan.kind === 'push') return {title:'Confirm push', button:`Push ${plan.commits} ${plan.commits === 1 ? 'commit' : 'commits'}`};
+  if (plan.kind === 'publish') return {title:'Push rebased branch', button:'Push rebased branch'};
+  if (plan.kind === 'rebase-push') return {title:'Rebase and push', button:'Rebase and push'};
   if (plan.kind === 'update') return {title:'Confirm branch update', button:'Update branch'};
   if (plan.kind === 'rebase') return {title:'Confirm rebase', button:'Rebase branch'};
   return {title:'Confirm return to default branch', button:`Return to ${plan.target}`};
@@ -108,15 +129,17 @@ export function actionLabels(plan) {
 
 // Best available action goes on the right; prerequisites outrank publishing.
 export function recommendedActions(suggestions) {
-  const priority = {merged:0, replace:1, update:2, rebase:3, push:4};
+  const priority = {merged:0, replace:1, update:2, rebase:3, 'rebase-push':3, push:4, publish:4};
   return [...suggestions].sort((a,b) => Number(!!a.blocked)-Number(!!b.blocked) ||
     (priority[a.kind] ?? 99)-(priority[b.kind] ?? 99)).slice(0,3).reverse();
 }
 
 export function suggestionButtonLabel(suggestion, git) {
   if (suggestion.kind === 'replace') return 'Replace from remote';
+  if (suggestion.kind === 'publish') return 'Push rebased branch';
   if (suggestion.kind === 'push') return `Push ${git.ahead} ${git.ahead === 1 ? 'commit' : 'commits'}`;
-  if (suggestion.kind === 'update') return 'Update branch';
+  if (suggestion.kind === 'update') return `Update ${suggestion.branch}`;
+  if (suggestion.kind === 'rebase-push') return 'Rebase and push';
   if (suggestion.kind === 'rebase') return `Rebase onto ${suggestion.target}`;
   return `Return to ${suggestion.target}`;
 }
@@ -217,25 +240,27 @@ export function mountSuggestedActions(root, close, actionEvent) {
     const p = action?.plan;
     const kind = p?.kind || action?.kind;
     const labels = actionLabels(p || {kind, target:site?.git.defaultBranch});
+    const compact = kind === 'rebase-push' || kind === 'publish';
     const choosing = kind === 'switch' && action?.status === 'choosing';
     heading.textContent = kind === 'switch' && ['loading-branches','choosing'].includes(action?.status) ? 'Switch branch' : action ? labels.title : 'Confirm action';
-    context.textContent = site ? `${site.name || site.path || ''} · ${p?.branch || action?.currentBranch || site.git.branch}${p ? ` → ${p.target}` : ''}` : '';
+    context.textContent = site ? `${site.name || site.path || ''} · ${p?.branch || action?.currentBranch || site.git.branch}${p ? ` → ${kind === 'rebase-push' ? p.publishBase : p.target}` : ''}` : '';
     context.title = site?.path || '';
     next.hidden = action?.status !== 'ready'; next.disabled = false;
     back.hidden = kind !== 'switch' || !['ready','failed'].includes(action?.status); back.disabled = false;
     next.textContent = labels.button;
     cancel.disabled = dismiss.disabled = action?.status === 'running';
-    cancel.textContent = action?.status === 'complete' ? 'Done' : 'Cancel';
+    cancel.textContent = action?.status === 'complete' ? 'Done' : compact && action?.status === 'failed' ? 'Close' : 'Cancel';
     deletion.hidden = action?.status !== 'ready' || kind !== 'merged';
     checkbox.disabled = deletion.hidden; checkbox.checked = !!p?.deleteBranch;
     deleteText.textContent = `Delete local branch ${p?.branch || ''} afterward`;
     remoteOption.hidden = action?.status !== 'ready' || kind !== 'switch' || !p?.canUpdateTarget || p.createTarget || p.localAhead > 0 || !(p.remoteAhead > 0);
     remoteCheckbox.disabled = remoteOption.hidden; remoteCheckbox.checked = !!p?.updateTarget;
     remoteText.textContent = `Use newer remote version from ${p?.remoteTarget || ''} (${p?.remoteAhead || 0} newer ${p?.remoteAhead === 1 ? 'commit' : 'commits'})`;
+    preview.hidden = compact;
     preview.textContent = action?.status === 'running' ? 'Finishing the operation before this window can close.' :
       choosing ? 'Select a branch to review before switching.' :
       kind === 'switch' ? 'Commit or stash local changes before switching. Nothing is stashed or pushed automatically.' :
-      kind === 'push' ? 'Only the confirmed commits are published. Your local checkout stays unchanged.' :
+      kind === 'push' || kind === 'publish' ? 'Only the confirmed commits are published. Your local checkout stays unchanged.' :
       'Nothing is pushed automatically. Original commits are kept in a recovery reference.';
     chooser.hidden = !choosing; plan.hidden = choosing;
     if (!choosing) preparingChoice = false;
@@ -278,14 +303,35 @@ export function mountSuggestedActions(root, close, actionEvent) {
       }
       discovery.textContent = action.message || ''; discovery.hidden = !action.message;
       filterBranches();
+    } else if (compact) {
+      const status = action?.status;
+      const titles = {preparing:'Checking rebase and push…',running:'Rebasing and pushing…',complete:'✓ Completed',failed:'Manual action needed',ready:'✓ Safe to continue'};
+      if (kind === 'publish') { titles.preparing = 'Checking the rebased branch…'; titles.running = 'Pushing rebased branch…'; }
+      let message = status === 'ready' ? 'No Git conflicts found. Remote work is preserved.' :
+        status === 'preparing' ? 'Testing in a temporary checkout. Your branch is unchanged.' :
+        status === 'running' ? 'Rechecking the branch and remote before applying.' : action?.message || '';
+      if (status === 'failed') message = `${message.split(/(?<=\.)\s/)[0]} Finish manually with Claude or Astra.`;
+      plan.replaceChildren(el('strong', status === 'ready' || status === 'complete' ? 'good' : status === 'failed' ? 'warning' : '', titles[status] || 'Checking…'), el('p', 'copyable', message));
+      if (status === 'ready') plan.append(el('p','help', kind === 'rebase-push' ?
+        `Rebase onto ${p.publishBase}, then push to ${p.target}.` : `Push the checked rebased commits to ${p.target}.`),
+        el('p','help','Stops if either branch changes. Original commits are kept for recovery.'));
+      if (status === 'failed' || action?.recovery) {
+        const details = el('details','action-details'); details.append(el('summary','','Details'));
+        details.append(el('p','help copyable',action.message || ''));
+        if (action?.files?.length) { const files = el('ul','copyable'); for (const file of action.files) files.append(el('li','',file)); details.append(files); }
+        if (action?.recovery) details.append(el('p','help copyable',`Recovery: ${action.recovery}`));
+        if (action?.remoteRecovery) details.append(el('p','help copyable',`Remote recovery: ${action.remoteRecovery}`));
+        plan.append(details);
+      }
     } else if (action?.status === 'ready') {
       const list = el('ol', '');
       for (const step of suggestionSteps({...p,tracking:site?.git.base?.tracking || p.target}, p.deleteBranch)) list.append(el('li', '', step));
-      const revisions = p.kind === 'push' ? `${p.targetHead.slice(0,8)} → ${p.head.slice(0,8)}` : `${p.head.slice(0,8)} → ${p.targetHead.slice(0,8)}`;
+      const revisions = p.kind === 'push' || p.kind === 'publish' ? `${p.targetHead.slice(0,8)} → ${p.head.slice(0,8)}` : `${p.head.slice(0,8)} → ${p.targetHead.slice(0,8)}`;
       plan.replaceChildren(el('p', 'help copyable', revisions), list);
       if (p.deleteBranch) plan.append(el('p', 'warning', `This also deletes local branch ${p.branch}. A recovery reference will retain its commits.`));
       if (p.kind === 'replace') plan.append(el('p', 'warning', 'The local branch will use the rewritten remote history. Its old commits will be kept in a recovery reference.'));
       if (p.kind === 'rebase') plan.append(el('p', 'warning', 'Rebasing rewrites commit IDs. Review the result before pushing.'));
+      if (p.kind === 'publish') plan.append(el('p', 'warning', 'Remote commit IDs will change. Git conflict checks do not replace tests or code review.'));
       if (p.kind === 'switch' && p.remoteNote) plan.append(el('p', 'help copyable', p.remoteNote));
       if (p.kind === 'switch' && !p.remoteNote && !p.createTarget && p.localAhead > 0 && p.remoteTarget) {
         plan.append(el('p', 'help copyable', `${p.target} has ${p.localAhead} local ${p.localAhead === 1 ? 'commit' : 'commits'} not in ${p.remoteTarget}; its local version will be kept.`));
@@ -309,18 +355,18 @@ export function mountViewerSuggestions(root, prepareAction) {
   return (site, action) => {
     const suggestions = recommendedActions(siteSuggestions(site));
     const busy = action?.status === 'preparing' || action?.status === 'running';
-    const key = JSON.stringify([site?.id,site?.git.branch,site?.git.head,suggestions,busy]);
+    const key = JSON.stringify([site?.id,site?.git.branch,site?.git.head,site?.git.changes,suggestions,busy]);
     if(key===identity)return;
     identity=key;root.replaceChildren();root.hidden=!suggestions.length;
     if(!suggestions.length)return;
     const header=el('div','git-suggestion-header');
-    header.append(el('strong','','Suggested actions'),el('span','muted',`Current checkout · ${site.git.branch}`));
+    header.setAttribute('aria-label',`Actions for ${site.git.branch}`);
     const buttons=el('div','git-suggestion-buttons');
     suggestions.forEach((suggestion,index)=>{
       const primary=index===suggestions.length-1;
       const button=el('button',primary?'suggestion-primary':'suggestion-secondary',suggestionButtonLabel(suggestion,site.git));
       button.type='button';button.disabled=busy || !!suggestion.blocked;
-      button.title=[suggestion.title,suggestion.warning || 'Check and confirm before applying this action'].join('\n');
+      button.title=[suggestion.title,suggestion.status,suggestion.warning || 'Fetch, check, and review before confirming'].filter(Boolean).join('\n');
       button.onclick=()=>{
         if(button.disabled)return;
         button.disabled=true;
@@ -329,6 +375,7 @@ export function mountViewerSuggestions(root, prepareAction) {
       buttons.append(button);
     });
     header.append(buttons);root.append(header);
+    if(suggestions.some(s=>s.kind==='push'&&!s.blocked)&&site.git.changes)root.append(el('p','git-suggestion-warning muted','Only committed work is pushed. Your local edits stay on this computer.'));
     const warnings=[...new Set(suggestions.map(s=>s.warning).filter(Boolean))];
     for(const warning of warnings)root.append(el('p','git-suggestion-warning warning',warning));
   };

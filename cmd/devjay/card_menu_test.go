@@ -10,10 +10,10 @@ import (
 func TestNormalizeCardMenuRequest(t *testing.T) {
 	valid := cardMenuRequest{SiteID: "alpha", X: 23.5, Y: 60}
 	got, ok := normalizeCardMenuRequest(valid)
-	if !ok || got.Kind != "edits" {
-		t.Fatalf("card background should select edits: %#v, %v", got, ok)
+	if !ok || got.Kind != "site" {
+		t.Fatalf("card background should select desktop navigation: %#v, %v", got, ok)
 	}
-	for _, kind := range []string{"edits", "local", "remote"} {
+	for _, kind := range []string{"auto", "site", "edits", "branch", "local", "remote"} {
 		req := valid
 		req.Kind = kind
 		if got, ok := normalizeCardMenuRequest(req); !ok || got.Kind != kind {
@@ -23,7 +23,12 @@ func TestNormalizeCardMenuRequest(t *testing.T) {
 	for _, change := range []func(*cardMenuRequest){
 		func(r *cardMenuRequest) { r.SiteID = "" },
 		func(r *cardMenuRequest) { r.Kind = "settings" },
+		func(r *cardMenuRequest) { r.BaseBranch = "develop" },
+		func(r *cardMenuRequest) { r.PublishButton = true },
+		func(r *cardMenuRequest) { r.Kind = "branch"; r.BaseBranch = "develop\nother" },
 		func(r *cardMenuRequest) { r.Number = -1 },
+		func(r *cardMenuRequest) { r.BundleID = "app\x00other" },
+		func(r *cardMenuRequest) { r.BundleID = "app"; r.Number = 123 },
 		func(r *cardMenuRequest) { r.X = -1 },
 		func(r *cardMenuRequest) { r.Y = 32769 },
 		func(r *cardMenuRequest) { r.X = math.Inf(1) },
@@ -37,18 +42,178 @@ func TestNormalizeCardMenuRequest(t *testing.T) {
 	}
 }
 
+func TestCardRebaseRequiresTheClickedBaseAndUnchangedCheckout(t *testing.T) {
+	status := func() GitStatus {
+		return GitStatus{Branch: "feature", Head: "head", Tracking: "origin/feature", PushTarget: "origin/feature", Base: &BranchBase{Branch: "develop", Tracking: "origin/develop", Head: "base", Behind: 3}}
+	}
+	menu := cardMenuRequest{SiteID: "site", Kind: "branch", BaseBranch: "develop"}
+	original := makeCardGitOption(menu, status())
+	if original == nil || original.DisabledReason != "" {
+		t.Fatalf("missing enabled option: %#v", original)
+	}
+	req, ok := original.request("site", status())
+	if !ok || req.Kind != "rebase-push" || req.SiteID != "site" || req.Branch != "feature" || req.Head != "head" || req.TargetBranch != "develop" || req.TargetRemote != "origin" || req.DeleteBranch {
+		t.Fatalf("wrong preparation request: %+v", req)
+	}
+	newer := status()
+	newer.Base.Head = "newest"
+	newer.Base.Behind++
+	if _, ok := original.request("site", newer); !ok {
+		t.Fatal("a newer remote tip must still be fetched")
+	}
+	for _, change := range []func(*GitStatus){
+		func(s *GitStatus) { s.Changes = 1 }, func(s *GitStatus) { s.Conflicts = 1 }, func(s *GitStatus) { s.LocalNote = "unavailable" },
+		func(s *GitStatus) { s.Behind = 1 }, func(s *GitStatus) { s.Rebased = true }, func(s *GitStatus) { s.CanReplaceRemote = true },
+		func(s *GitStatus) { s.Head = "new-head" }, func(s *GitStatus) { s.Branch = "other" },
+		func(s *GitStatus) { s.Base.Branch = "main" }, func(s *GitStatus) { s.Base.Tracking = "other/develop" },
+		func(s *GitStatus) { s.Base.Behind = 0 }, func(s *GitStatus) { s.Base = nil }, func(s *GitStatus) { s.IsMainBranch = true },
+	} {
+		current := status()
+		change(&current)
+		if _, ok := original.request("site", current); ok {
+			t.Fatalf("accepted changed/blocked checkout: %+v", current)
+		}
+	}
+	for _, req := range []cardMenuRequest{{Kind: "branch"}, {Kind: "edits", BaseBranch: "develop"}, {Kind: "branch", BaseBranch: "main"}, {Kind: "branch", BaseBranch: "develop", Number: 4}, {Kind: "branch", BaseBranch: "develop", BundleID: "app"}} {
+		if makeCardGitOption(req, status()) != nil {
+			t.Fatal("rebase offered on another target")
+		}
+	}
+	dirty := status()
+	dirty.Changes = 1
+	if option := makeCardGitOption(menu, dirty); option == nil || option.DisabledReason == "" {
+		t.Fatal("dirty checkout should show disabled rebase with a reason")
+	}
+	trackingBase := status()
+	trackingBase.Tracking = "origin/develop"
+	trackingBase.Behind = 3
+	trackingBase.PushTarget = ""
+	if _, ok := original.request("site", trackingBase); ok {
+		t.Fatal("tracking the default branch must not publish to it")
+	}
+	var absent *cardGitOption
+	if _, ok := absent.request("site", status()); ok {
+		t.Fatal("absent menu action accepted")
+	}
+}
+
 func TestCardMenuActionLabels(t *testing.T) {
 	for _, test := range []struct {
 		req    cardMenuRequest
 		labels [4]string
 	}{
-		{cardMenuRequest{Kind: "edits"}, [4]string{"View local edits", "View local edits in new window", "DevJay settings…", "Quit DevJay"}},
+		{cardMenuRequest{Kind: "edits"}, [4]string{"View changes", "View changes in new window", "DevJay settings…", "Quit DevJay"}},
+		{cardMenuRequest{Kind: "branch"}, [4]string{"View branch history", "View branch history in new window", "DevJay settings…", "Quit DevJay"}},
+		{cardMenuRequest{Kind: "site"}, [4]string{"Go to Site desktop", "", "DevJay settings…", "Quit DevJay"}},
+		{cardMenuRequest{BundleID: "com.jetbrains.goland", appName: "GoLand"}, [4]string{"Show GoLand", "", "DevJay settings…", "Quit DevJay"}},
 		{cardMenuRequest{Kind: "local"}, [4]string{"View local commits", "View local commits in new window", "DevJay settings…", "Quit DevJay"}},
 		{cardMenuRequest{Kind: "remote"}, [4]string{"View remote commits", "View remote commits in new window", "DevJay settings…", "Quit DevJay"}},
-		{cardMenuRequest{Kind: "edits", Number: 123}, [4]string{"Open PR #123", "Open PR #123 in new tab", "DevJay settings…", "Quit DevJay"}},
+		{cardMenuRequest{Kind: "edits", Number: 123}, [4]string{"Open PR #123 in browser", "Open PR #123 in new browser tab", "DevJay settings…", "Quit DevJay"}},
 	} {
 		if got := cardMenuLabels(test.req); got != test.labels {
 			t.Errorf("menu for %#v = %#v, want %#v", test.req, got, test.labels)
+		}
+	}
+}
+
+func TestCardPublishRevalidatesBranchAndOnlyPrepares(t *testing.T) {
+	status := GitStatus{Branch: "feature", Head: "head", Tracking: "origin/feature", PushTarget: "origin/feature", Rebased: true}
+	req := cardMenuRequest{SiteID: "site", Kind: "branch", PublishRebased: true}
+	if _, ok := normalizeCardMenuRequest(req); !ok {
+		t.Fatal("publish target rejected")
+	}
+	option := makeCardGitOption(req, status)
+	action, ok := option.request("site", status)
+	if !ok || action.Kind != "publish" || action.Head != "head" || action.Branch != "feature" {
+		t.Fatalf("wrong preparation: %+v", action)
+	}
+	for _, change := range []func(*GitStatus){
+		func(s *GitStatus) { s.Head = "new" }, func(s *GitStatus) { s.Branch = "other" }, func(s *GitStatus) { s.Tracking = "origin/other" },
+		func(s *GitStatus) { s.Rebased = false }, func(s *GitStatus) { s.Conflicts = 1 }, func(s *GitStatus) { s.Changes = 1 },
+		func(s *GitStatus) { s.PushTarget = "" }, func(s *GitStatus) { s.LocalNote = "unavailable" }, func(s *GitStatus) { s.CanReplaceRemote = true },
+	} {
+		current := status
+		change(&current)
+		if _, ok := option.request("site", current); ok {
+			t.Fatalf("unsafe selection: %+v", current)
+		}
+	}
+	for _, change := range []func(*cardMenuRequest){
+		func(r *cardMenuRequest) { r.Kind = "site" }, func(r *cardMenuRequest) { r.BaseBranch = "develop" }, func(r *cardMenuRequest) { r.Number = 1 }, func(r *cardMenuRequest) { r.BundleID = "app" },
+	} {
+		invalid := req
+		change(&invalid)
+		if _, ok := normalizeCardMenuRequest(invalid); ok {
+			t.Fatal("ambiguous target allowed")
+		}
+	}
+}
+
+func TestSitePublishSourceOnlyAuthorizesItsCurrentRebasedBranch(t *testing.T) {
+	window := &application.WebviewWindow{}
+	status := GitStatus{Branch: "feature", Head: "head", Tracking: "origin/feature", PushTarget: "origin/feature", Rebased: true}
+	site := &siteRuntime{Ready: true, Window: window, Git: status}
+	m := &siteManager{runtime: map[string]*siteRuntime{"a": site}}
+	req := ActionRequest{SiteID: "a", Kind: "publish", Branch: "feature", Head: "head"}
+	if m.sitePublishSource(req, "site-a") != window {
+		t.Fatal("own publication button rejected")
+	}
+	for _, sender := range []string{"control-panel", "site-b", "suggested-actions", "settings", "git-viewer-1", ""} {
+		if m.sitePublishSource(req, sender) != nil {
+			t.Fatalf("accepted sender %s", sender)
+		}
+	}
+	for _, change := range []func(*ActionRequest){
+		func(r *ActionRequest) { r.SiteID = "b" }, func(r *ActionRequest) { r.Kind = "push" }, func(r *ActionRequest) { r.Kind = "rebase" }, func(r *ActionRequest) { r.Kind = "switch" }, func(r *ActionRequest) { r.Head = "stale" }, func(r *ActionRequest) { r.Branch = "other" },
+	} {
+		invalid := req
+		change(&invalid)
+		if m.sitePublishSource(invalid, "site-a") != nil {
+			t.Fatalf("accepted stale/wrong request: %+v", invalid)
+		}
+	}
+	for _, change := range []func(*siteRuntime){
+		func(s *siteRuntime) { s.Ready = false }, func(s *siteRuntime) { s.Window = nil }, func(s *siteRuntime) { s.Git.Rebased = false }, func(s *siteRuntime) { s.Git.Changes = 1 }, func(s *siteRuntime) { s.Git.Conflicts = 1 }, func(s *siteRuntime) { s.Git.LocalNote = "unavailable" }, func(s *siteRuntime) { s.Git.PushTarget = "" },
+	} {
+		*site = siteRuntime{Ready: true, Window: window, Git: status}
+		change(site)
+		if m.sitePublishSource(req, "site-a") != nil {
+			t.Fatal("accepted blocked Site")
+		}
+	}
+	*site = siteRuntime{Ready: true, Window: window, Git: status}
+	for _, status := range []string{"preparing", "running"} {
+		m.action = &CheckoutAction{Status: status}
+		if m.sitePublishSource(req, "site-a") != nil {
+			t.Fatal("accepted during busy action")
+		}
+	}
+}
+
+func TestHeadingMenuChoosesChangesOrHistoryWithoutChangingExplicitTargets(t *testing.T) {
+	for _, test := range []struct {
+		git  GitStatus
+		want string
+	}{
+		{GitStatus{Branch: "main"}, "branch"},
+		{GitStatus{Branch: "main", Changes: 2}, "edits"},
+		{GitStatus{Branch: "main", Conflicts: 1}, "edits"},
+		{GitStatus{Branch: "main", LocalNote: "Could not read local status"}, "edits"},
+		{GitStatus{}, "edits"},
+	} {
+		req := resolveCardMenuRequest(cardMenuRequest{Kind: "auto"}, test.git)
+		if req.Kind != test.want {
+			t.Errorf("heading for %#v = %q", test.git, req.Kind)
+		}
+		for _, kind := range []string{"edits", "branch", "site"} {
+			if got := resolveCardMenuRequest(cardMenuRequest{Kind: kind}, test.git); got.Kind != kind {
+				t.Fatal("explicit target changed")
+			}
+		}
+	}
+	for _, req := range []cardMenuRequest{{Kind: "site"}, {BundleID: "com.jetbrains.goland"}} {
+		if validCardMenuSelection(req, cardMenuViewNew, PullRequestLink{}, GitStatus{}) {
+			t.Fatal("activation offered a new window")
 		}
 	}
 }

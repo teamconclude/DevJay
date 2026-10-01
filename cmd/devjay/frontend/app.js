@@ -7,12 +7,12 @@ import { installCardSizing } from './card-sizing.js';
 import { mountEditorSettings } from './editor-settings.js';
 import { mountGitViewer } from './git-viewer.js';
 import { cardStatus } from './card-status.js';
-import { mountSuggestedActions, mountViewerSuggestions } from './suggested-actions.js';
+import { mountSuggestedActions, mountViewerSuggestions, rebasedPublishWarning } from './suggested-actions.js';
 import { installPanelDrag } from './panel-drag.js';
 import { installCardActivation } from './card-interaction.js';
 import { installDragOriginGuard } from './drag-origin.js';
 import { installCardHover } from './card-hover.js';
-import { installCardMenu } from './card-menu.js';
+import { installCardMenu, cardBounds } from './card-menu.js';
 installCardHover(window, document);
 installDragOriginGuard(window, document.documentElement);
 const reportUIReady = uiReady(id => Events.Emit('devjay:ui-ready', id));
@@ -24,6 +24,7 @@ const viewer = params.has('viewer');
 let renderSuggestedActions, renderViewerSnapshot, editorSettings;
 const root = document.querySelector('#app');
 let snapshot = {sites: []}, dragging = null, panelDragging = false;
+let sitePublishPending = null;
 let nativeVisible = true, renderedSnapshot = false, deferredSnapshot = null;
 function updateMonitoringVisibility() {
   const visible = nativeVisible && !document.hidden;
@@ -55,7 +56,7 @@ const bridge = createBridge((name, data) => Events.Emit(name, data), (text, erro
 const emit = bridge.emit;
 Events.On('devjay:request-result', event => bridge.reply(event.data));
 const senderName = siteID ? `site-${siteID}` : 'control-panel';
-Events.On('devjay:pr-open-result', event => {
+for (const name of ['pr-open-result','app-activate-result']) Events.On(`devjay:${name}`, event => {
   if (!settings && !viewer && !actions && event.data.sender === senderName) {
     report('bridge', {text:event.data.error || event.data.message || '', error:!!event.data.error});
   }
@@ -131,7 +132,8 @@ function developmentAppIndicator(site) {
     const description = (agents.length ? `${app.name} with ${agentList}` : app.name)
       + (waiting.length ? ` · ${waitingList} ${waiting.length === 1 ? 'needs' : 'need'} input` : '')
       + (working.length ? ` · ${workingList} ${working.length === 1 ? 'is' : 'are'} working` : '');
-    const group = el('span', `development-app-group${agents.length ? ' has-agents' : ''}${waiting.length ? ' needs-input' : working.length ? ' is-working' : ''}`);
+    const group = button('', () => emit('app-activate', {siteID:site.id,bundleID:app.bundleID}), `development-app-group${agents.length ? ' has-agents' : ''}${waiting.length ? ' needs-input' : working.length ? ' is-working' : ''}`);
+    group.dataset.appBundle = app.bundleID;
     const elapsed = waitingAttentionElapsed(appWaitingAttention(site, app));
     if (elapsed !== null) {
       group.classList.add('waiting-attention');
@@ -141,7 +143,7 @@ function developmentAppIndicator(site) {
     }
     group.dataset.appTooltip = description;
     group.setAttribute('aria-label', description);
-    group.setAttribute('role', 'img');
+    group.setAttribute('aria-description', `Show ${app.name}`);
     const source = typeof app.icon === 'string' && /^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/.test(app.icon) ? app.icon : null;
     group.append(developmentAppIcon(app.name, source, 22));
     if (agents.length) {
@@ -177,8 +179,9 @@ function developmentAppIndicator(site) {
 }
 function details(site, parent, showIDEStatus) {
   const {checked, ...displayGit} = site.git;
+  const publishBusy = !!siteID && (snapshot.action?.status === 'preparing' || snapshot.action?.status === 'running' || !!sitePublishPending);
   const attention = (site.developmentApps || []).map(app => appWaitingAttention(site, app).map(entry => entry.serial));
-  const signature = JSON.stringify([site.path, site.prefix, site.name, displayGit, site.developmentApps, site.developmentAppsKnown, showIDEStatus, site.position?.label, attention]);
+  const signature = JSON.stringify([site.path, site.prefix, site.name, displayGit, site.developmentApps, site.developmentAppsKnown, showIDEStatus, site.position?.label, attention, publishBusy]);
   if (parent.dataset.details === signature) return;
   parent.dataset.details = signature;
   parent.replaceChildren();
@@ -192,6 +195,7 @@ function details(site, parent, showIDEStatus) {
   }
   const heading = el('div', 'card-heading');
   const title = siteID ? el('div', 'card-title') : button('', () => emit('activate', site.id), 'card-title');
+  title.dataset.viewKind = 'auto';
   const branch = el('div', 'branch', site.git.branch || 'Folder');
   title.append(pathLabel(site), branch);
   title.title = siteID ? 'Drag to move this Site' : 'Go to this Site · Drag to move the panel';
@@ -206,7 +210,7 @@ function details(site, parent, showIDEStatus) {
       const tag = button(`${ci.symbol ? `${ci.symbol} ` : ''}#${pr.number}`, () => openPR(pr.number), `pr-tag status-link ${prTagTone(pr)}`.trim());
       tag.dataset.prNumber = String(pr.number);
       const description = [`PR #${pr.number}`, pr.isDraft ? 'Draft' : pr.state, ci.label].filter(Boolean).join(' · ');
-      tag.title = `Open ${description}`;
+      tag.title = `Open ${description} in browser`;
       tag.dataset.appTooltip = description;
       tag.setAttribute('aria-label', tag.title); tags.append(tag);
     }
@@ -220,7 +224,7 @@ function details(site, parent, showIDEStatus) {
       const selection = window.getSelection();
       if (selection && !selection.isCollapsed && (node.contains(selection.anchorNode) || node.contains(selection.focusNode))) return;
       if (prNumber) openPR(prNumber);
-      else emit('viewer-open', {siteID:site.id,kind:view || 'edits'});
+      else emit('viewer-open', {siteID:site.id,kind:view || 'edits',anchor:cardBounds(node)});
     }, `${cls} status-link copyable`);
     if (prNumber) node.dataset.prNumber = String(prNumber);
     else node.dataset.viewKind = view || 'edits';
@@ -230,12 +234,13 @@ function details(site, parent, showIDEStatus) {
     const row = statusButton(view, `status-line ${tone}`, prNumber);
     const icon = el('span', 'status-symbol', symbol); icon.setAttribute('aria-hidden', 'true');
     row.append(icon, el('span', '', text)); row.title = title; body.append(row);
+    return row;
   }
   function metrics(label, values, title, prNumber) {
     if (!values.length) return;
-    const row = el('div', 'metric-row copyable'); row.append(el('span', 'metric-label', label));
+    const row = el('div', 'metric-row copyable');
+    row.append(el('span', 'metric-label', label));
     if (title) { row.classList.add('review-row'); row.title = title; row.setAttribute('aria-label', `${label}: ${title}`); }
-    if (prNumber) row.dataset.prNumber = String(prNumber);
     for (const item of values) {
       const badge = statusButton(item.view, `metric ${item.tone}`, prNumber); badge.title = item.title; badge.setAttribute('aria-label', `View ${item.title}`);
       const symbol = el('span', 'metric-symbol', item.symbol); symbol.setAttribute('aria-hidden', 'true');
@@ -245,10 +250,14 @@ function details(site, parent, showIDEStatus) {
     }
     body.append(row);
   }
-  metrics('Local', status.local); metrics('Remote', status.remote);
-  if (status.alert) line(status.alert.text, status.alert.tone, status.alert.symbol, status.alert.title || site.git.localNote || site.git.summary, status.alert.view);
-  if (status.quiet) line(status.quiet, 'good quiet-status', '✓');
-  if (status.base) line(status.base, 'warning', '↳', status.baseTitle);
+  metrics('Edits', status.local.filter(item=>item.view==='edits'));
+  metrics('Branch', [...status.local.filter(item=>item.view!=='edits'),...status.remote]);
+  if (status.alert) {
+    const row = line(status.alert.text, status.alert.tone, status.alert.symbol, status.alert.title || site.git.localNote || site.git.summary, status.alert.view);
+    if (status.alert.publishRebased) row.dataset.publishRebased = 'true';
+  }
+  if (status.quiet) line(status.quiet, 'good quiet-status', '✓', 'Matches the remote at the last successful check', 'branch');
+  if (status.base) line(status.base, 'warning', '↳', status.baseTitle, 'branch').dataset.baseBranch = site.git.base.branch;
   const singlePR = pullRequests.length === 1 ? pullRequests[0].number : null;
   if (status.pr) {
     for (const label of status.pr.split('; ')) {
@@ -264,8 +273,26 @@ function details(site, parent, showIDEStatus) {
     metrics(singlePR ? 'Review' : review.label, review.values, review.title, prNumber);
     if (review.note) line(review.note, 'freshness warning', '◷', review.title, 'edits', prNumber);
   }
-  if (status.freshness) line(status.freshness, 'freshness muted', '◷', [site.git.remoteNote, site.git.remoteChecked ? `Last checked ${new Date(site.git.remoteChecked).toLocaleString()}` : ''].filter(Boolean).join('\n'), 'remote');
+  if (status.freshness) line(status.freshness, 'freshness muted', '◷', [site.git.remoteNote, site.git.remoteChecked ? `Last checked ${new Date(site.git.remoteChecked).toLocaleString()}` : ''].filter(Boolean).join('\n'), 'branch');
   parent.append(body);
+  if (siteID && site.git.rebased) {
+    const warning = rebasedPublishWarning(site.git);
+    const push = button('Push rebased branch…', async () => {
+      if (push.disabled || sitePublishPending) return;
+      const request = {siteID:site.id,kind:'publish',branch:site.git.branch,head:site.git.head,deleteBranch:false,anchor:cardBounds(push)};
+      sitePublishPending = request;
+      render(snapshot);
+      try { await emit('action-prepare', request); }
+      finally {
+        if (sitePublishPending === request) sitePublishPending = null;
+        render(snapshot);
+      }
+    }, 'site-publish suggestion-primary');
+    push.disabled = publishBusy || !!warning;
+    push.title = warning || (publishBusy ? 'Wait for the current Git action to finish.' : 'Fetch, check for conflicts, and review before confirming the push.');
+    push.dataset.viewKind = 'branch'; push.dataset.publishRebased = 'true'; push.dataset.publishButton = 'true';
+    parent.append(push);
+  }
   if (showIDEStatus) parent.append(developmentAppIndicator(site));
 }
 

@@ -27,6 +27,85 @@ func (m *siteManager) actionReply(requestID, message string) {
 	}{requestID, message})
 }
 
+// Site buttons may prepare only their own currently available rebased push.
+// All other actions retain their existing viewer/confirmation authorization.
+func (m *siteManager) sitePublishSource(req ActionRequest, sender string) *application.WebviewWindow {
+	if sender != "site-"+req.SiteID || req.Kind != "publish" || m.actionBusy() || (m.action != nil && m.action.Status == "preparing") {
+		return nil
+	}
+	parent, site := m.cardMenuSource(cardMenuRequest{SiteID: req.SiteID}, sender)
+	if parent == nil || req.Head != site.Git.Head || req.Branch != site.Git.Branch {
+		return nil
+	}
+	option := makeCardGitOption(cardMenuRequest{Kind: "branch", PublishRebased: true}, site.Git)
+	if option == nil || option.DisabledReason != "" {
+		return nil
+	}
+	return parent
+}
+
+// Caller authorizes the originating window and action before entering this
+// shared manager-queue path. It only prepares a plan; confirmation is separate.
+func (m *siteManager) prepareAction(req ActionRequest, r *siteRuntime, parent *application.WebviewWindow) {
+	if r == nil || m.runtime[req.SiteID] != r || !r.Ready || m.actionBusy() {
+		m.actionReply(req.RequestID, "The Site is not ready or another action is running. Refresh and try again.")
+		return
+	}
+	title := map[string]string{"switch": "Confirm branch switch", "replace": "Confirm branch replacement", "push": "Confirm push", "publish": "Confirm rebased push", "update": "Confirm branch update", "rebase": "Confirm rebase", "rebase-push": "Rebase and push", "merged": "Confirm return to default branch"}[req.Kind]
+	if title == "" {
+		m.actionReply(req.RequestID, "Unknown action.")
+		return
+	}
+	m.suggestedSite = req.SiteID
+	m.suggestionsParent = parent
+	if req.Anchor.valid() {
+		m.suggestionsAnchor = req.Anchor
+	} else {
+		m.suggestionsAnchor = nil
+	}
+	m.actionReply(req.RequestID, "")
+	if req.Kind != "switch" {
+		m.suggestions.SetMinSize(400, 340)
+		height := 470
+		if isPublishAction(req.Kind) {
+			m.suggestions.SetMinSize(400, 300)
+			height = 330
+		}
+		m.suggestions.SetSize(460, height)
+	}
+	m.suggestions.SetTitle(title)
+	m.cancelCheckoutAction()
+	ctx, cancel := context.WithTimeout(m.app.Context(), 2*time.Minute)
+	m.actionCancel = cancel
+	generation := m.actionGeneration
+	merged := r.Git.MergedPR
+	m.action = &CheckoutAction{SiteID: req.SiteID, Kind: req.Kind, Status: "preparing", Message: "Checking the checkout and fetching the remote…"}
+	if m.suggestionsReady {
+		showSuggestionsWindow(m.suggestions, m.suggestionsParent, m.suggestionsAnchor)
+	}
+	m.broadcast()
+	go func() {
+		defer cancel()
+		plan, err := prepareCheckoutAction(ctx, r.Site.Path, req, merged)
+		result := &CheckoutAction{SiteID: req.SiteID, Kind: req.Kind, Status: "ready", Plan: plan}
+		if err != nil {
+			result.Status, result.Message = "failed", err.Error()
+			var rebaseErr *rebaseActionError
+			if errors.As(err, &rebaseErr) {
+				result.Files = rebaseErr.check.Files
+			}
+		}
+		m.send(func() {
+			if generation != m.actionGeneration || m.suggestedSite != req.SiteID || m.runtime[req.SiteID] != r {
+				return
+			}
+			m.actionCancel = nil
+			m.action = result
+			m.broadcast()
+		})
+	}()
+}
+
 func (m *siteManager) registerCheckoutActions() {
 	m.app.Event.On("devjay:action-prepare", func(e *application.CustomEvent) {
 		sender := e.Sender
@@ -45,9 +124,16 @@ func (m *siteManager) registerCheckoutActions() {
 				m.actionReply(req.RequestID, "Choose a branch from this Site's branch picker before continuing.")
 				return
 			}
+			parent := m.suggestionsParent
 			if sender == "suggested-actions" {
 				if req.SiteID != m.suggestedSite {
 					m.actionReply(req.RequestID, "The selected Site changed. Open the action again.")
+					return
+				}
+			} else if sender == "site-"+req.SiteID {
+				parent = m.sitePublishSource(req, sender)
+				if parent == nil {
+					m.actionReply(req.RequestID, "This rebased push is no longer available. Refresh the Site and review its current state.")
 					return
 				}
 			} else {
@@ -58,50 +144,9 @@ func (m *siteManager) registerCheckoutActions() {
 				}
 				// Bind the selected action to this viewer’s Site. Preparation
 				// validates the requested branch and commit against live Git.
-				m.suggestedSite = req.SiteID
-				m.suggestionsParent = viewer.window
+				parent = viewer.window
 			}
-			title := map[string]string{"switch": "Confirm branch switch", "replace": "Confirm branch replacement", "push": "Confirm push", "update": "Confirm branch update", "rebase": "Confirm rebase", "merged": "Confirm return to default branch"}[req.Kind]
-			if title == "" {
-				m.actionReply(req.RequestID, "Unknown action.")
-				return
-			}
-			m.actionReply(req.RequestID, "")
-			if req.Kind != "switch" {
-				m.suggestions.SetMinSize(400, 340)
-				m.suggestions.SetSize(460, 470)
-			}
-			m.suggestions.SetTitle(title)
-			m.cancelCheckoutAction()
-			ctx, cancel := context.WithTimeout(m.app.Context(), 2*time.Minute)
-			m.actionCancel = cancel
-			generation := m.actionGeneration
-			merged := r.Git.MergedPR
-			m.action = &CheckoutAction{SiteID: req.SiteID, Kind: req.Kind, Status: "preparing", Message: "Checking the checkout and fetching the remote…"}
-			if m.suggestionsReady {
-				showSuggestionsWindow(m.suggestions, m.suggestionsParent)
-			}
-			m.broadcast()
-			go func() {
-				defer cancel()
-				plan, err := prepareCheckoutAction(ctx, r.Site.Path, req, merged)
-				result := &CheckoutAction{SiteID: req.SiteID, Kind: req.Kind, Status: "ready", Plan: plan}
-				if err != nil {
-					result.Status, result.Message = "failed", err.Error()
-					var rebaseErr *rebaseActionError
-					if errors.As(err, &rebaseErr) {
-						result.Files = rebaseErr.check.Files
-					}
-				}
-				m.send(func() {
-					if generation != m.actionGeneration || m.suggestedSite != req.SiteID || m.runtime[req.SiteID] != r {
-						return
-					}
-					m.actionCancel = nil
-					m.action = result
-					m.broadcast()
-				})
-			}()
+			m.prepareAction(req, r, parent)
 		})
 	})
 	m.app.Event.On("devjay:action-confirm", func(e *application.CustomEvent) {

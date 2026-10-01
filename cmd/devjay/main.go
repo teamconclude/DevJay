@@ -125,6 +125,7 @@ func main() {
 	manager.registerViewerEvents()
 	manager.registerPREvents()
 	manager.registerCardMenuEvents()
+	manager.registerDevelopmentAppEvents()
 	manager.registerEvents()
 	manager.registerRecoveryEvents()
 	menu := app.Menu.New()

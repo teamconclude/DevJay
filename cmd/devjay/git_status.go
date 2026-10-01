@@ -417,8 +417,6 @@ func describeGit(s GitStatus, m gitMeta, c remoteCache) GitStatus {
 			s.RemoteNote = c.Error
 		} else if c.Checked.IsZero() {
 			s.RemoteNote = "Remote not checked yet"
-		} else if time.Since(c.Checked) > 2*time.Minute {
-			s.RemoteNote = "Remote status is stale"
 		}
 		if s.RemoteNote != "" && s.Summary == "Up to date" {
 			s.Summary = "Matches last known remote"
@@ -436,8 +434,6 @@ func describeGit(s GitStatus, m gitMeta, c remoteCache) GitStatus {
 				base.Note = c.BaseError
 			case c.BaseChecked.IsZero():
 				base.Note = "Default branch not checked yet"
-			case time.Since(c.BaseChecked) > 2*time.Minute:
-				base.Note = "Default branch status is stale"
 			}
 		}
 		s.Base = &base

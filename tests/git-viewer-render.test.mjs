@@ -22,6 +22,8 @@ function viewer(openBranches) {
         node.remove();node.parent=this;this.children.push(node);
       }
     }
+    get parentNode(){return this.parent;}
+    insertBefore(node,next){node.remove();node.parent=this;const index=this.children.indexOf(next);this.children.splice(index<0?this.children.length:index,0,node);}
     remove(){if(this.parent){const nodes=this.parent.children;nodes.splice(nodes.indexOf(this),1);this.parent=null;}}
     replaceChildren(...nodes){if(this.contains(document.activeElement))document.activeElement=document.body;for(const node of this.children)node.parent=null;this.children=[];this._text='';this.scrollTop=0;this.scrollLeft=0;this.append(...nodes);}
     set textContent(text){this.replaceChildren();this._text=String(text);}
@@ -38,7 +40,8 @@ function viewer(openBranches) {
   body.append(root);
   const context=vm.createContext({document});
   vm.runInContext(editorSource+'\n'+viewerSource,context);
-  return {root,document,render:context.mountGitViewer(root,()=>{},null,openBranches)};
+  const requests=[];
+  return {root,document,requests,render:context.mountGitViewer(root,request=>requests.push(request),null,openBranches)};
 }
 
 const file=(path='selected.go')=>({path,group:'Unstaged',status:'M',statsKnown:true,added:1,removed:1});
@@ -115,4 +118,63 @@ test('Changes window opens branch selection for its Site and restores the button
   for(const change of [{head:''},{head:'head',branch:'Detached HEAD'},{head:'head',branch:'(detached)'},{head:'head',branch:''}]){
    view.render(state(change));assert.equal(button.hidden,true);
   }
+});
+
+test('branch view presents one history with explicit markers and subdued incoming commits',()=>{
+ const view=viewer();
+ view.render(state({kind:'branch',upstream:'remote',tracking:'origin/main',incomingCount:1,counts:{edits:1,local:1,branch:3},commits:[
+  {id:'incoming',subject:'Other work',presence:'incoming'},
+  {id:'outgoing',subject:'My work',presence:'outgoing'},
+  {id:'shared',subject:'Shared base',presence:'shared'},
+ ]}));
+ const tabs=view.root.querySelector('.git-view-tabs');
+ assert.equal(tabs.children.length,2);
+ assert.match(tabs.textContent,/Changes1History3/);
+ assert.doesNotMatch(tabs.textContent,/Local commits|Remote commits/);
+ assert.match(view.root.querySelector('.git-view-context').textContent,/1 not pushed.*1 incoming/);
+ const commits=view.root.querySelectorAll('.git-commit');
+ assert.ok(commits[0].classList.contains('incoming'));assert.match(commits[0].textContent,/↓ Incoming/);
+ assert.match(commits[1].textContent,/↑ Not pushed/);assert.doesNotMatch(commits[2].textContent,/On remote/);assert.match(commits[2].attrs['aria-label'],/On remote/);
+ view.render(state({version:2,kind:'branch',comparisonOnly:true,commits:[{id:'outgoing',presence:'outgoing'}]}));
+ assert.match(view.root.querySelector('.git-commit').textContent,/Local only/);
+ assert.doesNotMatch(view.root.querySelector('.git-commit').textContent,/Not pushed/);
+});
+
+test('Changes has one selectable row per path and keeps staged and working diffs distinct',()=>{
+ const view=viewer();
+ const staged={...file('src/shared.go'),group:'Staged'},working={...staged,group:'Unstaged'};
+ const initial=state({files:[staged,file('z.go'),working,{...file('new.go'),group:'Untracked',status:'?'}],file:2,counts:{edits:3,branch:5}});
+ view.render(initial);
+ const sidebar=view.root.querySelector('.git-view-sidebar'),files=view.root.querySelector('.git-view-files');
+ assert.equal(files.parentNode,sidebar);
+ assert.equal(view.root.querySelectorAll('.git-file').length,3);
+ const row=view.root.querySelectorAll('.git-file').find(n=>n.textContent.includes('shared.go'));
+ assert.match(row.textContent,/Staged · Working tree/);assert.equal(row.attrs['aria-pressed'],'true');
+ const parts=view.root.querySelector('.git-change-parts').querySelectorAll('button');
+ assert.deepEqual(parts.map(n=>n.textContent),['Staged','Working tree']);
+ parts[0].onclick();
+ assert.equal(view.requests[0].operation,'file');assert.equal(view.requests[0].file,0);
+ view.render({...initial,version:2,file:0,diff:'@@ -1 +1 @@\n-old\n+staged content'});
+ assert.equal(view.root.querySelectorAll('.git-file').length,3);
+ assert.match(view.root.querySelector('.git-diff').textContent,/staged content/);
+ assert.equal(view.root.querySelector('.git-change-parts').querySelectorAll('button')[0].attrs['aria-pressed'],'true');
+ const history={...initial,version:3,kind:'branch',commits:[{id:'commit',subject:'Update',presence:'shared'}],commit:'commit',message:'Update',files:[{...file('src/shared.go'),group:'Commit'}],file:0};
+ view.render(history);
+ assert.equal(files.parentNode,view.root.querySelector('.git-detail-panes'));
+ assert.equal(view.root.querySelector('.git-change-parts').hidden,true);
+ view.render({...initial,version:4});
+ assert.equal(files.parentNode,sidebar);assert.equal(view.root.querySelectorAll('.git-file').length,3);
+});
+
+test('Changes and History navigation sends only a mode request and clean changes show an empty list',()=>{
+ const view=viewer();view.render(state({files:[],file:-1,counts:{edits:0,branch:4}}));
+ const tabs=view.root.querySelector('.git-view-tabs').querySelectorAll('button');
+ assert.equal(tabs[1].querySelector('.git-tab-count').hidden,true);
+ tabs[1].onclick();
+ assert.equal(view.requests[0].operation,'mode');assert.equal(view.requests[0].kind,'branch');
+ assert.match(view.root.querySelector('.git-view-files').textContent,/No uncommitted changes/);
+ assert.equal(view.root.querySelector('.git-change-parts').hidden,true);
+ view.render(state({version:2,files:[],file:-1,counts:null,error:'Checkout unavailable'}));
+ assert.match(view.root.querySelector('.git-detail-empty').textContent,/Changes unavailable/);
+ assert.doesNotMatch(view.root.querySelector('.git-detail-empty').textContent,/working tree is clean/);
 });

@@ -12,14 +12,15 @@ import (
 )
 
 type viewerRequest struct {
-	SiteID    string `json:"siteID"`
-	Kind      string `json:"kind"`
-	Operation string `json:"operation"`
-	Version   uint64 `json:"version"`
-	Commit    string `json:"commit"`
-	File      int    `json:"file"`
-	Page      int    `json:"page"`
-	NewWindow bool   `json:"newWindow"`
+	Anchor    *cardAnchor `json:"anchor,omitempty"`
+	SiteID    string      `json:"siteID"`
+	Kind      string      `json:"kind"`
+	Operation string      `json:"operation"`
+	Version   uint64      `json:"version"`
+	Commit    string      `json:"commit"`
+	File      int         `json:"file"`
+	Page      int         `json:"page"`
+	NewWindow bool        `json:"newWindow"`
 }
 
 // Each window owns its snapshot, selections, and cancellable read. UI events
@@ -29,6 +30,7 @@ type gitViewerWindow struct {
 	editorOpening    bool
 	window           *application.WebviewWindow
 	parent           *application.WebviewWindow
+	anchor           *cardAnchor
 	ready            bool
 	state            *GitView
 	cancel           context.CancelFunc
@@ -89,6 +91,7 @@ func (m *siteManager) forgetViewer(id string) {
 			r.cancel()
 		}
 		if m.suggestionsParent == r.window {
+			m.suggestionsAnchor = nil
 			m.suggestionsParent = m.panel
 			if site := m.runtime[r.state.SiteID]; site != nil && site.Ready {
 				m.suggestionsParent = site.Window
@@ -105,6 +108,9 @@ func (m *siteManager) closeViewer(id string) {
 	}
 }
 func (m *siteManager) openViewer(req viewerRequest, parent *application.WebviewWindow, site *siteRuntime) {
+	if !req.Anchor.valid() {
+		return
+	}
 	if r := m.existingViewer(req); r != nil {
 		m.viewerSequence++
 		r.used = m.viewerSequence
@@ -132,14 +138,14 @@ func (m *siteManager) openViewer(req viewerRequest, parent *application.WebviewW
 		BackgroundColour: application.NewRGB(20, 24, 32),
 		Mac:              application.MacWindow{CollectionBehavior: application.MacWindowCollectionBehaviorMoveToActiveSpace | application.MacWindowCollectionBehaviorFullScreenNone, TabbingMode: application.MacWindowTabbingModeDisallowed},
 	})
-	m.viewers[id] = &gitViewerWindow{window: w, parent: parent, used: m.viewerSequence, state: &GitView{SiteID: req.SiteID, Name: filepath.Base(site.Site.Path), Path: site.Site.Path, Kind: req.Kind, File: -1, RemoteNote: site.Git.RemoteNote, Rebased: site.Git.Rebased}}
+	m.viewers[id] = &gitViewerWindow{window: w, parent: parent, anchor: req.Anchor, used: m.viewerSequence, state: &GitView{SiteID: req.SiteID, Name: filepath.Base(site.Site.Path), Path: site.Site.Path, Kind: req.Kind, File: -1, RemoteNote: site.Git.RemoteNote, Rebased: site.Git.Rebased}}
 	m.watchView(id, w)
 	w.OnWindowEvent(events.Common.WindowRuntimeReady, func(*application.WindowEvent) {
 		m.send(func() {
 			if r := m.viewers[id]; r != nil {
 				if !r.ready {
 					r.ready = true
-					showViewerWindow(w, r.parent)
+					showViewerWindow(w, r.parent, r.anchor)
 				}
 				m.emitViewer(id)
 			}

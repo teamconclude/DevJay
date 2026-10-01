@@ -5,11 +5,11 @@ export function cardStatus(git) {
   const comparison = git.comparison;
   const ahead = comparison ? comparison.ahead : git.ahead, behind = comparison ? comparison.behind : git.behind;
   const comparedWith = comparison ? `compared with cached ${comparison.tracking} history; no upstream configured` : 'ahead of upstream';
-  if (!git.rebased && ahead > 0) result.local.push(metric('↑', ahead, 'commit' + (ahead === 1 ? '' : 's'), 'info', `${ahead} local commits ${comparedWith}`, 'local'));
+  if (!git.rebased && ahead > 0) result.local.push(metric('↑', ahead, comparison ? 'local only' : 'not pushed', 'info', `${ahead} local commits ${comparedWith}`, 'branch'));
   if (git.conflicts > 0) result.local.push(metric('!', git.conflicts, 'conflict' + (git.conflicts === 1 ? '' : 's'), 'error', `${git.conflicts} conflicted files; ${git.changes} changed files in total`, 'edits'));
   else if (git.changes > 0) result.local.push(metric('✎', git.changes, 'edit' + (git.changes === 1 ? '' : 's'), 'warning', `${git.changes} changed files, including staged, unstaged, and untracked files`, 'edits'));
-  if (!git.rebased && behind > 0) result.remote.push(metric('↓', behind, 'commit' + (behind === 1 ? '' : 's'), 'warning', comparison ? `${behind} commits in cached ${comparison.tracking} history not present locally; no upstream configured` : `${behind} incoming commits from upstream`, 'remote'));
-  if (!git.rebased && git.rewritten) result.remote.push(metric('↻', '', 'Rewritten', 'warning', 'Remote history was rewritten', 'remote'));
+  if (!git.rebased && behind > 0) result.remote.push(metric('↓', behind, 'incoming', 'warning', comparison ? `${behind} commits in cached ${comparison.tracking} history not present locally; no upstream configured` : `${behind} incoming commits from upstream`, 'branch'));
+  if (!git.rebased && git.rewritten) result.remote.push(metric('↻', '', 'Rewritten', 'warning', 'Remote history was rewritten', 'branch'));
   if (git.base?.behind > 0 && git.base.tracking !== comparison?.tracking && !git.mergedPR?.sameHead) {
     result.base = `${git.base.branch} · ${git.base.behind} newer ${git.base.behind === 1 ? 'commit' : 'commits'}`;
     result.baseTitle = [`Commits on ${git.base.tracking} not included in this branch`, git.base.note].filter(Boolean).join('\n');
@@ -19,12 +19,12 @@ export function cardStatus(git) {
   if (!git.conflicts && git.summary && !ordinary) result.alert = {text: git.summary, tone: git.tone || 'muted', symbol: git.tone === 'error' ? '!' : '·'};
   if (!result.base && git.summary === 'Up to date' && !git.localNote && !git.remoteNote && !result.local.length && !result.remote.length && !result.alert) result.quiet = 'In sync';
   if (git.remoteNote) {
-    result.freshness = git.remoteNote.includes('not checked') ? 'Remote not checked' : git.remoteNote.includes('no longer exists') ? 'Remote branch removed' : git.remoteNote.includes('stale') ? 'Remote stale · cached' : 'Remote unavailable · cached';
+    result.freshness = git.remoteNote.includes('not checked') ? 'Remote not checked' : git.remoteNote.includes('no longer exists') ? 'Remote branch removed' : git.remoteNote.includes('stale') ? 'Last checked earlier' : git.remoteChecked ? 'Remote check failed · showing last check' : 'Remote check failed';
   }
   if (result.alert?.text === 'Remote branch removed') result.freshness = '';
   if (git.rebased && !git.conflicts) {
-    result.alert = {text: git.localNote ? 'Rebase status cached' : git.remoteNote ? 'Rebased · remote not verified' : 'Rebased · ready to publish', tone: 'info', symbol: '↻', view: 'local',
-      title: `${git.ahead} local and ${git.behind} remote commit IDs differ. All remote-only commits have equivalent patches locally, on a newer default-branch base. Review and publish manually with force-with-lease; no automatic push is performed.`};
+    result.alert = {text: git.localNote ? 'Rebase status cached' : git.remoteNote ? 'Rebased · remote not verified' : 'Rebased · ready to publish', tone: 'info', symbol: '↻', view: 'branch', publishRebased: true,
+      title: `${git.ahead} local and ${git.behind} remote commit IDs differ. Remote patches appear locally on a newer base. Right-click to check and push the rebased branch; conflicts or unverified history require manual work with Claude or Astra.`};
   }
   if (git.localNote) result.alert = {text: git.localNote, tone: 'warning', symbol: '◷'};
   result.pr = git.github || '';
@@ -46,8 +46,8 @@ export function cardStatus(git) {
     }
     const values = [];
     const freshnessUnknown = review.freshnessUnavailable;
-    if (review.blockers > 0) values.push(metric('', review.blockers, review.blockers === 1 ? 'blocker' : 'blockers', 'error', title));
-    if (review.warnings > 0) values.push(metric('', review.warnings, review.warnings === 1 ? 'warning' : 'warnings', 'warning', title));
+    if (review.blockers > 0) values.push(metric('⊗', review.blockers, review.blockers === 1 ? 'blocker' : 'blockers', 'error', title));
+    if (review.warnings > 0) values.push(metric('⚠︎', review.warnings, review.warnings === 1 ? 'warning' : 'warnings', 'warning', title));
     const hasFindings = values.length > 0;
     if (!hasFindings) {
       if (approved) values.push(metric('✓', '', 'Approved', 'good', title));

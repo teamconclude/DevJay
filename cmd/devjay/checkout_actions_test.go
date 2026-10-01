@@ -161,6 +161,39 @@ func TestConflictingRebaseCannotBePrepared(t *testing.T) {
 		}
 	}
 }
+
+func TestCardRebasePreparationFetchesLatestAndPinsDefaultIdentity(t *testing.T) {
+	repo, seed := rebaseFixture(t, false)
+	before := checkoutFingerprint(t, repo)
+	req := actionRequest(t, repo, "rebase")
+	req.TargetBranch, req.TargetRemote = "develop", "origin"
+	for _, field := range []string{"branch", "remote"} {
+		changed := req
+		if field == "branch" {
+			changed.TargetBranch = "main"
+		} else {
+			changed.TargetRemote = "other"
+		}
+		if _, err := prepareCheckoutAction(context.Background(), repo, changed, nil); err == nil || !strings.Contains(err.Error(), "default branch changed") {
+			t.Fatalf("accepted different %s: %v", field, err)
+		}
+	}
+	fixtureGit(t, seed, "commit", "--allow-empty", "-m", "newest default commit")
+	fixtureGit(t, seed, "push")
+	plan, err := prepareCheckoutAction(context.Background(), repo, req, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Target != "develop" || plan.TargetHead != fixtureGit(t, seed, "rev-parse", "HEAD") {
+		t.Fatalf("did not prepare latest develop: %+v", plan)
+	}
+	after := checkoutFingerprint(t, repo)
+	for _, key := range []string{"head", "status", "file", "feature", ".git/index"} {
+		if before[key] != after[key] {
+			t.Fatalf("preparation changed %s before confirmation", key)
+		}
+	}
+}
 func TestReturnToDefaultAndOptionalDeletion(t *testing.T) {
 	for _, scenario := range []string{"keep", "delete", "autosave", "new-default", "changed-default", "worktree"} {
 		t.Run(scenario, func(t *testing.T) {

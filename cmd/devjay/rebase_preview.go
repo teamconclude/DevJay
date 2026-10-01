@@ -32,10 +32,19 @@ func rebasePreview(ctx context.Context, path string) RebaseCheck {
 }
 
 func runRebaseTrial(ctx context.Context, path string, realIdentity bool, apply func(string, RebaseCheck) error) RebaseCheck {
+	return runRebaseTrialFrom(ctx, path, realIdentity, "", apply)
+}
+
+// sourceHead is only used to reproduce remote history for publication checks.
+// The caller supplies a verified commit ID; the Site still remains untouched.
+func runRebaseTrialFrom(ctx context.Context, path string, realIdentity bool, sourceHead string, apply func(string, RebaseCheck) error) RebaseCheck {
 	ctx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
-	result := RebaseCheck{Status: "unavailable", Message: "Could not check the rebase. Rebase manually, or try the check again."}
+	result := RebaseCheck{Status: "unavailable", Message: "Could not verify the rebase safely." + manualPublish}
 	s, m := inspectLocal(ctx, path)
+	if sourceHead == "" {
+		sourceHead = m.OID
+	}
 	result.Branch, result.Head, result.Target = s.Branch, m.OID, m.DefaultBranch
 	if s.Base != nil {
 		result.BaseHead = s.Base.Head
@@ -90,7 +99,7 @@ func runRebaseTrial(ctx context.Context, path string, realIdentity bool, apply f
 		name, email = ident[:start], ident[start+2:end]
 	}
 	trial := func(args ...string) ([]byte, error) {
-		prefix := []string{"-C", tmp, "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "rerere.enabled=false", "-c", "commit.gpgsign=false", "-c", "gc.auto=0", "-c", "maintenance.auto=false", "-c", "user.name=" + name, "-c", "user.email=" + email}
+		prefix := []string{"-C", tmp, "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "rerere.enabled=false", "-c", "merge.union.driver=false", "-c", "commit.gpgsign=false", "-c", "gc.auto=0", "-c", "maintenance.auto=false", "-c", "user.name=" + name, "-c", "user.email=" + email}
 		return runCommandWithEnv(ctx, actionCommandSlots, 60*time.Second, isolatedEnv, "git", append(prefix, args...)...)
 	}
 	if _, err := trial("init", "--quiet", "--template=", "--object-format="+format); err != nil {
@@ -114,11 +123,11 @@ func runRebaseTrial(ctx context.Context, path string, realIdentity bool, apply f
 		return result
 	}
 	result.TargetHead = strings.TrimSpace(string(target))
-	if _, err := trial("merge-base", m.OID, result.TargetHead); err != nil {
+	if _, err := trial("merge-base", sourceHead, result.TargetHead); err != nil {
 		result.Message = "Could not establish shared history with the default branch. Review the branch and rebase manually."
 		return result
 	}
-	if _, err := trial("checkout", "--quiet", "--detach", m.OID); err != nil {
+	if _, err := trial("checkout", "--quiet", "--detach", sourceHead); err != nil {
 		return result
 	}
 	_, rebaseErr := trial("rebase", "--rebase-merges", "--no-autostash", "--no-update-refs", "--no-gpg-sign", result.TargetHead)
@@ -129,7 +138,7 @@ func runRebaseTrial(ctx context.Context, path string, realIdentity bool, apply f
 		conflicts, err := trial("diff", "--name-only", "--diff-filter=U", "-z")
 		if exitedWith(rebaseErr, 1) && err == nil && len(conflicts) > 0 {
 			result.Status = "conflicts"
-			result.Message = "Conflicts found. Rebase manually in your editor or terminal; DevJay will not apply this rebase. More conflicts may appear after resolving this first stop."
+			result.Message = "Conflicts found. Resolve the rebase and push manually with Claude or Astra; DevJay will not continue. More conflicts may appear after resolving this first stop."
 			result.Files = strings.Split(strings.TrimSuffix(string(conflicts), "\x00"), "\x00")
 		}
 	} else {

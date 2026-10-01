@@ -34,6 +34,7 @@ func (m *siteManager) registerBranchPicker() {
 			m.actionReply(req.RequestID, "")
 			m.cancelCheckoutAction()
 			m.suggestedSite, m.suggestionsParent = req.SiteID, parent
+			m.suggestionsAnchor = nil
 			m.suggestions.SetTitle("Switch branch")
 			m.suggestions.SetMinSize(560, 700)
 			m.suggestions.SetSize(620, 740)
@@ -42,7 +43,7 @@ func (m *siteManager) registerBranchPicker() {
 			m.actionCancel = cancel
 			generation := m.actionGeneration
 			if m.suggestionsReady {
-				showSuggestionsWindow(m.suggestions, parent)
+				showSuggestionsWindow(m.suggestions, parent, nil)
 			}
 			m.broadcast()
 			go func() {

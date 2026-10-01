@@ -62,7 +62,7 @@ func TestPushConfirmedCommitsOnly(t *testing.T) {
 }
 
 func TestPushRejectsUnsafePreparation(t *testing.T) {
-	for _, scenario := range []string{"incoming", "synced", "dirty", "untracked", "no-upstream", "other-remote", "other-branch", "push-url", "multiple-urls", "missing-remote"} {
+	for _, scenario := range []string{"incoming", "synced", "operation", "no-upstream", "other-remote", "other-branch", "push-url", "multiple-urls", "missing-remote"} {
 		t.Run(scenario, func(t *testing.T) {
 			repo, seed := pushFixture(t)
 			origin := fixtureGit(t, repo, "remote", "get-url", "origin")
@@ -74,10 +74,8 @@ func TestPushRejectsUnsafePreparation(t *testing.T) {
 				fixtureGit(t, seed, "push", "origin", "feature")
 			case "synced":
 				fixtureGit(t, repo, "push", "origin", "feature")
-			case "dirty":
-				writeFixture(t, repo, "feature", "edits")
-			case "untracked":
-				writeFixture(t, repo, "new-file", "edits")
+			case "operation":
+				writeFixture(t, repo, ".git/CHERRY_PICK_HEAD", fixtureGit(t, repo, "rev-parse", "HEAD"))
 			case "no-upstream":
 				fixtureGit(t, repo, "branch", "--unset-upstream")
 			case "other-remote":
@@ -105,7 +103,7 @@ func TestPushRejectsUnsafePreparation(t *testing.T) {
 }
 
 func TestPushStopsWhenConfirmationChanges(t *testing.T) {
-	for _, scenario := range []string{"remote", "head", "branch", "dirty", "upstream", "url", "expired", "rejected"} {
+	for _, scenario := range []string{"remote", "head", "branch", "operation", "url", "expired", "rejected"} {
 		t.Run(scenario, func(t *testing.T) {
 			repo, seed := pushFixture(t)
 			origin := fixtureGit(t, repo, "remote", "get-url", "origin")
@@ -120,8 +118,8 @@ func TestPushStopsWhenConfirmationChanges(t *testing.T) {
 				fixtureGit(t, repo, "commit", "--allow-empty", "-m", "more work")
 			case "branch":
 				fixtureGit(t, repo, "switch", "-c", "other")
-			case "dirty":
-				writeFixture(t, repo, "feature", "edits")
+			case "operation":
+				writeFixture(t, repo, ".git/CHERRY_PICK_HEAD", p.Head)
 			case "upstream":
 				fixtureGit(t, repo, "branch", "--unset-upstream")
 			case "url":
@@ -158,5 +156,53 @@ func TestPushNeverForcesDivergedHistory(t *testing.T) {
 	result := applyPush(context.Background(), p)
 	if result.Status != "failed" || fixtureGit(t, origin, "rev-parse", "feature") != old {
 		t.Fatalf("overwrote remote: %+v", result)
+	}
+}
+
+func TestPushPreservesEditsBeforeAndAfterPreparation(t *testing.T) {
+	for _, timing := range []string{"before", "after"} {
+		t.Run(timing, func(t *testing.T) {
+			repo, _ := pushFixture(t)
+			var p *CheckoutPlan
+			if timing == "after" {
+				p = prepareForTest(t, repo, "push")
+			}
+			writeFixture(t, repo, "feature", "staged changes\n")
+			fixtureGit(t, repo, "add", "feature")
+			writeFixture(t, repo, "feature", "unstaged changes\n")
+			writeFixture(t, repo, "new-file", "untracked changes\n")
+			before := fixtureGit(t, repo, "status", "--porcelain=v2", "-z")
+			index, err := os.ReadFile(filepath.Join(repo, ".git", "index"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if timing == "before" {
+				p = prepareForTest(t, repo, "push")
+			}
+			result := applyCheckoutAction(context.Background(), p)
+			if result.Status != "complete" {
+				t.Fatalf("%+v", result)
+			}
+			origin := fixtureGit(t, repo, "remote", "get-url", "origin")
+			if fixtureGit(t, origin, "rev-parse", "refs/heads/feature") != p.Head {
+				t.Fatal("wrong commit pushed")
+			}
+			if fixtureGit(t, repo, "rev-parse", "HEAD") != p.Head {
+				t.Fatal("branch moved")
+			}
+			if fixtureGit(t, repo, "status", "--porcelain=v2", "-z") != before {
+				t.Fatal("edits changed")
+			}
+			after, _ := os.ReadFile(filepath.Join(repo, ".git", "index"))
+			if string(index) != string(after) {
+				t.Fatal("index changed")
+			}
+			for path, want := range map[string]string{"feature": "unstaged changes\n", "new-file": "untracked changes\n"} {
+				data, err := os.ReadFile(filepath.Join(repo, path))
+				if err != nil || string(data) != want {
+					t.Fatalf("changed %s: %v", path, err)
+				}
+			}
+		})
 	}
 }

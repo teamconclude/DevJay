@@ -20,7 +20,7 @@ func (m *siteManager) createSuggestionsWindow() {
 			first := !m.suggestionsReady
 			m.suggestionsReady = true
 			if first && m.suggestionsParent != nil {
-				showSuggestionsWindow(w, m.suggestionsParent)
+				showSuggestionsWindow(w, m.suggestionsParent, m.suggestionsAnchor)
 			}
 			m.broadcast()
 		})
@@ -49,5 +49,6 @@ func (m *siteManager) closeSuggestions() {
 	m.suggestions.Hide()
 	m.suggestedSite = ""
 	m.suggestionsParent = nil
+	m.suggestionsAnchor = nil
 	m.broadcast()
 }

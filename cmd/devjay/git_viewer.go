@@ -18,7 +18,7 @@ const viewerPageSize = 100
 const viewerDiffLimit = 256 << 10
 
 type ViewCommit struct {
-	Presence string `json:"presence,omitempty"` // incoming, local, or unknown in remote history.
+	Presence string `json:"presence,omitempty"` // incoming, outgoing, shared, unlinked, or unknown; local in legacy remote views.
 	ID       string `json:"id"`
 	Author   string `json:"author"`
 	Date     string `json:"date"`
@@ -40,6 +40,7 @@ type ViewCounts struct {
 	Edits  int  `json:"edits"`
 	Local  *int `json:"local"`
 	Remote *int `json:"remote"`
+	Branch *int `json:"branch"`
 }
 type GitView struct {
 	ComparisonOnly bool `json:"comparisonOnly,omitempty"` // Tracking/Upstream describe a cached comparison, not configured tracking.
@@ -77,7 +78,9 @@ type GitView struct {
 	root          string
 }
 
-func validViewKind(kind string) bool { return kind == "edits" || kind == "local" || kind == "remote" }
+func validViewKind(kind string) bool {
+	return kind == "edits" || kind == "branch" || kind == "local" || kind == "remote"
+}
 func viewerGit(ctx context.Context, root string, args ...string) ([]byte, error) {
 	prefix := []string{"--no-pager", "--literal-pathspecs", "-C", root, "-c", "core.quotePath=false"}
 	return runCommandWithSlots(ctx, commandSlots, 10*time.Second, "git", append(prefix, args...)...)
@@ -145,6 +148,8 @@ type viewSelection struct {
 func viewCategoryCount(v *GitView) *int {
 	if v.Counts != nil {
 		switch v.Kind {
+		case "branch":
+			return v.Counts.Branch
 		case "local":
 			return v.Counts.Local
 		case "remote":
@@ -157,7 +162,7 @@ func viewCategoryCount(v *GitView) *int {
 // New commits can move a selected row onto a different history page. Look
 // around both its old position and the position predicted by the count change.
 // At most two reads of 300 IDs keep recovery bounded even for very large repos.
-func findViewSelectionPage(ctx context.Context, v *GitView, comparison string, selection *viewSelection) (int, bool, error) {
+func findViewSelectionPage(ctx context.Context, v *GitView, revisions []string, selection *viewSelection) (int, bool, error) {
 	starts := []int{max(0, selection.page-1)}
 	if count := viewCategoryCount(v); selection.count >= 0 && count != nil {
 		index := max(0, selection.page*viewerPageSize+selection.row+*count-selection.count)
@@ -167,8 +172,9 @@ func findViewSelectionPage(ctx context.Context, v *GitView, comparison string, s
 		}
 	}
 	for _, start := range starts {
-		out, err := viewerGit(ctx, v.root, "log", "--date-order", "--no-show-signature", "--format=%H",
-			"--max-count="+strconv.Itoa(3*viewerPageSize), "--skip="+strconv.Itoa(start*viewerPageSize), comparison, "--")
+		args := []string{"log", "--date-order", "--no-show-signature", "--format=%H",
+			"--max-count=" + strconv.Itoa(3*viewerPageSize), "--skip=" + strconv.Itoa(start*viewerPageSize)}
+		out, err := viewerGit(ctx, v.root, append(append(args, revisions...), "--")...)
 		if err != nil {
 			return 0, false, errors.New("Could not locate the selected commit. Try Refresh.")
 		}
@@ -293,7 +299,7 @@ func loadGitViewSelection(ctx context.Context, v *GitView, refresh bool, selecti
 		}
 		return nil
 	}
-	if v.Upstream == "" || (v.Kind == "local" && v.Head == "") {
+	if v.Kind != "branch" && (v.Upstream == "" || (v.Kind == "local" && v.Head == "")) {
 		return errors.New("No upstream comparison is available for this branch.")
 	}
 	comparison := v.Upstream + ".." + v.Head
@@ -301,7 +307,15 @@ func loadGitViewSelection(ctx context.Context, v *GitView, refresh bool, selecti
 		// Browse the whole upstream, including commits already in HEAD.
 		comparison = v.Upstream
 	}
-	out, err := viewerGit(ctx, v.root, "log", "--date-order", "--no-show-signature", "-z", "--format=%H%x00%an%x00%aI%x00%s", "--max-count="+strconv.Itoa(viewerPageSize+1), "--skip="+strconv.Itoa(v.Page*viewerPageSize), comparison, "--")
+	revisions := []string{comparison}
+	if v.Kind == "branch" {
+		revisions = branchViewRevisions(v)
+		if len(revisions) == 0 {
+			return nil // An unborn branch has no history yet.
+		}
+	}
+	args := []string{"log", "--date-order", "--no-show-signature", "-z", "--format=%H%x00%an%x00%aI%x00%s", "--max-count=" + strconv.Itoa(viewerPageSize+1), "--skip=" + strconv.Itoa(v.Page*viewerPageSize)}
+	out, err := viewerGit(ctx, v.root, append(append(args, revisions...), "--")...)
 	if err != nil {
 		return errors.New("Could not read these commits. Try Refresh.")
 	}
@@ -325,7 +339,7 @@ func loadGitViewSelection(ctx context.Context, v *GitView, refresh bool, selecti
 		}
 		if !found {
 			selection.pageSearched = true
-			page, recovered, err := findViewSelectionPage(ctx, v, comparison, selection)
+			page, recovered, err := findViewSelectionPage(ctx, v, revisions, selection)
 			if err != nil {
 				return err
 			}
@@ -337,6 +351,8 @@ func loadGitViewSelection(ctx context.Context, v *GitView, refresh bool, selecti
 	}
 	if v.Kind == "remote" {
 		markRemotePresence(ctx, v)
+	} else if v.Kind == "branch" {
+		markBranchPresence(ctx, v)
 	}
 	if len(v.Commits) > 0 {
 		commit := v.Commits[0].ID
@@ -372,8 +388,13 @@ func loadGitViewSelection(ctx context.Context, v *GitView, refresh bool, selecti
 // local reads use the same pinned revisions as the commit list and never fetch.
 func countViewCategories(ctx context.Context, v *GitView, edits int) *ViewCounts {
 	counts := &ViewCounts{Edits: edits}
-	count := func(revision string) *int {
-		out, err := viewerGit(ctx, v.root, "rev-list", "--count", revision, "--")
+	count := func(revisions ...string) *int {
+		if len(revisions) == 0 {
+			n := 0
+			return &n
+		}
+		args := append([]string{"rev-list", "--count"}, revisions...)
+		out, err := viewerGit(ctx, v.root, append(args, "--")...)
 		if err != nil {
 			return nil
 		}
@@ -389,7 +410,57 @@ func countViewCategories(ctx context.Context, v *GitView, edits int) *ViewCounts
 		}
 		counts.Remote = count(v.Upstream)
 	}
+	counts.Branch = count(branchViewRevisions(v)...)
 	return counts
+}
+
+// A single paginated history includes both tips and each shared ancestor once.
+func branchViewRevisions(v *GitView) []string {
+	var revisions []string
+	if v.Head != "" {
+		revisions = append(revisions, v.Head)
+	}
+	if v.Upstream != "" && v.Upstream != v.Head {
+		revisions = append(revisions, v.Upstream)
+	}
+	return revisions
+}
+
+func markBranchPresence(ctx context.Context, v *GitView) {
+	if v.Upstream == "" || v.Head == "" {
+		for i := range v.Commits {
+			v.Commits[i].Presence = "unlinked"
+			if v.Upstream != "" {
+				v.Commits[i].Presence = "incoming"
+			}
+		}
+		return
+	}
+	// Compare IDs, not patches: equivalent rebased commits remain distinct.
+	out, err := viewerGit(ctx, v.root, "rev-list", "--left-right", v.Head+"..."+v.Upstream, "--")
+	if err != nil {
+		v.HistoryNote = "Could not compare branch histories. Refresh to retry."
+		for i := range v.Commits {
+			v.Commits[i].Presence = "unknown"
+		}
+		return
+	}
+	presence := make(map[string]string)
+	v.IncomingCount = 0
+	for _, line := range strings.Fields(string(out)) {
+		if strings.HasPrefix(line, "<") {
+			presence[line[1:]] = "outgoing"
+		} else if strings.HasPrefix(line, ">") {
+			presence[line[1:]] = "incoming"
+			v.IncomingCount++
+		}
+	}
+	for i := range v.Commits {
+		v.Commits[i].Presence = presence[v.Commits[i].ID]
+		if v.Commits[i].Presence == "" {
+			v.Commits[i].Presence = "shared"
+		}
+	}
 }
 
 // Use the same pinned revisions as the history page. Reading the incoming set

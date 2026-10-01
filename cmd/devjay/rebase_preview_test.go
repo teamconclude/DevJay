@@ -101,6 +101,24 @@ func TestRebasePreviewCleanAndConflictingPreserveCheckout(t *testing.T) {
 	}
 }
 
+func TestRebasePreviewRejectsUnionResolution(t *testing.T) {
+	repo, seed := rebaseFixture(t, true)
+	// Union would silently combine both conflicting versions. Treat it as a
+	// manual resolution instead of advertising an automatically safe rebase.
+	writeFixture(t, seed, ".gitattributes", "file merge=union\n")
+	fixtureGit(t, seed, "add", ".gitattributes")
+	fixtureGit(t, seed, "commit", "-m", "union driver")
+	fixtureGit(t, seed, "push")
+	before := checkoutFingerprint(t, repo)
+	result := rebasePreview(context.Background(), repo)
+	if result.Status != "conflicts" || !strings.Contains(result.Message, "Claude or Astra") {
+		t.Fatalf("silently resolved conflict: %+v", result)
+	}
+	if after := checkoutFingerprint(t, repo); !reflect.DeepEqual(before, after) {
+		t.Fatal("conflict check changed checkout")
+	}
+}
+
 func TestRebasePreviewRejectsUnsafeOrUnknownStates(t *testing.T) {
 	for _, scenario := range []string{"dirty", "staged", "untracked", "operation", "offline", "detached", "cancelled"} {
 		t.Run(scenario, func(t *testing.T) {

@@ -28,7 +28,7 @@ func TestRebasedHistoryRecognizedUntilPublishedOrRemoteChanges(t *testing.T) {
 			}
 			s.Rebased = true
 			display := describeGit(s, m, remoteCache{Checked: time.Now()})
-			if display.Summary != "Rebased · ready to publish" || hasSuggestedActions(display) {
+			if display.Summary != "Rebased · ready to publish" || !hasSuggestedActions(display) {
 				t.Fatalf("bad presentation: %+v", display)
 			}
 			if stale := describeGit(s, m, remoteCache{Error: "Offline"}); stale.Summary != "Rebased · remote not verified" {

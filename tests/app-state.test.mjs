@@ -3,13 +3,15 @@ import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import vm from 'node:vm';
 import {cardStatus} from '../cmd/devjay/frontend/card-status.js';
+import {cardMenuTarget,cardBounds} from '../cmd/devjay/frontend/card-menu.js';
 import {installCardActivation} from '../cmd/devjay/frontend/card-interaction.js';
 import {prCheckIndicator,prTagTone} from '../cmd/devjay/frontend/pr-status.js';
 import {nextNotice} from '../cmd/devjay/frontend/notice.js';
+import {rebasedPublishWarning} from '../cmd/devjay/frontend/suggested-actions.js';
 const source=(await readFile(new URL('../cmd/devjay/frontend/app.js',import.meta.url),'utf8')).replace(/^import .*;\n/gm,'');
 
 // Exercise the real snapshot renderer with a small DOM and the Wails boundary.
-function app(search='') {
+function app(search='', actionResult=true) {
  let document, clock=0, readyCount=0;
  class Element {
   constructor(tag){this.tag=tag;this.children=[];this.dataset={};this.style={};this.className='';this.attrs={};this.textContent='';this.listeners={};
@@ -24,10 +26,11 @@ function app(search='') {
   contains(n){return n===this || this.children.some(c=>c.contains(n));}
   setAttribute(k,v){this.attrs[k]=v;}
   addEventListener(name,fn){(this.listeners[name] ||= []).push(fn);}
-  matches(s){if(s.includes(','))return s.split(',').some(part=>this.matches(part.trim()));if(s.startsWith('.'))return this.classList.contains(s.slice(1));if(s==='[data-pref]')return this.dataset.pref!==undefined;if(s==='[data-app-tooltip]')return this.dataset.appTooltip!==undefined;if(s==='[name=sorting]')return this.name==='sorting';return this.tag===s;}
+  matches(s){if(s.includes(','))return s.split(',').some(part=>this.matches(part.trim()));if(s.startsWith('.'))return this.classList.contains(s.slice(1));if(s==='[data-view-kind]')return this.dataset.viewKind!==undefined;if(s==='[data-pr-number]')return this.dataset.prNumber!==undefined;if(s==='[data-app-bundle]')return this.dataset.appBundle!==undefined;if(s==='[data-pref]')return this.dataset.pref!==undefined;if(s==='[data-app-tooltip]')return this.dataset.appTooltip!==undefined;if(s==='[name=sorting]')return this.name==='sorting';return this.tag===s;}
   closest(s){return this.matches(s)?this:this.parent?.closest(s);}
   querySelectorAll(s){return this.children.flatMap(n=>[...(n.matches(s)?[n]:[]),...n.querySelectorAll(s)]);}
   querySelector(s){return this.querySelectorAll(s)[0]||null;}
+  getBoundingClientRect(){return {left:10,top:20,width:270,height:140};}
   focus(){document.activeElement=this;}
   get firstElementChild(){return this.children[0];}
  }
@@ -40,9 +43,9 @@ function app(search='') {
  const context={prCheckIndicator,prTagTone,document,location:{search},URLSearchParams,setTimeout,clearTimeout,nextNotice,performance:{now:()=>clock},
   window:{addEventListener:noop,getSelection:()=>({isCollapsed:true})},
   Events:{On:(name,fn)=>events[name]=fn,Emit:(...args)=>{calls.push(args);return Promise.resolve();}},Window:{},
-  createBridge:(send,report)=>{bridgeReport=report;return {emit:async(n,d)=>{await send(`devjay:${n}`,d);report('');},reply:noop};},
+  createBridge:(send,report)=>{bridgeReport=report;return {emit:async(n,d)=>{await send(`devjay:${n}`,d);report(actionResult===false?'Delivery failed':'',actionResult===false);return actionResult;},reply:noop};},
   uiReady:()=>()=>readyCount++,installCardSizing:()=>noop,mountEditorSettings:()=>({renderEditor:noop}),
-  mountGitViewer:()=>noop,cardStatus,
+  mountGitViewer:()=>noop,cardStatus,rebasedPublishWarning,cardBounds,
   mountSuggestedActions:()=>noop,mountViewerSuggestions:()=>noop,
   installPanelDrag:(_list,options)=>{drag=options;},installCardActivation,installDragOriginGuard:noop,installCardHover:noop,installCardMenu:noop,
  };
@@ -63,10 +66,113 @@ test('desktop Site and panel branch labels do not open the branch chooser',async
   assert.equal(view.root.querySelector('.branch-switch'),null);
   const branch=view.root.querySelector('.branch');
   assert.equal(branch.tag,'div');assert.equal(branch.textContent,'feature/topic');
+  assert.equal(cardMenuTarget(branch).kind,'auto');
+  assert.equal(cardMenuTarget(view.root.querySelector('.path')).kind,'auto');
   if(!search){branch.closest('button').onclick();view.click(branch);await Promise.resolve();}
   assert.equal(view.calls.some(([name])=>name==='devjay:branches-open'),false);
   assert.deepEqual(view.calls.filter(([name])=>name==='devjay:activate'),search?[]:[['devjay:activate','a']]);
  }
+});
+
+test('metric headings stay plain text while counts keep their viewer and browser actions',async()=>{
+ for(const search of ['', '?site=a']) {
+  const view=app(search), item=site('a');
+  item.git={branch:'main',changes:2,ahead:1,behind:0,github:'PR #12 · Approved',pullRequests:[{number:12}],reviews:[{number:12,blockers:1,warnings:0}]};
+  view.snapshot(state([item]));
+  const labels=view.root.querySelectorAll('.metric-label');
+  assert.deepEqual(labels.map(node=>node.textContent),['Edits','Branch','Review']);
+  assert.match(view.root.querySelector('.card-status').textContent,/2edits/);
+  for(const label of labels){assert.equal(label.tag,'span');assert.equal(label.onclick,undefined);}
+  const counts=view.root.querySelectorAll('.metric');
+  for(const count of counts){await count.onclick();view.click(count);}
+  assert.deepEqual(counts.map(node=>{const t=cardMenuTarget(node);return [t.kind,t.number];}),[['edits',0],['branch',0],['site',12]]);
+  assert.deepEqual(view.calls.filter(([name])=>name==='devjay:viewer-open').map(([,req])=>req.kind),['edits','branch']);
+  assert.equal(view.calls.filter(([name])=>name==='devjay:pr-open').length,1);
+  assert.equal(view.calls.some(([name])=>name==='devjay:activate'),false);
+ }
+});
+
+test('only the newer-default-branch line adds rebase context while clicks still open history',async()=>{
+ for(const search of ['', '?site=a']) for(const branch of ['develop','main']) {
+  const view=app(search), item=site('a','feature');
+  item.git={...item.git,head:'head',ahead:2,base:{branch,tracking:`origin/${branch}`,behind:3}};
+  view.snapshot(state([item]));
+  const row=view.root.querySelectorAll('.status-line').find(node=>node.dataset.baseBranch);
+  assert.match(row.textContent,/3 newer commits/);
+  assert.equal(cardMenuTarget(row.children[1]).baseBranch,branch);
+  assert.equal(cardMenuTarget(row.children[0]).kind,'branch');
+  assert.equal(cardMenuTarget(view.root.querySelector('.metric')).baseBranch,undefined);
+  assert.equal(cardMenuTarget(view.root.querySelector('.branch')).baseBranch,undefined);
+  await row.onclick();
+  assert.equal(view.calls.find(([name])=>name==='devjay:viewer-open')[1].kind,'branch');
+  assert.equal(view.calls.some(([name])=>name==='devjay:action-prepare'||name==='devjay:action-confirm'),false);
+ }
+});
+
+test('Changes and History clicks send the originating card bounds for placement',async()=>{
+ for (const search of ['', '?site=a']) {
+  const view=app(search), item=site('a','feature');
+  item.git={...item.git,changes:2,base:{branch:'develop',tracking:'origin/develop',behind:3}};
+  view.snapshot(state([item]));
+  const controls=[view.root.querySelector('.metric'),view.root.querySelectorAll('.status-line').find(n=>n.textContent.includes('newer commits'))];
+  for(const control of controls) await control.onclick();
+  const requests=JSON.parse(JSON.stringify(view.calls.filter(([name])=>name==='devjay:viewer-open').map(([,data])=>data)));
+  assert.deepEqual(requests.map(r=>r.kind),['edits','branch']);
+  for(const request of requests) assert.deepEqual(request.anchor,{x:10,y:20,width:270,height:140});
+ }
+});
+
+test('rebased status offers publication context while its ordinary click opens history',async()=>{
+ const view=app(''),item=site('a','feature');
+ item.git={...item.git,head:'head',rebased:true,ahead:2,behind:1,pushTarget:'origin/feature'};
+ view.snapshot(state([item]));
+ const row=view.root.querySelectorAll('.status-line').find(node=>node.dataset.publishRebased);
+ assert.equal(cardMenuTarget(row.children[1]).publishRebased,true);
+ assert.equal(cardMenuTarget(row.children[0]).kind,'branch');
+ assert.equal(cardMenuTarget(view.root.querySelector('.branch')).publishRebased,undefined);
+ await row.onclick();
+ assert.equal(view.calls.find(([name])=>name==='devjay:viewer-open')[1].kind,'branch');
+ assert.equal(view.calls.some(([name])=>name==='devjay:action-prepare'||name==='devjay:action-confirm'),false);
+});
+
+test('Site rebased push button prepares only, follows busy state, and is absent from strip',async()=>{
+ const item=site('a','feature');
+ item.git={...item.git,head:'head',rebased:true,tracking:'origin/feature',pushTarget:'origin/feature'};
+ const view=app('?site=a');view.snapshot(state([item]));
+ const button=view.root.querySelector('.site-publish');
+ assert.equal(button.textContent,'Push rebased branch…');assert.equal(button.disabled,false);
+ assert.equal(cardMenuTarget(button).publishButton,true);
+ const pending=button.onclick();
+ button.onclick();
+ view.snapshot(state([item]));
+ assert.equal(view.root.querySelector('.site-publish').disabled,true,'snapshot cannot unlock an in-flight request');
+ await pending;
+ assert.deepEqual(JSON.parse(JSON.stringify(view.calls.filter(([name])=>name==='devjay:action-prepare'))),[['devjay:action-prepare',{siteID:'a',kind:'publish',branch:'feature',head:'head',deleteBranch:false,anchor:{x:10,y:20,width:270,height:140}}]]);
+ assert.equal(view.calls.some(([name])=>name==='devjay:action-confirm'||name==='devjay:activate'),false);
+ for(const status of ['preparing','running']) {
+  view.snapshot({...state([item]),action:{siteID:'other',status}});
+  assert.equal(view.root.querySelector('.site-publish').disabled,true);
+ }
+ view.snapshot({...state([item]),action:{siteID:'a',status:'failed'}});
+ assert.equal(view.root.querySelector('.site-publish').disabled,false);
+ const strip=app('');strip.snapshot(state([item]));assert.equal(strip.root.querySelector('.site-publish'),null);
+ view.snapshot(state([{...item,git:{...item.git,rebased:false}}]));assert.equal(view.root.querySelector('.site-publish'),null);
+});
+
+test('Site publish button shows blockers and recovers from failed request delivery',async()=>{
+ const item=site('a','feature');
+ item.git={...item.git,head:'head',rebased:true,tracking:'origin/feature',pushTarget:'origin/feature'};
+ const view=app('?site=a',false);
+ for(const change of [{changes:1},{conflicts:1},{localNote:'unavailable'},{pushTarget:''},{head:''},{isMainBranch:true},{canReplaceRemote:true}]) {
+  view.snapshot(state([{...item,git:{...item.git,...change}}]));
+  const button=view.root.querySelector('.site-publish');
+  assert.equal(button.disabled,true);assert.ok(button.title);
+  await button.onclick();
+ }
+ assert.equal(view.calls.some(([name])=>name==='devjay:action-prepare'),false);
+ view.snapshot(state([item]));await view.root.querySelector('.site-publish').onclick();
+ assert.equal(view.root.querySelector('.site-publish').disabled,false);
+ assert.match(view.root.querySelector('.notice').textContent,/Delivery failed/);
 });
 
 test('ending a panel drag renders the latest snapshot even after cancellation',()=>{
@@ -190,7 +296,7 @@ test('failed CI marks only its PR tag, preserves review state, and opens the sam
   assert.equal(failed.textContent,'× #1234');
   assert.equal(failed.classList.contains('ci-failed'),true);
   assert.equal(failed.dataset.appTooltip,'PR #1234 · Approved · CI failed');
-  assert.equal(failed.attrs['aria-label'],'Open PR #1234 · Approved · CI failed');
+  assert.equal(failed.attrs['aria-label'],'Open PR #1234 · Approved · CI failed in browser');
   assert.equal(passed.textContent,'#1235');assert.equal(passed.classList.contains('ci-failed'),false);
   assert.equal(passed.dataset.appTooltip,'PR #1235 · Review required · CI passed');
   assert.equal(view.calls.some(([name])=>name==='devjay:activate'||name==='devjay:pr-open'),false);
@@ -244,9 +350,9 @@ test('edit and commit badges retain their category for click and context menus',
  const view=app(),item=site('a');
  item.git={branch:'feature',ahead:2,behind:3,changes:25};view.snapshot(state([item]));
  const badges=view.root.querySelectorAll('.metric');
- assert.deepEqual(badges.map(n=>n.dataset.viewKind),['local','edits','remote']);
+ assert.deepEqual(badges.map(n=>n.dataset.viewKind),['edits','branch','branch']);
  for(const badge of badges)await badge.onclick();
- assert.deepEqual(view.calls.filter(([name])=>name==='devjay:viewer-open').map(([,data])=>data.kind),['local','edits','remote']);
+ assert.deepEqual(view.calls.filter(([name])=>name==='devjay:viewer-open').map(([,data])=>data.kind),['edits','branch','branch']);
 });
 
 
@@ -380,23 +486,26 @@ test('IDE status can be hidden and restored without app or Git changes in both c
 
 const appIcon='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aF9sAAAAASUVORK5CYII=';
 
-test('grouped app and agent icons preserve passive card click behavior in both views',()=>{
+test('app and nested agent icons activate their host and use the same context-menu identity',async()=>{
  for(const search of ['', '?site=a']) for(const icon of [appIcon,undefined]) {
   const view=app(search);
   view.snapshot(state([{...site('a'),developmentAppsKnown:true,developmentApps:[{name:'iTerm2',bundleID:'com.googlecode.iterm2',agents:['Codex'],icon}]}]));
   const indicator=view.root.querySelector('.development-app');
-  assert.equal(indicator.tag,'div');
+  const group=indicator.querySelector('button');
   assert.equal(indicator.onclick,undefined);
-  assert.equal(indicator.querySelector('button'),null);
-  const targets=[indicator,...indicator.querySelectorAll('img'),...indicator.querySelectorAll('.development-app-initials'),...indicator.querySelectorAll('[data-app-tooltip]')];
+  assert.equal(group.attrs['aria-description'],'Show iTerm2');
+  const targets=[group,...indicator.querySelectorAll('img'),...indicator.querySelectorAll('.development-app-initials')];
   for(const target of targets) {
-   const before=view.calls.filter(([name])=>name==='devjay:activate').length;
-   view.click(target);
-   const activations=view.calls.filter(([name])=>name==='devjay:activate');
-   assert.equal(activations.length,before+(search?0:1));
-   if(!search) assert.deepEqual(activations.at(-1),['devjay:activate','a']);
+   const menu=cardMenuTarget(target);
+   assert.equal(menu.siteID,'a');assert.equal(menu.bundleID,'com.googlecode.iterm2');
+   await target.closest('button').onclick();view.click(target);
   }
-  assert.equal(view.calls.some(([name])=>name==='devjay:viewer-open'),false);
+  const requests=view.calls.filter(([name])=>name==='devjay:app-activate');
+  assert.equal(requests.length,targets.length);
+  for(const [,req] of requests){assert.equal(req.siteID,'a');assert.equal(req.bundleID,'com.googlecode.iterm2');}
+  assert.equal(view.calls.some(([name])=>name==='devjay:activate'||name==='devjay:viewer-open'),false);
+  view.click(indicator);
+  assert.equal(view.calls.filter(([name])=>name==='devjay:activate').length,search?0:1,'row whitespace keeps desktop navigation');
  }
 });
 
@@ -480,7 +589,7 @@ test('concise hover targets cover only grouped capsules or single icons',()=>{
    assert.equal(group.querySelector('[data-app-tooltip]'),null,'one tooltip target covers the entire app group');
    assert.doesNotMatch(group.dataset.appTooltip,/waiting|working|idle|blocked|window|folder/i);
   }
-  assert.equal(groups[0].attrs.role,'img');
+  assert.equal(groups[0].tag,'button');
   assert.equal(groups[0].classList.contains('has-agents'),true);
   for(const group of groups) for(const child of [...group.querySelectorAll('img'),...group.querySelectorAll('.development-app-initials')]) {
    assert.equal(child.closest('[data-app-tooltip]'),group,'all child icons use their owning app’s single hover target');
@@ -629,7 +738,7 @@ test('confirmed working updates the correct agent, clears on missing status, and
   assert.equal(label.onclick,undefined);assert.equal(label.tabIndex,undefined);
   assert.equal(view.calls.some(([name])=>name==='devjay:activate'),false);
   view.click(label);
-  assert.deepEqual(view.calls.filter(([name])=>name==='devjay:activate'),search?[]:[['devjay:activate','a']]);
+  assert.deepEqual(view.calls.filter(([name])=>name==='devjay:activate'),[]);
   show(undefined);
   assert.equal(refreshes(),4);
   assert.equal(group().classList.contains('is-working'),false);
@@ -703,7 +812,7 @@ test('unknown or stale waiting names never highlight an app or an absent agent',
  }
 });
 
-test('waiting markers remain decorative within their agent icons and preserve capsule hover and passive clicks',()=>{
+test('waiting markers remain decorative within the host activation button',()=>{
  for(const search of ['', '?site=a']) {
   const view=app(search);
   const snapshot=state([{...site('a'),developmentAppsKnown:true,developmentApps:[{name:'GoLand',agents:['Claude Code','Codex'],waitingAgents:['Claude Code','Codex']}]}]);
@@ -718,7 +827,7 @@ test('waiting markers remain decorative within their agent icons and preserve ca
    assert.equal(marker.onclick,undefined);assert.equal(marker.tabIndex,undefined);
    view.click(marker);
   }
-  assert.deepEqual(view.calls.filter(([name])=>name==='devjay:activate'),search?[]:[['devjay:activate','a'],['devjay:activate','a']]);
+  assert.deepEqual(view.calls.filter(([name])=>name==='devjay:activate'),[]);
   assert.equal(view.calls.some(([name])=>name==='devjay:viewer-open'),false);
   view.snapshot({...snapshot,preferences:{showIDEStatus:false}});
   assert.equal(view.root.querySelector('.development-agent-input'),null,'turning status off hides waiting presentation too');

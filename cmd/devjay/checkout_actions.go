@@ -14,54 +14,59 @@ import (
 )
 
 type ActionRequest struct {
-	RequestID    string `json:"requestID,omitempty"`
-	SiteID       string `json:"siteID"`
-	Kind         string `json:"kind"`
-	Branch       string `json:"branch"`
-	Head         string `json:"head"`
-	DeleteBranch bool   `json:"deleteBranch"`
-	TargetBranch string `json:"targetBranch,omitempty"`
-	TargetRemote string `json:"targetRemote,omitempty"`
-	UpdateTarget bool   `json:"updateTarget,omitempty"`
+	Anchor       *cardAnchor `json:"anchor,omitempty"`
+	RequestID    string      `json:"requestID,omitempty"`
+	SiteID       string      `json:"siteID"`
+	Kind         string      `json:"kind"`
+	Branch       string      `json:"branch"`
+	Head         string      `json:"head"`
+	DeleteBranch bool        `json:"deleteBranch"`
+	TargetBranch string      `json:"targetBranch,omitempty"`
+	TargetRemote string      `json:"targetRemote,omitempty"`
+	UpdateTarget bool        `json:"updateTarget,omitempty"`
 }
 
 type CheckoutPlan struct {
-	Commits                                                          int `json:"commits,omitempty"`
-	branchGeneration                                                 string
-	ID                                                               string    `json:"id"`
-	Kind                                                             string    `json:"kind"`
-	Branch                                                           string    `json:"branch"`
-	Head                                                             string    `json:"head"`
-	Target                                                           string    `json:"target"`
-	TargetHead                                                       string    `json:"targetHead"`
-	DeleteBranch                                                     bool      `json:"deleteBranch"`
-	Expires                                                          time.Time `json:"expires"`
-	path, remote, remoteURL, remoteRef, trackingRef, targetLocalHead string
-	gitDir                                                           string
-	gitDirInfo                                                       os.FileInfo
-	upstreamRef, upstreamRemote, upstreamMerge                       string
-	CanUpdateTarget                                                  bool   `json:"canUpdateTarget,omitempty"`
-	UpdateTarget                                                     bool   `json:"updateTarget,omitempty"`
-	CreateTarget                                                     bool   `json:"createTarget,omitempty"`
-	RemoteAhead                                                      int    `json:"remoteAhead,omitempty"`
-	LocalAhead                                                       int    `json:"localAhead,omitempty"`
-	RemoteTarget                                                     string `json:"remoteTarget,omitempty"`
-	RemoteNote                                                       string `json:"remoteNote,omitempty"`
-	TargetRemote                                                     string `json:"targetRemote,omitempty"`
-	switchTarget                                                     switchBranchState
+	Commits                                                            int `json:"commits,omitempty"`
+	branchGeneration                                                   string
+	ID                                                                 string    `json:"id"`
+	Kind                                                               string    `json:"kind"`
+	Branch                                                             string    `json:"branch"`
+	Head                                                               string    `json:"head"`
+	Target                                                             string    `json:"target"`
+	TargetHead                                                         string    `json:"targetHead"`
+	DeleteBranch                                                       bool      `json:"deleteBranch"`
+	Expires                                                            time.Time `json:"expires"`
+	path, remote, remoteURL, remoteRef, trackingRef, targetLocalHead   string
+	gitDir                                                             string
+	gitDirInfo                                                         os.FileInfo
+	upstreamRef, upstreamRemote, upstreamMerge                         string
+	CanUpdateTarget                                                    bool   `json:"canUpdateTarget,omitempty"`
+	UpdateTarget                                                       bool   `json:"updateTarget,omitempty"`
+	CreateTarget                                                       bool   `json:"createTarget,omitempty"`
+	RemoteAhead                                                        int    `json:"remoteAhead,omitempty"`
+	LocalAhead                                                         int    `json:"localAhead,omitempty"`
+	RemoteTarget                                                       string `json:"remoteTarget,omitempty"`
+	RemoteNote                                                         string `json:"remoteNote,omitempty"`
+	TargetRemote                                                       string `json:"targetRemote,omitempty"`
+	PublishBase                                                        string `json:"publishBase,omitempty"`
+	publishBaseHead, publishBaseRef, publishBaseRemote, publishBaseURL string
+	preparedSeries                                                     string
+	switchTarget                                                       switchBranchState
 }
 
 type CheckoutAction struct {
-	Kind          string         `json:"kind,omitempty"`
-	CurrentBranch string         `json:"currentBranch,omitempty"`
-	CurrentHead   string         `json:"currentHead,omitempty"`
-	SiteID        string         `json:"siteID"`
-	Status        string         `json:"status"`
-	Message       string         `json:"message"`
-	Plan          *CheckoutPlan  `json:"plan,omitempty"`
-	Files         []string       `json:"files,omitempty"`
-	Recovery      string         `json:"recovery,omitempty"`
-	Branches      []BranchChoice `json:"branches,omitempty"`
+	Kind           string         `json:"kind,omitempty"`
+	CurrentBranch  string         `json:"currentBranch,omitempty"`
+	CurrentHead    string         `json:"currentHead,omitempty"`
+	SiteID         string         `json:"siteID"`
+	Status         string         `json:"status"`
+	Message        string         `json:"message"`
+	Plan           *CheckoutPlan  `json:"plan,omitempty"`
+	Files          []string       `json:"files,omitempty"`
+	RemoteRecovery string         `json:"remoteRecovery,omitempty"`
+	Recovery       string         `json:"recovery,omitempty"`
+	Branches       []BranchChoice `json:"branches,omitempty"`
 }
 
 func actionGit(ctx context.Context, path string, args ...string) ([]byte, error) {
@@ -76,11 +81,20 @@ func actionGit(ctx context.Context, path string, args ...string) ([]byte, error)
 }
 
 func cleanCheckout(ctx context.Context, path string) (GitStatus, gitMeta, error) {
+	return inspectActionCheckout(ctx, path, false)
+}
+
+// A push publishes a pinned commit and never touches the index or worktree.
+// Edits may continue, but conflicts and unfinished Git operations still block it.
+func inspectActionCheckout(ctx context.Context, path string, allowEdits bool) (GitStatus, gitMeta, error) {
 	s, m := inspectLocal(ctx, path)
 	if m.ReadError != nil || m.OID == "" || m.Initial || m.Branch == "(detached)" {
 		return s, m, errors.New("Could not read a checked-out branch. Refresh the Site and try again.")
 	}
-	if s.Changes != 0 || s.Conflicts != 0 {
+	if s.Conflicts != 0 {
+		return s, m, errors.New("The checkout has conflicts. Resolve the rebase and push manually with Claude or Astra before continuing.")
+	}
+	if !allowEdits && s.Changes != 0 {
 		return s, m, errors.New("Commit or stash local work first. No checkout changes were made.")
 	}
 	for _, name := range []string{"rebase-merge", "rebase-apply", "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "sequencer", "index.lock", "BISECT_LOG"} {
@@ -145,7 +159,7 @@ func branchInOtherWorktree(ctx context.Context, path, branch string) bool {
 }
 
 func prepareCheckoutAction(ctx context.Context, path string, req ActionRequest, merged *MergedPullRequest) (*CheckoutPlan, error) {
-	s, m, err := cleanCheckout(ctx, path)
+	s, m, err := inspectActionCheckout(ctx, path, req.Kind == "push")
 	if err != nil {
 		return nil, err
 	}
@@ -168,17 +182,20 @@ func prepareCheckoutAction(ctx context.Context, path string, req ActionRequest, 
 		return prepareBranchSwitch(ctx, p, req)
 	}
 	switch req.Kind {
-	case "update", "push", "replace":
+	case "update", "push", "publish", "rebase-push", "replace":
 		if !strings.HasPrefix(m.Ref, "refs/remotes/") || !strings.HasPrefix(m.Merge, "refs/heads/") || m.Remote == "" || m.Remote == "." {
 			return nil, errors.New("A remote upstream is required to update this branch.")
 		}
-		if req.Kind == "push" && s.PushTarget == "" {
+		if isPushAction(req.Kind) && s.PushTarget == "" {
 			return nil, errors.New("A matching origin upstream is required. Publish this branch manually.")
 		}
 		p.Target, p.remote, p.remoteRef, p.trackingRef = s.Tracking, m.Remote, m.Merge, m.Ref
 	case "merged", "rebase":
 		if m.DefaultBranch == "" || s.IsMainBranch {
 			return nil, errors.New("Could not determine a different default branch.")
+		}
+		if req.Kind == "rebase" && ((req.TargetBranch != "" && req.TargetBranch != m.DefaultBranch) || (req.TargetRemote != "" && req.TargetRemote != m.DefaultRemote)) {
+			return nil, errors.New("The default branch changed. Open the rebase action again.")
 		}
 		p.Target, p.remote, p.remoteRef, p.trackingRef = m.DefaultBranch, m.DefaultRemote, "refs/heads/"+m.DefaultBranch, m.DefaultRef
 		if _, err := git(ctx, path, "check-ref-format", "--branch", p.Target); err != nil {
@@ -207,7 +224,7 @@ func prepareCheckoutAction(ctx context.Context, path string, req ActionRequest, 
 	if p.remoteURL == "" {
 		return nil, errors.New("Could not read the remote URL.")
 	}
-	if p.Kind == "push" {
+	if isPushAction(p.Kind) {
 		if err := validatePushDestination(ctx, p); err != nil {
 			return nil, err
 		}
@@ -228,7 +245,23 @@ func prepareCheckoutAction(ctx context.Context, path string, req ActionRequest, 
 			return nil, err
 		}
 	}
-	if p.Kind != "rebase" && p.Kind != "push" && p.Kind != "replace" && old != "" {
+	if p.Kind == "rebase-push" {
+		if (req.TargetBranch != "" && req.TargetBranch != m.DefaultBranch) || (req.TargetRemote != "" && req.TargetRemote != m.DefaultRemote) {
+			return nil, errors.New("The base branch changed." + manualPublish)
+		}
+		if err := preparePublishBase(ctx, p, m); err != nil {
+			return nil, err
+		}
+		if err := checkRebaseAndPush(ctx, p, nil); err != nil {
+			return nil, err
+		}
+	}
+	if p.Kind == "publish" {
+		if err := prepareRebasedPublish(ctx, p, m); err != nil {
+			return nil, err
+		}
+	}
+	if p.Kind != "rebase" && !isPushAction(p.Kind) && p.Kind != "replace" && old != "" {
 		if _, err := git(ctx, path, "merge-base", "--is-ancestor", old, p.TargetHead); err != nil {
 			return nil, errors.New("The local branch cannot be fast-forwarded. Update it manually; no checkout changes were made.")
 		}
@@ -243,7 +276,7 @@ func prepareCheckoutAction(ctx context.Context, path string, req ActionRequest, 
 			}
 			upstream := gitString(ctx, path, "rev-parse", "--verify", m.Ref+"^{commit}")
 			if _, err := git(ctx, path, "merge-base", "--is-ancestor", upstream, m.OID); err != nil {
-				return nil, errors.New("Update the branch from its own upstream before rebasing.")
+				return nil, errors.New("The branch has incoming or rewritten upstream commits." + manualPublish)
 			}
 		}
 		check := rebasePreview(ctx, path)
@@ -272,7 +305,7 @@ func validateCheckoutPlan(ctx context.Context, p *CheckoutPlan, checkRemote bool
 	if err != nil || p.gitDirInfo == nil || !os.SameFile(info, p.gitDirInfo) || gitString(ctx, p.path, "rev-parse", "--absolute-git-dir") != p.gitDir {
 		return errors.New("The checkout folder was replaced. Review the action again.")
 	}
-	_, m, err := cleanCheckout(ctx, p.path)
+	_, m, err := inspectActionCheckout(ctx, p.path, p.Kind == "push")
 	if err != nil {
 		return err
 	}
@@ -288,10 +321,10 @@ func validateCheckoutPlan(ctx context.Context, p *CheckoutPlan, checkRemote bool
 	if gitString(ctx, p.path, "remote", "get-url", p.remote) != p.remoteURL {
 		return errors.New("The remote configuration changed. Review the action again.")
 	}
-	if (p.Kind == "update" || p.Kind == "push" || p.Kind == "replace") && (m.Ref != p.trackingRef || m.Merge != p.remoteRef || m.Remote != p.remote) {
+	if (p.Kind == "update" || isPushAction(p.Kind) || p.Kind == "replace") && (m.Ref != p.trackingRef || m.Merge != p.remoteRef || m.Remote != p.remote) {
 		return errors.New("The upstream changed. Review the action again.")
 	}
-	if p.Kind != "update" && p.Kind != "push" && p.Kind != "replace" && (m.DefaultBranch != p.Target || m.DefaultRef != p.trackingRef) {
+	if p.Kind != "update" && !isPushAction(p.Kind) && p.Kind != "replace" && (m.DefaultBranch != p.Target || m.DefaultRef != p.trackingRef) {
 		return errors.New("The default branch changed. Review the action again.")
 	}
 	if p.Kind == "replace" {
@@ -305,8 +338,13 @@ func validateCheckoutPlan(ctx context.Context, p *CheckoutPlan, checkRemote bool
 			return errors.New("The local default branch changed or is in use elsewhere. Review the action again.")
 		}
 	}
-	if p.Kind == "push" {
+	if isPushAction(p.Kind) {
 		if err := validatePushDestination(ctx, p); err != nil {
+			return err
+		}
+	}
+	if isPublishAction(p.Kind) {
+		if err := validatePublishBase(ctx, p, m, checkRemote); err != nil {
 			return err
 		}
 	}
@@ -319,13 +357,16 @@ func validateCheckoutPlan(ctx context.Context, p *CheckoutPlan, checkRemote bool
 		}
 		upstream := gitString(ctx, p.path, "rev-parse", "--verify", m.Ref+"^{commit}")
 		if _, err := git(ctx, p.path, "merge-base", "--is-ancestor", upstream, p.Head); err != nil {
-			return errors.New("The branch’s own remote has new or rewritten commits. Update it before rebasing.")
+			return errors.New("The branch’s own remote has new or rewritten commits." + manualPublish)
 		}
 	}
 	if checkRemote {
 		out, err := actionGit(ctx, p.path, "ls-remote", "--exit-code", "--heads", "--", p.remote, p.remoteRef)
 		fields := strings.Fields(string(out))
 		if err != nil || len(fields) != 2 || fields[0] != p.TargetHead || fields[1] != p.remoteRef {
+			if isPublishAction(p.Kind) || p.Kind == "rebase" {
+				return errors.New("The remote changed or could not be verified. The action was stopped." + manualPublish)
+			}
 			return errors.New("The remote changed or could not be verified. Review the action again.")
 		}
 	}
@@ -335,7 +376,7 @@ func validateCheckoutPlan(ctx context.Context, p *CheckoutPlan, checkRemote bool
 func applyCheckoutAction(ctx context.Context, p *CheckoutPlan) (result CheckoutAction) {
 	result = CheckoutAction{Status: "failed", Kind: p.Kind}
 	expectedResultHead := p.TargetHead
-	if p.Kind == "push" {
+	if isPushAction(p.Kind) {
 		expectedResultHead = p.Head
 	}
 	defer func() {
@@ -343,7 +384,7 @@ func applyCheckoutAction(ctx context.Context, p *CheckoutPlan) (result CheckoutA
 		verifyCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		s, meta := inspectLocal(verifyCtx, p.path)
-		if p.Kind == "push" {
+		if isPushAction(p.Kind) && p.Kind != "rebase-push" {
 			// applyPush verifies the remote SHA; concurrent local edits cannot undo it.
 			if meta.ReadError == nil {
 				result.CurrentBranch, result.CurrentHead = s.Branch, meta.OID
@@ -387,7 +428,22 @@ func applyCheckoutAction(ctx context.Context, p *CheckoutPlan) (result CheckoutA
 	if err := validateCheckoutPlan(ctx, p, true); err != nil {
 		return fail(err)
 	}
-	if p.Kind == "push" {
+	if p.Kind == "publish" {
+		if err := checkRebasedPublish(ctx, p); err != nil {
+			var conflict *rebaseActionError
+			if errors.As(err, &conflict) {
+				result.Files = conflict.check.Files
+			}
+			return fail(err)
+		}
+		if err := validateCheckoutPlan(ctx, p, true); err != nil {
+			return fail(err)
+		}
+	}
+	if p.Kind == "rebase-push" {
+		return applyRebaseAndPush(ctx, p, &expectedResultHead)
+	}
+	if isPushAction(p.Kind) {
 		return applyPush(ctx, p)
 	}
 	backup := "refs/devjay/backups/" + p.ID

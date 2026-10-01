@@ -57,6 +57,7 @@ type siteManager struct {
 	viewers                                                  map[string]*gitViewerWindow
 	viewerSequence                                           uint64
 	prOpening                                                bool
+	suggestionsAnchor                                        *cardAnchor
 	suggestions, suggestionsParent                           *application.WebviewWindow
 	suggestionsReady                                         bool
 	suggestedSite                                            string

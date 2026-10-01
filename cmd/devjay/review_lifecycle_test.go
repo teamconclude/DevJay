@@ -1,11 +1,22 @@
 package main
 
 import (
+	"math"
 	"testing"
 	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
+
+func TestViewerOpenRejectsInvalidPlacementBeforeOpening(t *testing.T) {
+	for _, anchor := range []*cardAnchor{{X: math.NaN(), Width: 100, Height: 100}, {Width: -1, Height: 100}, {Width: 100, Height: math.Inf(1)}} {
+		m := &siteManager{}
+		m.openViewer(viewerRequest{SiteID: "site", Kind: "edits", Anchor: anchor}, nil, nil)
+		if m.viewerSequence != 0 || len(m.viewers) != 0 {
+			t.Fatal("invalid placement opened a viewer")
+		}
+	}
+}
 
 func TestQuitWaitsWithoutBlockingAndRejectsNewActions(t *testing.T) {
 	var life actionLifetime

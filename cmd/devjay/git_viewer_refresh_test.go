@@ -143,7 +143,7 @@ func TestViewerRefreshFollowsCommitAcrossHistoryPageBoundaries(t *testing.T) {
 	}
 	add(viewerPageSize + 3)
 	oldTip := tip
-	v := GitView{Path: repo, Kind: "remote"}
+	v := GitView{Path: repo, Kind: "branch"}
 	if err := loadGitView(context.Background(), &v, true); err != nil {
 		t.Fatal(err)
 	}

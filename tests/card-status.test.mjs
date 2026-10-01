@@ -19,7 +19,7 @@ test('local edits, outgoing and incoming commits stay distinct without duplicate
 test('branches without an upstream show counts against an explicit remote comparison', () => {
  const s=cardStatus({...clean,summary:'No upstream branch',changes:1,comparison:{tracking:'origin/main',ahead:3,behind:2},base:{tracking:'origin/main',branch:'main',behind:2}});
  assert.deepEqual(s.local.map(n=>n.value),[3,1]);
- assert.equal(s.local[0].view,'local');
+ assert.equal(s.local[0].view,'branch');
  assert.match(s.local[0].title,/origin\/main/);
  assert.deepEqual(s.remote.map(n=>n.value),[2]);
  assert.equal(s.base,undefined);
@@ -44,7 +44,7 @@ test('review findings replace the generic PR label with separate severity badges
  const s = cardStatus({...clean,github:'PR #2812 · Review required',reviews:[{number:2812,blockers:1,warnings:7,detail:'Latest reported findings'}]});
  assert.equal(s.pr,'');
  assert.equal(s.reviews[0].label,'PR #2812');
- assert.deepEqual(s.reviews[0].values.map(x=>[x.value,x.label,x.tone]),[[1,'blocker','error'],[7,'warnings','warning']]);
+ assert.deepEqual(s.reviews[0].values.map(x=>[x.symbol,x.value,x.label,x.tone]),[['⊗',1,'blocker','error'],['⚠︎',7,'warnings','warning']]);
  assert.match(s.reviews[0].title,/Review required/);
 });
 test('earlier reviews retain counts with an explicit changes-since-review note', () => {
@@ -155,7 +155,8 @@ test('recognized rebases replace raw divergence counts while retaining edits and
  assert.equal(result.remote.length,0);
  assert.equal(result.local.length,1);assert.equal(result.local[0].label,'edits');
  assert.match(result.alert.title,/11 local and 5 remote/);
- assert.match(result.alert.title,/force-with-lease/);
+ assert.match(result.alert.title,/check and push the rebased branch/);
+ assert.equal(result.alert.publishRebased,true);
  assert.equal(cardStatus({...git,remoteNote:'Offline'}).alert.text,'Rebased · remote not verified');
  assert.notEqual(cardStatus({...git,localNote:'Status unavailable · cached'}).alert.text,'Rebased · ready to publish');
  const divergent=cardStatus({...git,rebased:false,summary:'Diverged · 11 ahead / 5 behind'});

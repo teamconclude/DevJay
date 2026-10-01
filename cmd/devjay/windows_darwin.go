@@ -16,8 +16,8 @@ void devjay_restore_layout(void *window, const char *identifier);
 void devjay_save_layout(void *window);
 char *devjay_desktop_position(void *window);
 void devjay_show_settings(void *window, void *parent);
-void devjay_show_suggestions(void *window, void *parent);
-void devjay_show_viewer(void *window, void *parent);
+void devjay_show_suggestions(void *window, void *parent, double x, double y, double width, double height);
+void devjay_show_viewer(void *window, void *parent, double x, double y, double width, double height);
 void devjay_apply_top_preference(void);
 void devjay_grow_card_window(void *window, double height, double viewportWidth, double viewportHeight);
 void devjay_fit_panel(void *window, int mode, int count, int header, double extentWidth, double extentHeight);
@@ -149,14 +149,32 @@ func fitControlPanel(window *application.WebviewWindow, config SiteConfig) {
 	})
 }
 
-func showSuggestionsWindow(window, parent *application.WebviewWindow) {
+func showSuggestionsWindow(window, parent *application.WebviewWindow, anchor *cardAnchor) {
 	window.Show()
-	application.InvokeSync(func() { C.devjay_show_suggestions(window.NativeWindow(), parent.NativeWindow()) })
+	if anchor == nil || !anchor.valid() {
+		anchor = &cardAnchor{}
+	}
+	application.InvokeSync(func() {
+		var nativeParent unsafe.Pointer
+		if parent != nil {
+			nativeParent = parent.NativeWindow()
+		}
+		C.devjay_show_suggestions(window.NativeWindow(), nativeParent, C.double(anchor.X), C.double(anchor.Y), C.double(anchor.Width), C.double(anchor.Height))
+	})
 }
 
-func showViewerWindow(window, parent *application.WebviewWindow) {
+func showViewerWindow(window, parent *application.WebviewWindow, anchor *cardAnchor) {
 	window.Show()
-	application.InvokeSync(func() { C.devjay_show_viewer(window.NativeWindow(), parent.NativeWindow()) })
+	if anchor == nil || !anchor.valid() {
+		anchor = &cardAnchor{}
+	}
+	application.InvokeSync(func() {
+		var nativeParent unsafe.Pointer
+		if parent != nil {
+			nativeParent = parent.NativeWindow()
+		}
+		C.devjay_show_viewer(window.NativeWindow(), nativeParent, C.double(anchor.X), C.double(anchor.Y), C.double(anchor.Width), C.double(anchor.Height))
+	})
 }
 
 func growCardWindow(window *application.WebviewWindow, height, viewportWidth, viewportHeight float64) {

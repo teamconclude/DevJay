@@ -3,6 +3,7 @@
 #import <WebKit/WebKit.h>
 #import <QuartzCore/QuartzCore.h>
 #import "focus_trace_darwin.h"
+#include "layout_geometry.h"
 
 // A tooltip must never become the app's remembered key/main window. In
 // particular, hovering on an empty Space must not recreate the desktop bounce.
@@ -455,19 +456,75 @@ void devjay_show_settings(void *pointer, void *parentPointer) {
         devjay_show_popup(window, parent);
     }];
 }
-void devjay_show_suggestions(void *pointer, void *parentPointer) {
-    ((NSWindow *)pointer).identifier = @"suggested-actions";
-    devjay_show_popup(pointer, parentPointer);
+// App-owned viewers on the currently active desktop are the only obstacles.
+// isVisible includes occluded windows; minimized/hidden and other-Space viewers
+// must not displace a new window. Geometry excludes the other displays.
+static size_t devjay_viewer_obstacles(NSArray *windows, NSWindow *opening, NSRect area, DPRect *frames, size_t capacity) {
+    size_t count = 0;
+    for (NSWindow *other in windows) {
+        if (count == capacity) break;
+        if (other == opening || ![other.identifier isEqual:@"git-viewer"] ||
+            !other.isVisible || other.isMiniaturized || !other.isOnActiveSpace ||
+            !NSIntersectsRect(other.frame,area)) continue;
+        NSRect frame = other.frame;
+        frames[count++] = (DPRect){frame.origin.x,frame.origin.y,frame.size.width,frame.size.height};
+    }
+    return count;
 }
 
-void devjay_show_viewer(void *pointer, void *parentPointer) {
-    NSWindow *window = (NSWindow *)pointer;
-    NSWindow *parent = (NSWindow *)parentPointer;
-    window.identifier = @"git-viewer";
-    NSRect frame = window.frame;
-    NSRect area = (parent.screen ?: NSScreen.mainScreen).visibleFrame;
-    frame.size.width = MIN(frame.size.width, area.size.width - 16);
-    frame.size.height = MIN(frame.size.height, area.size.height - 16);
+static void devjay_show_card_window(NSWindow *window, NSWindow *parent, double x, double y, double width, double height, BOOL avoidViewers) {
+    NSRect anchor = parent.frame;
+    WKWebView *view = parent ? devjay_webview(parent.contentView) : nil;
+    if (view && isfinite(x) && isfinite(y) && isfinite(width) && isfinite(height) && width > 0 && height > 0) {
+        // Browser coordinates are top-left based even when AppKit is not.
+        NSRect rect = NSMakeRect(x, view.isFlipped ? y : view.bounds.size.height-y-height, width, height);
+        rect = NSIntersectionRect(rect, view.bounds);
+        if (!NSIsEmptyRect(rect)) anchor = [parent convertRectToScreen:[view convertRect:rect toView:nil]];
+    }
+    NSScreen *screen = parent.screen ?: NSScreen.mainScreen;
+    CGFloat overlap = 0;
+    for (NSScreen *candidate in NSScreen.screens) {
+        NSRect intersection = NSIntersectionRect(anchor, candidate.frame);
+        CGFloat area = intersection.size.width * intersection.size.height;
+        if (area > overlap) { overlap = area; screen = candidate; }
+    }
+    NSRect area = screen.visibleFrame, frame = window.frame;
+    if (parent) {
+        DPRect placed = dp_card_popup((DPRect){frame.origin.x,frame.origin.y,frame.size.width,frame.size.height},
+                                     (DPRect){anchor.origin.x,anchor.origin.y,anchor.size.width,anchor.size.height},
+                                     (DPRect){area.origin.x,area.origin.y,area.size.width,area.size.height});
+        frame = NSMakeRect(placed.x,placed.y,placed.width,placed.height);
+    } else {
+        frame.origin = NSMakePoint(NSMidX(area)-frame.size.width/2,NSMidY(area)-frame.size.height/2);
+    }
+    if (avoidViewers) {
+        DPRect occupied[64];
+        size_t count = 0;
+        if (parent && !NSIsEmptyRect(anchor)) {
+            occupied[count++] = (DPRect){anchor.origin.x,anchor.origin.y,anchor.size.width,anchor.size.height};
+        }
+        count += devjay_viewer_obstacles(NSApp.windows,window,area,occupied+count,64-count);
+        DPRect placed = dp_avoid_windows((DPRect){frame.origin.x,frame.origin.y,frame.size.width,frame.size.height},
+                                        (DPRect){area.origin.x,area.origin.y,area.size.width,area.size.height},occupied,count);
+        frame = NSMakeRect(placed.x,placed.y,placed.width,placed.height);
+    }
     [window setFrame:frame display:NO];
-    devjay_show_popup(pointer, parentPointer);
+    window.collectionBehavior = NSWindowCollectionBehaviorMoveToActiveSpace | NSWindowCollectionBehaviorFullScreenNone;
+    window.level = [NSUserDefaults.standardUserDefaults boolForKey:@"DevJay.View.OnTop"] ? NSFloatingWindowLevel : NSNormalWindowLevel;
+    if (window.isMiniaturized) [window deminiaturize:nil];
+    [window makeKeyAndOrderFront:nil];
+    if (window.canBecomeMainWindow) [window makeMainWindow];
+    [NSApp activateIgnoringOtherApps:YES];
+}
+
+void devjay_show_suggestions(void *pointer, void *parentPointer, double x, double y, double width, double height) {
+    NSWindow *window = (NSWindow *)pointer;
+    window.identifier = @"suggested-actions";
+    devjay_show_card_window(window,(NSWindow *)parentPointer,x,y,width,height,NO);
+}
+
+void devjay_show_viewer(void *pointer, void *parentPointer, double x, double y, double width, double height) {
+    NSWindow *window = (NSWindow *)pointer;
+    window.identifier = @"git-viewer";
+    devjay_show_card_window(window,(NSWindow *)parentPointer,x,y,width,height,YES);
 }

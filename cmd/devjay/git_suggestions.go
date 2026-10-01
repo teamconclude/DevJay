@@ -55,7 +55,7 @@ func refreshDefaultBranch(ctx context.Context, m gitMeta, c *remoteCache) {
 
 func hasSuggestedActions(s GitStatus) bool {
 	push := s.Ahead > 0 && s.Behind == 0 && s.PushTarget != "" && !s.Rewritten
-	return s.CanReplaceRemote || canReturnAfterMerge(s) || (!s.Rebased && (push || s.Behind > 0 || (s.Base != nil && s.Base.Behind > 0)))
+	return s.CanReplaceRemote || canReturnAfterMerge(s) || (s.Rebased && s.PushTarget != "") || (!s.Rebased && (push || s.Behind > 0 || (s.Base != nil && s.Base.Behind > 0)))
 }
 
 // The GitHub lookup already matches repository and exact branch name. Only the

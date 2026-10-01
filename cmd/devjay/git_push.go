@@ -41,9 +41,31 @@ func preparePush(ctx context.Context, p *CheckoutPlan) error {
 }
 
 func applyPush(ctx context.Context, p *CheckoutPlan) CheckoutAction {
+	return applyPushWithRecovery(ctx, p, "")
+}
+
+func applyPushWithRecovery(ctx context.Context, p *CheckoutPlan, recovery string) CheckoutAction {
+	if p.Kind == "publish" && recovery == "" {
+		recovery = "refs/devjay/backups/" + p.ID
+		if _, err := actionGit(ctx, p.path, "update-ref", "--no-deref", "--create-reflog", "-m", "DevJay: before rebased push", recovery, p.TargetHead, ""); err != nil {
+			return CheckoutAction{Status: "failed", Message: "Could not preserve the old remote commits. Nothing was pushed."}
+		}
+	}
+	if recovery != "" {
+		head, err := refHead(ctx, p.path, recovery)
+		if err != nil || head != p.TargetHead {
+			return CheckoutAction{Status: "failed", Recovery: recovery, Message: "The remote recovery reference changed. Nothing was pushed."}
+		}
+	}
 	// Use the confirmed SHA and destination, never push.default, configured
 	// refspecs, matching branches, tags, or a branch that could move during push.
-	_, pushErr := actionGit(ctx, p.path, "push", "--porcelain", "--no-force", "--no-mirror", "--no-follow-tags", "--recurse-submodules=no", "--", p.remoteURL, p.Head+":"+p.remoteRef)
+	guard := "--no-force"
+	if p.Kind == "publish" {
+		// An explicit expected SHA remains safe even if background fetching updates
+		// origin/branch after confirmation. Never use an implicit tracking lease.
+		guard = "--force-with-lease=" + p.remoteRef + ":" + p.TargetHead
+	}
+	_, pushErr := actionGit(ctx, p.path, "push", "--porcelain", guard, "--no-mirror", "--no-follow-tags", "--recurse-submodules=no", "--", p.remoteURL, p.Head+":"+p.remoteRef)
 	// A timeout or lost connection can occur after the server accepted the push.
 	// Always inspect the remote independently and never retry automatically.
 	verifyCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -53,13 +75,16 @@ func applyPush(ctx context.Context, p *CheckoutPlan) CheckoutAction {
 	if err == nil && len(fields) == 2 && fields[0] == p.Head && fields[1] == p.remoteRef {
 		// Do not overwrite a newer observation from another Git client.
 		_, _ = publishTrackingRef(verifyCtx, p.path, p.trackingRef, p.Head, p.TargetHead, "DevJay: confirmed push")
-		return CheckoutAction{Status: "complete", Message: fmt.Sprintf("Pushed %d %s to %s. Local files and branch are unchanged.", p.Commits, commitWord(p.Commits), p.Target)}
+		return CheckoutAction{Status: "complete", Recovery: recovery, Message: fmt.Sprintf("Pushed %d %s to %s. Local files and branch are unchanged.", p.Commits, commitWord(p.Commits), p.Target)}
 	}
 	message := "Could not confirm the push result. Check origin before trying again; no automatic retry was attempted."
 	if pushErr != nil && err == nil && len(fields) == 2 {
 		message = "Push was rejected or stopped. Origin does not point to the confirmed commit. Check remote changes, branch protection, and authentication before trying again. No force-push was attempted."
 	}
-	return CheckoutAction{Status: "failed", Message: message}
+	if p.Kind == "publish" {
+		message = "The rebased push was rejected or its result could not be verified. Check the remote before doing anything else; DevJay will not retry." + manualPublish
+	}
+	return CheckoutAction{Status: "failed", Recovery: recovery, Message: message}
 }
 
 func commitWord(n int) string {

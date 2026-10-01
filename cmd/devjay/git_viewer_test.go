@@ -341,3 +341,68 @@ func TestViewerWithoutUpstreamPrefersSameNamedRemoteBranch(t *testing.T) {
 		t.Fatalf("comparison mode survived setting an upstream: %+v, %v", v, err)
 	}
 }
+
+func TestBranchHistoryCombinesBothTipsAndPreservesSelection(t *testing.T) {
+	repo, seed := rebaseFixture(t, false)
+	shared := fixtureGit(t, repo, "rev-parse", "HEAD")
+	fixtureGit(t, repo, "commit", "--allow-empty", "-m", "not pushed")
+	outgoing := fixtureGit(t, repo, "rev-parse", "HEAD")
+	fixtureGit(t, seed, "fetch", "origin", "feature")
+	fixtureGit(t, seed, "switch", "-c", "feature", "origin/feature")
+	fixtureGit(t, seed, "commit", "--allow-empty", "-m", "incoming")
+	fixtureGit(t, seed, "push", "origin", "feature")
+	fixtureGit(t, repo, "fetch", "origin")
+	incoming := fixtureGit(t, repo, "rev-parse", "origin/feature")
+	v := GitView{Path: repo, Kind: "branch"}
+	if err := loadGitView(context.Background(), &v, true); err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]string{}
+	for _, c := range v.Commits {
+		if _, exists := seen[c.ID]; exists {
+			t.Fatal("duplicate commit")
+		}
+		seen[c.ID] = c.Presence
+	}
+	if seen[shared] != "shared" || seen[outgoing] != "outgoing" || seen[incoming] != "incoming" || v.IncomingCount != 1 {
+		t.Fatalf("incorrect branch comparison: %+v", v)
+	}
+	if v.Counts.Branch == nil || *v.Counts.Branch != len(v.Commits) {
+		t.Fatal("incorrect union count")
+	}
+	if err := selectViewCommit(context.Background(), &v, outgoing); err != nil {
+		t.Fatal(err)
+	}
+	// A new commit in one side retains selection and labels from the new snapshot.
+	fixtureGit(t, repo, "commit", "--allow-empty", "-m", "another local commit")
+	if err := refreshGitView(context.Background(), &v); err != nil {
+		t.Fatal(err)
+	}
+	if v.Commit != outgoing || *v.Counts.Local != 2 {
+		t.Fatalf("selection lost: %+v", v)
+	}
+	if fixtureGit(t, repo, "rev-parse", "origin/feature") != incoming {
+		t.Fatal("viewer changed remote ref")
+	}
+}
+
+func TestBranchHistoryWithoutRemoteAndBeforeFirstCommit(t *testing.T) {
+	repo := t.TempDir()
+	fixtureGit(t, repo, "init", "-b", "main")
+	fixtureGit(t, repo, "config", "user.name", "Test")
+	fixtureGit(t, repo, "config", "user.email", "test@example.com")
+	v := GitView{Path: repo, Kind: "branch"}
+	if err := loadGitView(context.Background(), &v, true); err != nil {
+		t.Fatal(err)
+	}
+	if len(v.Commits) != 0 || v.Counts.Branch == nil || *v.Counts.Branch != 0 {
+		t.Fatalf("unborn: %+v", v)
+	}
+	fixtureGit(t, repo, "commit", "--allow-empty", "-m", "initial")
+	if err := loadGitView(context.Background(), &v, true); err != nil {
+		t.Fatal(err)
+	}
+	if len(v.Commits) != 1 || v.Commits[0].Presence != "unlinked" || *v.Counts.Branch != 1 {
+		t.Fatalf("unlinked: %+v", v)
+	}
+}

@@ -181,3 +181,21 @@ func TestMainBranchDetection(t *testing.T) {
 	fixtureGit(t, checkout, "branch", "--set-upstream-to=upstream/trunk")
 	check(true)
 }
+
+func TestNormalRemoteRefreshIntervalDoesNotClaimFailure(t *testing.T) {
+	now := time.Now()
+	for _, age := range []time.Duration{time.Minute, 3 * time.Minute, 6 * time.Minute} {
+		s := GitStatus{Base: &BranchBase{Branch: "main", Tracking: "origin/main", Behind: 2}}
+		m := gitMeta{Ref: "refs/remotes/origin/feature", Comparable: true}
+		cache := remoteCache{Checked: now.Add(-age), BaseChecked: now.Add(-age)}
+		got := describeGit(s, m, cache)
+		if got.RemoteNote != "" || got.Base.Note != "" || got.RemoteChecked == "" {
+			t.Fatalf("scheduled cache age described as failure: %+v", got)
+		}
+		cache.Error = "Remote check failed · cached comparison"
+		got = describeGit(s, m, cache)
+		if got.RemoteNote != cache.Error || got.Summary == "Up to date" {
+			t.Fatalf("failure hidden: %+v", got)
+		}
+	}
+}

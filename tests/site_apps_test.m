@@ -1,7 +1,50 @@
 #import <AppKit/AppKit.h>
+#import <objc/runtime.h>
 #include <assert.h>
 #include <stdio.h>
 #include "../cmd/devjay/site_apps_darwin.m"
+#include "../cmd/devjay/site_app_activation_darwin.m"
+
+// Fake only the running-app lookup so activation checks cannot focus real apps.
+@interface ActivationTestApp : NSObject
+@property(nonatomic, getter=isTerminated) BOOL terminated;
+@property(nonatomic) BOOL succeeds;
+@property(nonatomic) NSUInteger activations;
+- (NSString *)bundleIdentifier;
+- (BOOL)activateWithOptions:(NSApplicationActivationOptions)options;
+@end
+@implementation ActivationTestApp
+- (NSString *)bundleIdentifier { return @"com.jetbrains.goland"; }
+- (BOOL)activateWithOptions:(NSApplicationActivationOptions)options {
+    assert(!(options & NSApplicationActivateAllWindows));
+    self.activations++;
+    return self.succeeds;
+}
+@end
+static ActivationTestApp *activationApp;
+static id findActivationApp(id cls, SEL selector, pid_t pid) {
+    (void)cls; (void)selector;
+    return pid == 42 ? activationApp : nil;
+}
+static void checkAppActivation(void) {
+    activationApp = [[[ActivationTestApp alloc] init] autorelease];
+    activationApp.succeeds = YES;
+    Method method = class_getClassMethod(NSRunningApplication.class, @selector(runningApplicationWithProcessIdentifier:));
+    IMP original = method_setImplementation(method, (IMP)findActivationApp);
+    assert(!devjay_activate_development_app(0, "com.jetbrains.goland"));
+    assert(!devjay_activate_development_app(99, "com.jetbrains.goland"));
+    assert(!devjay_activate_development_app(42, "com.apple.Terminal"));
+    assert(!devjay_activate_development_app(42, "\xff"));
+    activationApp.terminated = YES;
+    assert(!devjay_activate_development_app(42, "com.jetbrains.goland"));
+    assert(activationApp.activations == 0);
+    activationApp.terminated = NO;
+    assert(devjay_activate_development_app(42, "com.jetbrains.goland"));
+    activationApp.succeeds = NO;
+    assert(!devjay_activate_development_app(42, "com.jetbrains.goland"));
+    assert(activationApp.activations == 2);
+    method_setImplementation(method, original);
+}
 
 static NSDictionary *bounds(CGFloat x, CGFloat y, CGFloat width, CGFloat height) {
     return [(NSDictionary *)CGRectCreateDictionaryRepresentation(CGRectMake(x, y, width, height)) autorelease];
@@ -15,6 +58,7 @@ static NSMutableDictionary *window(unsigned int number, int pid, CGFloat x, CGFl
 
 int main(void) {
     @autoreleasepool {
+        checkAppActivation();
         assert(!site_app_icon_png(nil));
         assert(!site_app_icon([NSURL URLWithString:@"https://example.com/icon.png"]));
         NSBitmapImageRep *source = [[[NSBitmapImageRep alloc] initWithBitmapDataPlanes:NULL
