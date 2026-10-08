@@ -147,7 +147,8 @@ export function mountGitViewer(root, request, suggestions, openBranches) {
   const switchBranch=button('Switch...',async()=>{
     if(switchBranch.disabled||state?.loading||!canSwitch())return;
     openingBranches=true;updateBranchButton();
-    try { await openBranches(state.siteID); }
+    const rect=switchBranch.getBoundingClientRect();
+    try { await openBranches(state.siteID,{x:rect.left,y:rect.top,width:rect.width,height:rect.height}); }
     finally { openingBranches=false;updateBranchButton(); }
   },'git-switch-branch');
   switchBranch.setAttribute('aria-haspopup','dialog');switchBranch.setAttribute('aria-label','Switch branch');switchBranch.title='Switch branch';switchBranch.hidden=true;

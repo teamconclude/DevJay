@@ -114,6 +114,9 @@ func (m *siteManager) openViewer(req viewerRequest, parent *application.WebviewW
 	if r := m.existingViewer(req); r != nil {
 		m.viewerSequence++
 		r.used = m.viewerSequence
+		// Explicit opens follow their current source, including a viewer first
+		// opened from a Site and later requested from its control-panel card.
+		r.parent, r.anchor = parent, req.Anchor
 		for id, candidate := range m.viewers {
 			if candidate == r {
 				if r.state.Kind != req.Kind {
@@ -126,7 +129,7 @@ func (m *siteManager) openViewer(req viewerRequest, parent *application.WebviewW
 			}
 		}
 		if r.ready {
-			focusSite(r.window)
+			showViewerWindow(r.window, r.parent, r.anchor)
 		}
 		return
 	}

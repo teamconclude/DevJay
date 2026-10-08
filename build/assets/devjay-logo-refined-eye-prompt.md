@@ -2,7 +2,7 @@
 
 Created with the built-in imagegen tool. Edit target: `devjay-logo-refined.png`. Eye/face reference: `devjay-icon.png`.
 
-Selected white-background artwork, also stored as `devjay-icon.png` and packaged in `../DevJay.icns`.
+Selected white-background artwork, preserved as the source reference. The transparent application version is now stored as `devjay-icon.png` and packaged in `../DevJay.icns`; see `devjay-icon-prompt.md`.
 
 ## Prompt
 

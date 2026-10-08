@@ -66,31 +66,20 @@ int main(void) {
     check(dp_grow_height((DPRect){-310,-498,300,174}, negative, 260), (DPRect){-310,-498,300,260});
     check(dp_grow_height((DPRect){100,10,300,174}, old, NAN), (DPRect){100,10,300,174});
     DPRect popup = {0,0,400,300}, area = {0,0,1200,900};
+    check(dp_parent_popup(popup,(DPRect){100,200,1000,600},(DPRect){0},area),(DPRect){400,350,400,300});
+    check(dp_parent_popup(popup,(DPRect){100,200,1000,600},(DPRect){250,740,80,30},area),(DPRect){340,350,400,300});
+    check(dp_parent_popup(popup,(DPRect){100,200,1000,600},(DPRect){1000,740,80,30},area),(DPRect){792,350,400,300});
+    check(dp_parent_popup(popup,(DPRect){-1500,-300,1000,600},(DPRect){-1350,240,80,30},(DPRect){-1600,-500,1200,900}),(DPRect){-1260,-150,400,300});
+    check(dp_parent_popup(popup,(DPRect){100,100,100,50},(DPRect){0},(DPRect){0,0,300,220}),(DPRect){8,8,284,204});
     check(dp_card_popup(popup,(DPRect){500,10,200,140},area),(DPRect){400,160,400,300});
     check(dp_card_popup(popup,(DPRect){500,750,200,140},area),(DPRect){400,440,400,300});
-    check(dp_card_popup(popup,(DPRect){10,380,200,140},area),(DPRect){220,300,400,300});
-    check(dp_card_popup(popup,(DPRect){990,380,200,140},area),(DPRect){580,300,400,300});
+    check(dp_card_popup(popup,(DPRect){10,380,200,140},area),(DPRect){8,530,400,300});
+    check(dp_card_popup(popup,(DPRect){990,380,200,140},area),(DPRect){792,530,400,300});
     check(dp_card_popup(popup,(DPRect){500,10,200,140},(DPRect){0,80,1200,800}),(DPRect){400,160,400,300});
-    check(dp_card_popup(popup,(DPRect){-1190,-50,200,140},(DPRect){-1200,-430,1200,900}),(DPRect){-980,-130,400,300});
+    check(dp_card_popup(popup,(DPRect){-1190,-50,200,140},(DPRect){-1200,-430,1200,900}),(DPRect){-1192,100,400,300});
     DPRect small = dp_card_popup(popup,(DPRect){100,100,100,50},(DPRect){0,0,300,220});
     assert(small.width == 284 && small.height == 204 && small.x == 8 && small.y == 8);
-    DPRect preferred = {400,160,400,300}, occupied[] = {{400,160,400,300},{400,470,400,300}};
-    check(dp_avoid_windows(preferred,area,NULL,0),preferred);
-    check(dp_avoid_windows(preferred,area,(DPRect[]){{8,8,200,140}},1),preferred);
-    DPRect placed = dp_avoid_windows(preferred,area,occupied,1);
-    check(placed,(DPRect){400,470,400,300});
-    placed = dp_avoid_windows(preferred,(DPRect){0,0,1600,1000},occupied,2);
-    assert(dp_overlap(placed,occupied[0]) == 0 && dp_overlap(placed,occupied[1]) == 0);
-    assert(placed.x >= 8 && placed.x+placed.width <= 1592 && placed.y >= 8 && placed.y+placed.height <= 992);
-    // A crowded desktop still exposes a distinct title bar; no resizing to
-    // tiny windows and no dependence on positive display coordinates.
-    DPRect large = {100,100,900,700};
-    placed = dp_avoid_windows(large,area,&large,1);
-    assert(fabs(placed.x-large.x)>=24 || fabs(placed.y-large.y)>=24);
-    assert(placed.width==large.width && placed.height==large.height);
-    DPRect shifted = {preferred.x-1600,preferred.y-400,preferred.width,preferred.height};
-    placed = dp_avoid_windows(shifted,(DPRect){-1600,-400,1200,900},&shifted,1);
-    check(placed,(DPRect){-1200,70,400,300});
-    check(dp_avoid_windows((DPRect){8,8,284,204},(DPRect){0,0,300,220},(DPRect[]){{8,8,284,204}},1),(DPRect){8,8,284,204});
-    puts("Window geometry: 62 checks passed");
+    // Large viewers keep the same horizontal anchor when neither side fits.
+    check(dp_card_popup((DPRect){0,0,1100,740},(DPRect){500,300,200,140},area),(DPRect){50,152,1100,740});
+    puts("Window geometry checks passed");
 }

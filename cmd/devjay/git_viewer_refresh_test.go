@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
 func TestViewerRefreshPreservesFileGroupAndReadsSameCountChanges(t *testing.T) {
@@ -292,5 +294,26 @@ func TestViewerReusePrefersSameModeThenRecentAndHonorsNewWindow(t *testing.T) {
 	}
 	if m.existingViewer(viewerRequest{SiteID: "site", Kind: "edits", NewWindow: true}) != nil {
 		t.Fatal("explicit new window request was reused")
+	}
+}
+
+func TestViewerReopenUsesLatestParentAndCardAnchor(t *testing.T) {
+	site := &application.WebviewWindow{}
+	panel := &application.WebviewWindow{}
+	r := &gitViewerWindow{parent: site, state: &GitView{SiteID: "site", Kind: "edits"}}
+	m := &siteManager{viewers: map[string]*gitViewerWindow{"viewer": r}}
+	anchor := &cardAnchor{X: 240, Y: 10, Width: 216, Height: 152}
+	// A not-yet-ready viewer must also use the latest source when first shown.
+	m.openViewer(viewerRequest{SiteID: "site", Kind: "edits", Anchor: anchor}, panel, nil)
+	if r.parent != panel || r.anchor != anchor || len(m.viewers) != 1 {
+		t.Fatal("reused viewer retained its old Site placement")
+	}
+	m.openViewer(viewerRequest{SiteID: "site", Kind: "edits"}, site, nil)
+	if r.parent != site || r.anchor != nil {
+		t.Fatal("reused viewer retained its old card placement")
+	}
+	m.openViewer(viewerRequest{SiteID: "site", Kind: "edits", Anchor: &cardAnchor{Width: -1}}, panel, nil)
+	if r.parent != site || r.anchor != nil {
+		t.Fatal("invalid card bounds replaced the viewer source")
 	}
 }

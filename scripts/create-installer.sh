@@ -52,7 +52,9 @@ fi
 chmod 755 "$app/Contents/MacOS/DevJay"
 codesign --force --sign - "$app"
 codesign --verify --deep --strict "$app"
-lipo "$app/Contents/MacOS/DevJay" -verify_arch "${macho_architectures[@]}"
+for macho_arch in "${macho_architectures[@]}"; do
+    lipo -verify_arch "$macho_arch" "$app/Contents/MacOS/DevJay"
+done
 ln -s /Applications "$work/image/Applications"
 cp LICENSE "$work/image/LICENSE.txt"
 cat > "$work/image/Installation.txt" <<INSTALL
@@ -84,7 +86,9 @@ hdiutil verify "$work/$name"
 hdiutil attach "$work/$name" -readonly -nobrowse -mountpoint "$work/mounted" -quiet
 mounted=true
 codesign --verify --deep --strict "$work/mounted/DevJay.app"
-lipo "$work/mounted/DevJay.app/Contents/MacOS/DevJay" -verify_arch "${macho_architectures[@]}"
+for macho_arch in "${macho_architectures[@]}"; do
+    lipo -verify_arch "$macho_arch" "$work/mounted/DevJay.app/Contents/MacOS/DevJay"
+done
 [[ "$(readlink "$work/mounted/Applications")" == /Applications ]]
 cmp "$app/Contents/MacOS/DevJay" "$work/mounted/DevJay.app/Contents/MacOS/DevJay"
 hdiutil detach "$work/mounted" -quiet

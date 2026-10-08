@@ -108,17 +108,19 @@ test('background updates preserve expanded commit messages until another commit 
 
 test('Changes window opens branch selection for its Site and restores the button after a failed request',async()=>{
   let finish;const calls=[];
-  const view=viewer(siteID=>{calls.push(siteID);return new Promise((resolve,reject)=>{finish=reject;});});
+  const view=viewer((siteID,anchor)=>{calls.push([siteID,JSON.parse(JSON.stringify(anchor))]);return new Promise((resolve,reject)=>{finish=reject;});});
   view.render(state({head:'head'}));
   const button=view.root.querySelector('.git-switch-branch');
+  button.getBoundingClientRect=()=>({left:235,top:28,width:72,height:26});
+  const expected=[['one',{x:235,y:28,width:72,height:26}]];
   assert.equal(button.hidden,false);assert.equal(button.attrs['aria-haspopup'],'dialog');
   const opening=button.onclick();assert.equal(button.disabled,true);
   view.render(state({head:'head',version:2}));assert.equal(button.disabled,true);
-  await button.onclick();assert.deepEqual(calls,['one']);
+  await button.onclick();assert.deepEqual(calls,expected);
   finish(new Error('Bridge unavailable'));await assert.rejects(opening,/Bridge unavailable/);
   assert.equal(button.disabled,false);
   view.render(state({head:'head',loading:true}));
-  await button.onclick();assert.deepEqual(calls,['one']); // Guard loading without flashing the toolbar.
+  await button.onclick();assert.deepEqual(calls,expected); // Guard loading without flashing the toolbar.
   for(const change of [{head:''},{head:'head',branch:'Detached HEAD'},{head:'head',branch:'(detached)'},{head:'head',branch:''}]){
    view.render(state(change));assert.equal(button.hidden,true);
   }

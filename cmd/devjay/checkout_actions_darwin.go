@@ -56,13 +56,14 @@ func (m *siteManager) prepareAction(req ActionRequest, r *siteRuntime, parent *a
 		m.actionReply(req.RequestID, "Unknown action.")
 		return
 	}
-	m.suggestedSite = req.SiteID
-	m.suggestionsParent = parent
-	if req.Anchor.valid() {
+	// Re-preparing within a dialog keeps its original parent/control anchor.
+	if req.Anchor != nil && req.Anchor.valid() {
 		m.suggestionsAnchor = req.Anchor
-	} else {
+	} else if m.suggestedSite != req.SiteID || m.suggestionsParent != parent || m.action == nil || m.action.Kind != req.Kind {
 		m.suggestionsAnchor = nil
 	}
+	m.suggestedSite = req.SiteID
+	m.suggestionsParent = parent
 	m.actionReply(req.RequestID, "")
 	if req.Kind != "switch" {
 		m.suggestions.SetMinSize(400, 340)

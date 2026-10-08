@@ -306,7 +306,7 @@ if (viewer) {
   const updateSuggestions = mountViewerSuggestions(suggestions, request => emit('action-prepare', request));
   const updateOverview = () => updateSuggestions(currentSnapshot.sites.find(site => site.id === currentView?.siteID), currentSnapshot.action);
   renderViewerSnapshot = state => { currentSnapshot = state; updateOverview(); };
-  const renderViewer = mountGitViewer(root, data => emit('viewer-request', data), suggestions, siteID => emit('branches-open', {siteID}));
+  const renderViewer = mountGitViewer(root, data => emit('viewer-request', data), suggestions, (siteID, anchor) => emit('branches-open', {siteID, anchor}));
   Events.On(`devjay:viewer-state:${params.get('viewer')}`, event => {
     currentView = event.data; renderViewer(currentView); updateOverview(); reportUIReady();
   });

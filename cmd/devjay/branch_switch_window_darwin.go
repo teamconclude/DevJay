@@ -12,8 +12,9 @@ func (m *siteManager) registerBranchPicker() {
 	m.app.Event.On("devjay:branches-open", func(e *application.CustomEvent) {
 		sender := e.Sender
 		var req struct {
-			SiteID    string `json:"siteID"`
-			RequestID string `json:"requestID"`
+			Anchor    *cardAnchor `json:"anchor,omitempty"`
+			SiteID    string      `json:"siteID"`
+			RequestID string      `json:"requestID"`
 		}
 		data, err := json.Marshal(e.Data)
 		if err != nil || json.Unmarshal(data, &req) != nil {
@@ -34,7 +35,12 @@ func (m *siteManager) registerBranchPicker() {
 			m.actionReply(req.RequestID, "")
 			m.cancelCheckoutAction()
 			m.suggestedSite, m.suggestionsParent = req.SiteID, parent
-			m.suggestionsAnchor = nil
+			if sender != "suggested-actions" {
+				m.suggestionsAnchor = nil
+				if req.Anchor.valid() {
+					m.suggestionsAnchor = req.Anchor
+				}
+			}
 			m.suggestions.SetTitle("Switch branch")
 			m.suggestions.SetMinSize(560, 700)
 			m.suggestions.SetSize(620, 740)
@@ -43,7 +49,7 @@ func (m *siteManager) registerBranchPicker() {
 			m.actionCancel = cancel
 			generation := m.actionGeneration
 			if m.suggestionsReady {
-				showSuggestionsWindow(m.suggestions, parent, nil)
+				showSuggestionsWindow(m.suggestions, parent, m.suggestionsAnchor)
 			}
 			m.broadcast()
 			go func() {

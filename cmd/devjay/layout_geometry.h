@@ -25,82 +25,24 @@ static inline DPRect dp_clamp(DPRect frame, DPRect visible) {
     return frame;
 }
 
-// Open inward from the nearest screen edge, centered on the card. Try the
-// other sides if necessary; clamp only when no side can fit the whole popup.
+// Overlay the owning window. A control anchor moves only the horizontal
+// position, keeping the dialog vertically centered over its parent.
+static inline DPRect dp_parent_popup(DPRect popup, DPRect parent, DPRect control, DPRect area) {
+    popup = dp_clamp(popup, area);
+    popup.x = control.width > 0 ? control.x + control.width + 10 : parent.x + (parent.width-popup.width)/2;
+    popup.y = parent.y + (parent.height-popup.height)/2;
+    return dp_clamp(popup, area);
+}
+
+// Keep card-launched windows horizontally aligned with the clicked card.
+// Prefer above; use below when above cannot fit, then clamp to the display.
 static inline DPRect dp_card_popup(DPRect popup, DPRect card, DPRect area) {
     popup = dp_clamp(popup, area);
-    double cx = card.x + card.width / 2, cy = card.y + card.height / 2;
-    double w = fmax(1, area.width), h = fmax(1, area.height), gap = 10;
-    double distance[] = {(card.y-area.y)/h, (area.y+area.height-card.y-card.height)/h,
-                         (card.x-area.x)/w, (area.x+area.width-card.x-card.width)/w};
-    DPRect choices[] = {{cx-popup.width/2,card.y+card.height+gap,popup.width,popup.height},
-                        {cx-popup.width/2,card.y-gap-popup.height,popup.width,popup.height},
-                        {card.x+card.width+gap,cy-popup.height/2,popup.width,popup.height},
-                        {card.x-gap-popup.width,cy-popup.height/2,popup.width,popup.height}};
-    DPRect fallback = popup;
-    for (int attempt = 0; attempt < 4; attempt++) {
-        int side = 0;
-        for (int i = 1; i < 4; i++) if (distance[i] < distance[side]) side = i;
-        DPRect candidate = dp_clamp(choices[side], area);
-        if (attempt == 0) fallback = candidate;
-        // Allow sliding along the edge to stay on screen, but never slide back
-        // over the card just because the preferred side has insufficient room.
-        if ((side == 0 && candidate.y >= card.y+card.height+gap) ||
-            (side == 1 && candidate.y+candidate.height <= card.y-gap) ||
-            (side == 2 && candidate.x >= card.x+card.width+gap) ||
-            (side == 3 && candidate.x+candidate.width <= card.x-gap)) return candidate;
-        distance[side] = INFINITY;
-    }
-    return fallback;
-}
-
-static inline double dp_overlap(DPRect a, DPRect b) {
-    return fmax(0, fmin(a.x+a.width,b.x+b.width)-fmax(a.x,b.x)) *
-           fmax(0, fmin(a.y+a.height,b.y+b.height)-fmax(a.y,b.y));
-}
-
-// Keep the card placement when available. Otherwise try nearby window edges
-// and screen edges. On crowded screens prefer distinct title-bar positions,
-// then the least overlap, so another window does not disappear under this one.
-static inline DPRect dp_avoid_windows(DPRect preferred, DPRect area, const DPRect *occupied, size_t count) {
-    preferred = dp_clamp(preferred,area);
-    if (!occupied || !count) return preferred;
-    count = count < 64 ? count : 64;
-    double overlap = 0;
-    for (size_t i=0;i<count;i++) overlap += dp_overlap(preferred,occupied[i]);
-    if (overlap == 0) return preferred;
-    double xs[3+4*64] = {preferred.x,area.x+8,area.x+area.width-preferred.width-8};
-    double ys[3+4*64] = {preferred.y,area.y+8,area.y+area.height-preferred.height-8};
-    size_t n = 3;
-    for (size_t i=0;i<count;i++) {
-        DPRect o = occupied[i];
-        xs[n]=o.x-preferred.width-10; ys[n++]=o.y-preferred.height-10;
-        xs[n]=o.x+o.width+10; ys[n++]=o.y+o.height+10;
-        xs[n]=o.x+32; ys[n++]=o.y+o.height-preferred.height-32;
-        xs[n]=o.x-32; ys[n++]=o.y+o.height-preferred.height+32;
-    }
-    DPRect best = preferred;
-    double bestOverlap = INFINITY, bestDistance = INFINITY;
-    size_t bestAligned = (size_t)-1;
-    for (size_t x=0;x<n;x++) for (size_t y=0;y<n;y++) {
-        DPRect candidate = dp_clamp((DPRect){xs[x],ys[y],preferred.width,preferred.height},area);
-        double covered=0, dx=candidate.x-preferred.x, dy=candidate.y-preferred.y;
-        size_t aligned=0;
-        for (size_t i=0;i<count;i++) {
-            covered += dp_overlap(candidate,occupied[i]);
-            if (fabs(candidate.x-occupied[i].x)<24 &&
-                fabs(candidate.y+candidate.height-occupied[i].y-occupied[i].height)<24) aligned++;
-        }
-        double distance = dx*dx+dy*dy;
-        // A free spot always wins, even if title bars happen to align across a gap.
-        if (covered==0) aligned=0;
-        if ((covered==0 && bestOverlap>0) ||
-            ((covered==0)==(bestOverlap==0) && (aligned<bestAligned ||
-             (aligned==bestAligned && (covered<bestOverlap || (covered==bestOverlap && distance<bestDistance)))))) {
-            best=candidate; bestAligned=aligned; bestOverlap=covered; bestDistance=distance;
-        }
-    }
-    return best;
+    popup.x = card.x + (card.width-popup.width)/2;
+    popup.y = card.y + card.height + 10;
+    double below = card.y - popup.height - 10;
+    if (popup.y + popup.height > area.y + area.height - 8 && below >= area.y + 8) popup.y = below;
+    return dp_clamp(popup, area);
 }
 
 // AppKit coordinates grow upward. Prefer the left/top offsets unless a window

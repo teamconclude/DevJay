@@ -102,6 +102,7 @@ static void test_confirmation_card_anchor(void) {
     if (area.size.width < 1000 || area.size.height < 550) return;
     NSWindow *strip = [[[NSWindow alloc] initWithContentRect:NSMakeRect(area.origin.x+30,area.origin.y+10,900,174)
         styleMask:NSWindowStyleMaskBorderless backing:NSBackingStoreBuffered defer:NO] autorelease];
+    strip.identifier = @"control-panel";
     WKWebView *view = [[[WKWebView alloc] initWithFrame:NSMakeRect(0,0,900,174)] autorelease];
     strip.contentView = view;
     DevJaySiteTestWindow *popup = [[[DevJaySiteTestWindow alloc] initWithContentRect:NSMakeRect(0,0,460,330)
@@ -121,40 +122,88 @@ static void test_confirmation_card_anchor(void) {
     method_setImplementation(activation, original);
 }
 
+static void test_confirmation_site_center(void) {
+    NSRect area = NSScreen.mainScreen.visibleFrame;
+    if (area.size.width < 500 || area.size.height < 500) return;
+    NSWindow *site = [[[NSWindow alloc] initWithContentRect:NSMakeRect(NSMidX(area)-145,NSMidY(area)-87,290,174)
+        styleMask:NSWindowStyleMaskBorderless backing:NSBackingStoreBuffered defer:NO] autorelease];
+    site.identifier = @"site-confirmation-test";
+    site.contentView = [[[WKWebView alloc] initWithFrame:NSMakeRect(0,0,290,174)] autorelease];
+    DevJaySiteTestWindow *popup = [[[DevJaySiteTestWindow alloc] initWithContentRect:NSMakeRect(0,0,460,330)
+        styleMask:NSWindowStyleMaskBorderless backing:NSBackingStoreBuffered defer:NO] autorelease];
+    Method activation = class_getInstanceMethod(NSApplication.class, @selector(activateIgnoringOtherApps:));
+    IMP original = method_setImplementation(activation, (IMP)recordActivation);
+    // Button requests omit bounds; context menus supply them. Both must center
+    // over the Site window, including when the bounds are off-center within it.
+    for (NSNumber *width in @[@0, @100]) {
+        devjay_show_suggestions(popup,site,10,10,width.doubleValue,100);
+        assert(fabs(NSMidX(popup.frame)-NSMidX(site.frame)) < 1);
+        assert(fabs(NSMidY(popup.frame)-NSMidY(site.frame)) < 1);
+        assert([popup.identifier isEqual:@"suggested-actions"]);
+    }
+    assert(popup->keyOrders == 2 && popup->mainRequests == 2);
+    // A Changes/History viewer opened from the small Site overlays it too.
+    devjay_show_viewer(popup,site,10,10,100,100);
+    assert(fabs(NSMidX(popup.frame)-NSMidX(site.frame)) < 1);
+    assert(fabs(NSMidY(popup.frame)-NSMidY(site.frame)) < 1);
+    // Keep a centered confirmation reachable when its Site is at an edge.
+    [site setFrameOrigin:NSMakePoint(NSMaxX(area)-290,NSMinY(area))];
+    devjay_show_suggestions(popup,site,0,0,290,174);
+    assert(NSContainsRect(area,popup.frame));
+    assert(fabs(NSMaxX(popup.frame)-(NSMaxX(area)-8)) < 1);
+    assert(fabs(NSMinY(popup.frame)-(NSMinY(area)+8)) < 1);
+    method_setImplementation(activation, original);
+}
+
 static void test_viewer_placement(void) {
     NSRect area = NSScreen.mainScreen.visibleFrame;
     if (area.size.width < 1000 || area.size.height < 550) return;
     NSWindow *parent = [[[NSWindow alloc] initWithContentRect:NSMakeRect(area.origin.x+30,area.origin.y+10,900,174)
         styleMask:NSWindowStyleMaskBorderless backing:NSBackingStoreBuffered defer:NO] autorelease];
+    parent.identifier = @"control-panel";
     parent.contentView = [[[WKWebView alloc] initWithFrame:NSMakeRect(0,0,900,174)] autorelease];
     DevJayPlacementTestWindow *other = [[[DevJayPlacementTestWindow alloc] initWithContentRect:NSMakeRect(area.origin.x+300,area.origin.y+184,460,330)
         styleMask:NSWindowStyleMaskBorderless backing:NSBackingStoreBuffered defer:NO] autorelease];
     other.identifier = @"git-viewer"; other->visibleForPlacement = YES; other->activeForPlacement = YES;
-    DPRect frames[4];
-    assert(devjay_viewer_obstacles(@[other],nil,area,frames,4)==1);
-    assert(devjay_viewer_obstacles(@[other],other,area,frames,4)==0);
-    other->visibleForPlacement = NO;
-    assert(devjay_viewer_obstacles(@[other],nil,area,frames,4)==0);
-    other->visibleForPlacement = YES; other->minimizedForPlacement = YES;
-    assert(devjay_viewer_obstacles(@[other],nil,area,frames,4)==0);
-    other->minimizedForPlacement = NO; other->activeForPlacement = NO;
-    assert(devjay_viewer_obstacles(@[other],nil,area,frames,4)==0);
-    other->activeForPlacement = YES;
-    assert(devjay_viewer_obstacles(@[other],nil,NSOffsetRect(area,area.size.width*2,0),frames,4)==0);
-    other.identifier = @"app-status-tooltip";
-    assert(devjay_viewer_obstacles(@[other],nil,area,frames,4)==0);
-    other.identifier = @"git-viewer";
     DevJaySiteTestWindow *popup = [[[DevJaySiteTestWindow alloc] initWithContentRect:NSMakeRect(0,0,460,330)
         styleMask:NSWindowStyleMaskBorderless backing:NSBackingStoreBuffered defer:NO] autorelease];
     Method activation = class_getInstanceMethod(NSApplication.class, @selector(activateIgnoringOtherApps:));
     IMP original = method_setImplementation(activation,(IMP)recordActivation);
     devjay_show_viewer(popup,parent,400,10,200,140);
-    assert(!NSEqualRects(popup.frame,other.frame));
+    // Another viewer must not displace this one from its source card.
+    assert(NSEqualRects(popup.frame,other.frame));
     assert(NSContainsRect(area,popup.frame));
     assert([popup.identifier isEqual:@"git-viewer"]);
+    // Reopening the same native viewer from another card updates its anchor.
+    devjay_show_viewer(popup,parent,200,10,200,140);
+    assert(fabs(NSMinX(popup.frame)-(area.origin.x+100)) < 1);
+    assert(fabs(NSMinY(popup.frame)-(area.origin.y+184)) < 1);
     method_setImplementation(activation,original);
     // Keep this artificial visible obstacle out of later harness checks.
     other->visibleForPlacement = NO;
+}
+
+static void test_switch_placement(void) {
+    NSRect area = NSScreen.mainScreen.visibleFrame;
+    if (area.size.width < 1200 || area.size.height < 850) return;
+    NSWindow *parent = [[[NSWindow alloc] initWithContentRect:NSMakeRect(NSMidX(area)-500,NSMidY(area)-350,1000,700)
+        styleMask:NSWindowStyleMaskTitled backing:NSBackingStoreBuffered defer:NO] autorelease];
+    parent.identifier = @"git-viewer";
+    parent.contentView = [[[WKWebView alloc] initWithFrame:NSMakeRect(0,0,1000,700)] autorelease];
+    DevJaySiteTestWindow *popup = [[[DevJaySiteTestWindow alloc] initWithContentRect:NSMakeRect(0,0,620,740)
+        styleMask:NSWindowStyleMaskBorderless backing:NSBackingStoreBuffered defer:NO] autorelease];
+    Method activation = class_getInstanceMethod(NSApplication.class, @selector(activateIgnoringOtherApps:));
+    IMP original = method_setImplementation(activation, (IMP)recordActivation);
+    devjay_show_suggestions(popup,parent,100,20,70,26);
+    assert(fabs(NSMinX(popup.frame)-(NSMinX(parent.frame)+180)) < 1);
+    assert(fabs(NSMidY(popup.frame)-NSMidY(parent.frame)) < 1);
+    // Ordinary confirmations and invalid/out-of-view button bounds center.
+    for (NSNumber *x in @[@0, @2000]) {
+        devjay_show_suggestions(popup,parent,x.doubleValue,20,x.doubleValue ? 70 : 0,26);
+        assert(fabs(NSMidX(popup.frame)-NSMidX(parent.frame)) < 1);
+        assert(fabs(NSMidY(popup.frame)-NSMidY(parent.frame)) < 1);
+    }
+    method_setImplementation(activation, original);
 }
 
 int main(void) {
@@ -163,7 +212,9 @@ int main(void) {
         [NSApp setActivationPolicy:NSApplicationActivationPolicyProhibited];
         test_strip_focus_isolation();
         test_confirmation_card_anchor();
+        test_confirmation_site_center();
         test_viewer_placement();
+        test_switch_placement();
         NSView *panel = [[[NSView alloc] init] autorelease];
         NSView *confirmation = [[[NSView alloc] init] autorelease];
         IMP original = class_getMethodImplementation(NSView.class, @selector(acceptsFirstMouse:));
