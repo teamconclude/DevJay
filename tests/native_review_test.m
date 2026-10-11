@@ -206,6 +206,36 @@ static void test_switch_placement(void) {
     method_setImplementation(activation, original);
 }
 
+static void test_card_height_refit(void) {
+    NSRect area = NSScreen.mainScreen.visibleFrame;
+    NSWindow *panel = [[[NSWindow alloc] initWithContentRect:NSMakeRect(area.origin.x+20, area.origin.y+10, 500, 300)
+        styleMask:NSWindowStyleMaskBorderless backing:NSBackingStoreBuffered defer:NO] autorelease];
+    panel.identifier = @"control-panel";
+    NSRect original = panel.frame;
+    devjay_fit_card_window(panel, 160, 500, 300, 0); // Ordinary snapshots cannot shrink.
+    assert(NSEqualRects(panel.frame, original));
+    devjay_fit_card_window(panel, 160, 400, 300, 1); // Reject pre-resize measurements.
+    assert(NSEqualRects(panel.frame, original));
+    devjay_fit_card_window(panel, 160, NAN, 300, 1);
+    assert(NSEqualRects(panel.frame, original));
+    devjay_fit_card_window(panel, 160, 500, 300, 1);
+    assert(NSHeight(panel.frame) == 160 && NSWidth(panel.frame) == 500);
+    assert(NSMinY(panel.frame) == NSMinY(original));
+    devjay_fit_card_window(panel, 1, 500, 160, 1);
+    assert(NSHeight(panel.frame) == 120);
+    panel.identifier = @"site-height-test";
+    devjay_fit_card_window(panel, 100, 500, 120, 1); // Site windows remain grow-only even with this flag.
+    assert(NSHeight(panel.frame) == 120);
+    devjay_fit_card_window(panel, 220, 500, 120, 0);
+    assert(NSHeight(panel.frame) == 220 && NSMinY(panel.frame) == NSMinY(original));
+    panel.identifier = @"control-panel";
+    panel.styleMask = NSWindowStyleMaskTitled;
+    [panel setContentSize:NSMakeSize(500, 300)];
+    devjay_fit_card_window(panel, 160, 500, 300, 1);
+    assert([panel contentRectForFrameRect:panel.frame].size.height == 160);
+    assert(NSHeight(panel.frame) > 160); // Native chrome is added once.
+}
+
 int main(void) {
     @autoreleasepool {
         [NSApplication sharedApplication];
@@ -215,6 +245,7 @@ int main(void) {
         test_confirmation_site_center();
         test_viewer_placement();
         test_switch_placement();
+        test_card_height_refit();
         NSView *panel = [[[NSView alloc] init] autorelease];
         NSView *confirmation = [[[NSView alloc] init] autorelease];
         IMP original = class_getMethodImplementation(NSView.class, @selector(acceptsFirstMouse:));

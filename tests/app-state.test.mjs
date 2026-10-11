@@ -59,6 +59,33 @@ const site=(id,branch='main')=>({id,path:`/tmp/${id}`,prefix:'/tmp/',name:id,git
 const state=sites=>({sites,preferences:{},layout:'horizontal',settingsOpen:true});
 const appLabels=view=>view.root.querySelectorAll('.development-app-group').map(group=>group.attrs['aria-label']);
 
+test('held shortcut hints follow card order, skip unavailable bindings and never navigate',()=>{
+ const view=app(),items=Array.from({length:10},(_,i)=>site(`site-${i}`));
+ const badges=()=>view.root.querySelectorAll('.card').map(card=>card.dataset.shortcut);
+ view.snapshot(state(items));
+ assert.deepEqual(badges(),Array(10).fill(''));
+ const title=view.root.querySelector('.card-title');
+ view.snapshot({...state(items),shortcutHints:0x1ff & ~(1<<2)});
+ assert.deepEqual(badges(),['1','2','','4','5','6','7','8','9','']);
+ assert.equal(view.root.querySelector('.card-title'),title); // No card content rebuild or focus change.
+ assert.equal(view.document.activeElement,view.document.body);
+ view.snapshot({...state([...items].reverse()),shortcutHints:0x1ff});
+ assert.equal(view.root.querySelectorAll('.card')[0].dataset.id,'site-9');
+ assert.deepEqual(badges(),['1','2','3','4','5','6','7','8','9','']);
+ view.snapshot(state([...items].reverse()));
+ assert.deepEqual(badges(),Array(10).fill(''));
+ assert.equal(view.calls.some(([name])=>name==='devjay:activate'),false);
+});
+
+test('shortcut release while invisible clears stale hints when the full strip returns',()=>{
+ const view=app(),items=[site('a')];
+ view.snapshot({...state(items),shortcutHints:1});
+ view.event('devjay:visibility',false);
+ view.snapshot({...state(items),shortcutHints:0});
+ view.event('devjay:visibility',true);
+ assert.equal(view.root.querySelector('.card').dataset.shortcut,'');
+});
+
 test('desktop Site and panel branch labels do not open the branch chooser',async()=>{
  const item=site('a','feature/topic');item.git.head='current-head';
  for(const search of ['?site=a','']) {
@@ -1029,4 +1056,17 @@ test('merged cards explicitly say PR merged and preserve browser click and menu 
   assert.deepEqual(JSON.parse(JSON.stringify(view.calls.filter(([name])=>name==='devjay:pr-open'))),[['devjay:pr-open',{siteID:'a',number:42}]]);
   assert.equal(view.calls.some(([name])=>name==='devjay:action-prepare'||name==='devjay:action-confirm'),false);
  }
+});
+
+
+test('Settings describes global shortcuts and clears registration errors after recovery', () => {
+ const view=app('?settings');
+ view.snapshot({...state([]),shortcutError:'Global shortcuts unavailable: ⌃⌥⌘M.'});
+ const error=view.root.querySelectorAll('.help').find(n=>n.classList.contains('error'));
+ assert.ok(view.root.textContent.includes('⌃⌥⌘1–9'));
+ assert.equal(error.textContent,'Global shortcuts unavailable: ⌃⌥⌘M.');
+ assert.equal(error.hidden,false);
+ view.snapshot(state([]));
+ assert.equal(error.hidden,true);
+ assert.equal(error.textContent,'');
 });

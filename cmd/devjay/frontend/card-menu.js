@@ -19,16 +19,16 @@ export function cardBounds(target) {
   return rect ? {x:rect.left,y:rect.top,width:rect.width,height:rect.height} : undefined;
 }
 
-export function installCardMenu(root, open) {
+export function installCardMenu(root, open, strip = false) {
   function show(event, keyboard = false) {
-    const target = cardMenuTarget(event.target);
+    const target = cardMenuTarget(event.target) || (strip ? {kind:'strip'} : null);
     if (!target) return;
     event.preventDefault();
     event.stopPropagation();
     const rect = keyboard ? event.target.getBoundingClientRect() : null;
     const x = keyboard ? rect.left + Math.min(rect.width / 2, 20) : event.clientX;
     const y = keyboard ? rect.top + rect.height : event.clientY;
-    open({...target, anchor:cardBounds(event.target), x: Math.round(x), y: Math.round(y)});
+    open({...target, anchor:target.kind === 'strip' ? undefined : cardBounds(event.target), x: Math.round(x), y: Math.round(y)});
   }
   root.addEventListener('contextmenu', event => show(event));
   root.addEventListener('keydown', event => {

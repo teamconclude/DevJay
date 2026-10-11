@@ -6,11 +6,14 @@ import (
 )
 
 func TestSnapshotForWindowKeepsOnlyItsSiteWithoutChangingSharedState(t *testing.T) {
-	all := appSnapshot{Sites: []SiteView{{Site: Site{ID: "a"}}, {Site: Site{ID: "b"}}}}
+	all := appSnapshot{ShortcutHints: 3, Sites: []SiteView{{Site: Site{ID: "a"}}, {Site: Site{ID: "b"}}}}
 	for _, target := range []struct{ id, site string }{{"site-b", ""}, {"git-viewer-1", "b"}} {
 		got := snapshotForWindow(all, target.id, target.site)
 		if len(got.Sites) != 1 || got.Sites[0].ID != "b" {
 			t.Fatal("wrong window snapshot", got)
+		}
+		if got.ShortcutHints != 0 {
+			t.Fatal("modifier hints must not wake Site/viewer web views")
 		}
 	}
 	if got := snapshotForWindow(all, "site-removed", ""); len(got.Sites) != 0 {
@@ -20,8 +23,11 @@ func TestSnapshotForWindowKeepsOnlyItsSiteWithoutChangingSharedState(t *testing.
 		if got := snapshotForWindow(all, id, ""); len(got.Sites) != 2 {
 			t.Fatal("overview was filtered")
 		}
+		if got := snapshotForWindow(all, id, ""); (got.ShortcutHints == 3) != (id == "control-panel") {
+			t.Fatal("wrong shortcut hint target", id)
+		}
 	}
-	if len(all.Sites) != 2 {
+	if len(all.Sites) != 2 || all.ShortcutHints != 3 {
 		t.Fatal("shared snapshot was mutated")
 	}
 }

@@ -50,7 +50,7 @@ func main() {
 			UniqueID: instanceID(),
 			OnSecondInstanceLaunch: func(application.SecondInstanceData) {
 				if manager != nil {
-					go manager.send(func() { focusSite(manager.panel) })
+					go manager.send(manager.showControlPanel)
 				}
 			},
 		},
@@ -58,7 +58,7 @@ func main() {
 	config, err := loadSites(siteConfigPath())
 	manager = newSiteManager(app, config, err)
 	panel := app.Window.NewWithOptions(application.WebviewWindowOptions{
-		Name: "control-panel", Title: "DevJay", URL: "/", Width: 900, Height: 174, MinWidth: 234, MinHeight: 174, Frameless: manager.config.decoration() != "normal",
+		Name: "control-panel", Title: "DevJay", URL: "/", Width: 900, Height: 174, MinWidth: 234, MinHeight: 120, Frameless: manager.config.decoration() != "normal",
 		X: 120, Y: 80, InitialPosition: application.WindowXY, CloseButtonState: application.ButtonEnabled, MaximiseButtonState: application.ButtonDisabled,
 		BackgroundColour: application.NewRGB(20, 24, 32),
 		Mac:              application.MacWindow{CornerType: application.MacWindowCornerTypeRounded, WindowClass: application.MacWindowClassPanel, PanelPreferences: application.MacPanelPreferences{NonActivating: true, FloatingPanel: true}, CollectionBehavior: application.MacWindowCollectionBehaviorCanJoinAllSpaces | application.MacWindowCollectionBehaviorStationary | application.MacWindowCollectionBehaviorIgnoresCycle | application.MacWindowCollectionBehaviorFullScreenNone, TabbingMode: application.MacWindowTabbingModeDisallowed},
@@ -132,6 +132,24 @@ func main() {
 	menu.AddRole(application.AppMenu)
 	menu.AddRole(application.EditMenu)
 	view := menu.AddSubmenu("View")
+	manager.minimalItem = view.AddCheckbox("Minimize strip", false).OnClick(func(ctx *application.Context) {
+		manager.send(func() {
+			if ctx.IsChecked() {
+				manager.setStripMode(stripCompact)
+			} else {
+				manager.setStripMode(stripFull)
+			}
+		})
+	})
+	manager.hiddenItem = view.AddCheckbox("Hide strip", false).OnClick(func(ctx *application.Context) {
+		manager.send(func() {
+			if ctx.IsChecked() {
+				manager.setStripMode(stripHidden)
+			} else {
+				manager.setStripMode(stripFull)
+			}
+		})
+	})
 	manager.allDesktopsItem = view.AddCheckbox("Control panel always visible", true).OnClick(func(ctx *application.Context) {
 		manager.send(func() { setPanelPreference(panel, "allDesktops", ctx.IsChecked()); manager.syncSettings() })
 	})
@@ -144,21 +162,13 @@ func main() {
 	})
 	sites := menu.AddSubmenu("Sites")
 	sites.Add("Show DevJay").SetAccelerator("CmdOrCtrl+0").OnClick(func(*application.Context) {
-		if panel.IsMinimised() {
-			panel.UnMinimise()
-		}
-		panel.Focus()
+		manager.send(manager.showControlPanel)
 	})
 	// Shortcuts follow the current visible card order, including manual overrides.
 	for i := 0; i < 9; i++ {
 		index := i
 		sites.Add("Site " + string(rune('1'+i))).SetAccelerator("CmdOrCtrl+" + string(rune('1'+i))).OnClick(func(*application.Context) {
-			manager.send(func() {
-				ordered := manager.snapshot().Sites
-				if index < len(ordered) {
-					manager.activate(ordered[index].ID)
-				}
-			})
+			manager.send(func() { manager.activateSiteNumber(index) })
 		})
 	}
 	menu.AddRole(application.WindowMenu)
@@ -167,6 +177,9 @@ func main() {
 		manager.createWindow(site)
 	}
 	app.Event.OnApplicationEvent(events.Common.ApplicationStarted, func(*application.ApplicationEvent) { go manager.run() })
+	app.Event.OnApplicationEvent(events.Mac.ApplicationShouldHandleReopen, func(*application.ApplicationEvent) {
+		manager.send(manager.showControlPanel)
+	})
 	app.OnShutdown(manager.shutdown)
 	if err := app.Run(); err != nil {
 		log.Fatal(err)

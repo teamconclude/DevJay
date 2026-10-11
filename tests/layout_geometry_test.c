@@ -65,6 +65,11 @@ int main(void) {
     check(dp_grow_height((DPRect){100,10,300,174}, old, 2000), (DPRect){100,8,300,884});
     check(dp_grow_height((DPRect){-310,-498,300,174}, negative, 260), (DPRect){-310,-498,300,260});
     check(dp_grow_height((DPRect){100,10,300,174}, old, NAN), (DPRect){100,10,300,174});
+    // Explicit decoration refits remove excess height without moving the anchor.
+    check(dp_fit_height((DPRect){100,10,300,260}, old, 150), (DPRect){100,10,300,150});
+    check(dp_fit_height((DPRect){100,600,300,260}, old, 150), (DPRect){100,710,300,150});
+    check(dp_fit_height((DPRect){-310,-498,300,260}, negative, 150), (DPRect){-310,-498,300,150});
+    check(dp_fit_height((DPRect){100,10,300,260}, old, NAN), (DPRect){100,10,300,260});
     DPRect popup = {0,0,400,300}, area = {0,0,1200,900};
     check(dp_parent_popup(popup,(DPRect){100,200,1000,600},(DPRect){0},area),(DPRect){400,350,400,300});
     check(dp_parent_popup(popup,(DPRect){100,200,1000,600},(DPRect){250,740,80,30},area),(DPRect){340,350,400,300});

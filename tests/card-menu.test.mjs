@@ -29,3 +29,13 @@ test('mouse and keyboard menus suppress the default menu and capture their own t
     {siteID:'site-b',kind:'site',number:8,bundleID:'',anchor:{x:0,y:4,width:216,height:152},x:30,y:36}]);
   assert.equal(prevented,2);assert.equal(stopped,2);
 });
+
+
+test('strip background and empty state offer a menu without inventing a Site', () => {
+  for (const strip of [false, true]) {
+    const handlers = {}, requests = [];
+    installCardMenu({addEventListener:(name,fn)=>handlers[name]=fn}, request=>requests.push(request), strip);
+    handlers.contextmenu({target:target(null, ''), clientX:12, clientY:15, preventDefault(){}, stopPropagation(){}});
+    assert.deepEqual(requests, strip ? [{kind:'strip', anchor:undefined, x:12, y:15}] : []);
+  }
+});

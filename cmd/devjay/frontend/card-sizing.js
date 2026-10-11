@@ -6,15 +6,38 @@ export function requiredContentHeight(viewportHeight, scrollHeight, clientHeight
   return overflow > 1 ? Math.ceil(viewportHeight + overflow) : null;
 }
 
+// Measure the card row's natural height without stretching it to fill a saved
+// window. Restore the styles before painting; horizontal scrollbars still count.
+export function fittedPanelHeight(list) {
+  const overhead = window.innerHeight - list.clientHeight;
+  const {flex, height} = list.style;
+  try {
+    list.style.flex = 'none';
+    list.style.height = 'max-content';
+    return Math.ceil(overhead + list.scrollHeight);
+  } finally {
+    list.style.flex = flex;
+    list.style.height = height;
+  }
+}
+
 export function installCardSizing(root, list, requestFit, busy = () => false) {
-  let frame = 0, lastRequest = '';
+  let frame = 0, lastRequest = '', fittedContext;
   function measure() {
     frame = 0;
-    if (busy()) return;
-    const container = document.body.classList.contains('workspace') ? root : list;
-    const height = requiredContentHeight(window.innerHeight, container.scrollHeight, container.clientHeight);
+    if (busy() || !list.children.length) return;
+    const workspace = document.body.classList.contains('workspace');
+    const decoration = document.body.dataset.decoration;
+    const context = [decoration, document.body.dataset.layout, document.body.dataset.freePlacement].join('/');
+    const refit = !workspace && fittedContext !== context;
+    // WebKit can clip a flex card internally without overflowing the list.
+    // Re-measure its natural content after status/app rows arrive, too.
+    const panelHeight = workspace ? null : Math.max(120, fittedPanelHeight(list));
+    const height = workspace ? requiredContentHeight(window.innerHeight, root.scrollHeight, root.clientHeight)
+      : refit ? panelHeight : requiredContentHeight(window.innerHeight, panelHeight, window.innerHeight);
+    fittedContext = context;
     if (height === null) { lastRequest = ''; return; }
-    const size = {height, viewportWidth: window.innerWidth, viewportHeight: window.innerHeight};
+    const size = {height, viewportWidth: window.innerWidth, viewportHeight: window.innerHeight, decoration, refit};
     const key = JSON.stringify(size);
     // A screen-limited window may still overflow. Don't keep requesting a size
     // the native side cannot provide until its content or viewport changes.

@@ -61,7 +61,7 @@ for (const name of ['pr-open-result','app-activate-result']) Events.On(`devjay:$
     report('bridge', {text:event.data.error || event.data.message || '', error:!!event.data.error});
   }
 });
-if (!settings && !viewer && !actions) installCardMenu(root, data => emit('card-menu', data));
+if (!settings && !viewer && !actions) installCardMenu(root, data => emit('card-menu', data), !siteID);
 function pathLabel(site) { const n = el('div', 'path'); n.title = site.path; n.append(el('span', 'prefix', site.prefix), el('strong', '', site.name)); return n; }
 const waitingAttentionDuration = 4000;
 const waitingAttention = new Map();
@@ -298,7 +298,7 @@ function details(site, parent, showIDEStatus) {
   if (showIDEStatus) parent.append(developmentAppIndicator(site));
 }
 
-let list, decoration, layout, siteError, siteErrorTimer;
+let list, decoration, layout, siteError, siteErrorTimer, shortcutError;
 if (viewer) {
   document.body.className = 'git-viewer';
   let currentView = null, currentSnapshot = {sites:[]};
@@ -332,6 +332,9 @@ if (viewer) {
   root.append(sorting);
   editorSettings = mountEditorSettings(root, data => emit('editor-settings-request', data));
   Events.On('devjay:editor-settings-state', event => editorSettings.renderEditor(event.data));
+  root.append(el('h2', '', 'Global shortcuts'));
+  root.append(el('p', 'help', '⌃⌥⌘M toggles a single row of Site names. Right-click → Hide strip leaves a tiny restore button. ⌃⌥⌘1–9 visits a Site’s desktop in card order. Hold Control–Option–Command first to see the numbers on the cards. When hidden, the row appears only while those modifiers are held. ⌃⌥⌘0 restores the full strip. These work while other apps are active.'));
+  shortcutError = el('p', 'help error'); shortcutError.hidden = true; shortcutError.setAttribute('role', 'status'); root.append(shortcutError);
   root.append(el('h2', '', 'View settings'));
   for (const [key, title] of [['allDesktops', 'Control panel always visible'], ['onTop', 'Show all windows on top'], ['showIDEStatus', 'Show development app status']]) {
     const label = el('label', 'preference'); const box = el('input'); box.type = 'checkbox'; box.dataset.pref = key; box.onchange = () => emit(key, box.checked);
@@ -507,6 +510,8 @@ function render(state) {
   document.body.dataset.decoration = state.decoration || 'none';
   if (decoration) decoration.value = state.decoration || 'none';
   if (settings) {
+    shortcutError.textContent = state.shortcutError || '';
+    shortcutError.hidden = !state.shortcutError;
     document.querySelectorAll('[data-pref]').forEach(n => { n.checked = n.dataset.pref === 'showIDEStatus' ? showIDEStatus : state.preferences[n.dataset.pref]; });
     document.querySelectorAll('[name=sorting]').forEach(n => { n.checked = n.value === (state.manual ? 'manual' : 'name'); });
     if (dragging) return;
@@ -548,6 +553,7 @@ function render(state) {
       card.style.top = free ? `${position.y}px` : '';
       card.style.zIndex = free ? position.z : '';
       card.classList.toggle('visible', site.window.onDesktop);
+      card.dataset.shortcut = index < 9 && (state.shortcutHints & (1 << index)) ? String(index + 1) : '';
       card.setAttribute('aria-label', `Activate ${site.path}, ${site.git.branch || 'folder'}, ${site.git.localNote || site.git.summary}${site.window.onDesktop ? ', visible on current desktop' : ''}`);
       details(site, card, showIDEStatus);
       card.title = [site.window.onDesktop ? 'Visible on current desktop' : '', site.path, site.git.branch, site.git.summary, site.git.localNote, site.git.github, site.git.remoteNote, site.position.label, site.git.tracking ? `Tracking ${site.git.tracking}` : '', site.git.remoteChecked ? `Remote checked ${new Date(site.git.remoteChecked).toLocaleString()}` : ''].filter(Boolean).join('\n');

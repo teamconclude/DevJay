@@ -50,6 +50,8 @@ const (
 	cardMenuSettings
 	cardMenuQuit
 	cardMenuGitAction
+	cardMenuMinimize
+	cardMenuHide
 )
 
 func normalizeCardMenuRequest(req cardMenuRequest) (cardMenuRequest, bool) {
@@ -60,6 +62,11 @@ func normalizeCardMenuRequest(req cardMenuRequest) (cardMenuRequest, bool) {
 	// rejects unreasonable or non-finite input before dispatching to AppKit.
 	validCoordinate := func(v float64) bool {
 		return !math.IsNaN(v) && !math.IsInf(v, 0) && v >= 0 && v <= 32768
+	}
+	if req.Kind == "strip" {
+		return req, req.SiteID == "" && req.Number == 0 && req.BundleID == "" && req.BaseBranch == "" &&
+			!req.PublishRebased && !req.PublishButton && req.GitAction == "" && req.Anchor == nil &&
+			validCoordinate(req.X) && validCoordinate(req.Y)
 	}
 	return req, req.SiteID != "" && (validViewKind(req.Kind) || req.Kind == "auto" || req.Kind == "site") &&
 		req.Number >= 0 && (req.BundleID == "" || (req.Number == 0 && validAppBundleID(req.BundleID))) &&
@@ -272,6 +279,9 @@ func resolveCardMenuRequest(req cardMenuRequest, git GitStatus) cardMenuRequest 
 }
 
 func cardMenuLabels(req cardMenuRequest) [4]string {
+	if req.Kind == "strip" {
+		return [4]string{"", "", "DevJay settings…", "Quit DevJay"}
+	}
 	if req.PublishButton {
 		// The guarded Git action becomes the first item for its direct button.
 		return [4]string{"", "", "DevJay settings…", "Quit DevJay"}

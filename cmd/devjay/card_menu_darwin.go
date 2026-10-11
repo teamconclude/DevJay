@@ -3,7 +3,7 @@ package main
 /*
 #cgo LDFLAGS: -framework AppKit -framework WebKit
 #include <stdlib.h>
-int devjay_card_menu(void *window, double x, double y, const char *first, const char *second, const char *settings, const char *quit, const char *action, const char *disabledReason, const char *hint);
+int devjay_card_menu(void *window, double x, double y, const char *first, const char *second, const char *settings, const char *quit, const char *action, const char *disabledReason, const char *hint, int strip);
 */
 import "C"
 
@@ -16,7 +16,7 @@ import (
 
 // Run off the manager queue: AppKit tracks the menu synchronously until it is
 // dismissed. A per-popup result avoids mutable context-menu callback targets.
-func showCardMenu(window *application.WebviewWindow, req cardMenuRequest, option *cardGitOption) cardMenuAction {
+func showCardMenu(window *application.WebviewWindow, req cardMenuRequest, option *cardGitOption, strip bool) cardMenuAction {
 	labels := cardMenuLabels(req)
 	actionTitle, actionReason, hintText := "", "", ""
 	if option != nil {
@@ -32,9 +32,13 @@ func showCardMenu(window *application.WebviewWindow, req cardMenuRequest, option
 	defer C.free(unsafe.Pointer(second))
 	defer C.free(unsafe.Pointer(settings))
 	defer C.free(unsafe.Pointer(quit))
+	var stripMenu C.int
+	if strip {
+		stripMenu = 1
+	}
 	var selected C.int
 	application.InvokeSync(func() {
-		selected = C.devjay_card_menu(window.NativeWindow(), C.double(req.X), C.double(req.Y), first, second, settings, quit, actionLabel, disabled, hint)
+		selected = C.devjay_card_menu(window.NativeWindow(), C.double(req.X), C.double(req.Y), first, second, settings, quit, actionLabel, disabled, hint, stripMenu)
 	})
 	return cardMenuAction(selected)
 }
@@ -42,6 +46,12 @@ func showCardMenu(window *application.WebviewWindow, req cardMenuRequest, option
 // Only card windows may operate on a Site. Return the exact window/runtime so
 // the caller can reject a selection if either was replaced while the menu ran.
 func (m *siteManager) cardMenuSource(req cardMenuRequest, sender string) (*application.WebviewWindow, *siteRuntime) {
+	if req.Kind == "strip" {
+		if sender == "control-panel" && m.panelReady {
+			return m.panel, nil
+		}
+		return nil, nil
+	}
 	site := m.runtime[req.SiteID]
 	if site == nil || !site.Ready {
 		return nil, nil
@@ -77,6 +87,29 @@ func (m *siteManager) registerCardMenuEvents() {
 			if parent == nil {
 				return
 			}
+			if req.Kind == "strip" {
+				menuOpen = true
+				go func() {
+					selected := showCardMenu(parent, req, nil, true)
+					m.send(func() {
+						menuOpen = false
+						if current, _ := m.cardMenuSource(req, sender); current != parent {
+							return
+						}
+						switch selected {
+						case cardMenuMinimize:
+							m.setStripMode(stripCompact)
+						case cardMenuHide:
+							m.setStripMode(stripHidden)
+						case cardMenuSettings:
+							m.openSettings()
+						case cardMenuQuit:
+							go m.app.Quit()
+						}
+					})
+				}()
+				return
+			}
 			pr, knownPR := requestedPR(site.Git, req.Number)
 			if req.Number > 0 && !knownPR {
 				return
@@ -95,11 +128,19 @@ func (m *siteManager) registerCardMenuEvents() {
 			}
 			menuOpen = true
 			go func() {
-				selected := showCardMenu(parent, req, option)
+				selected := showCardMenu(parent, req, option, sender == "control-panel")
 				m.send(func() {
 					menuOpen = false
 					currentParent, currentSite := m.cardMenuSource(req, sender)
 					if currentParent != parent || currentSite != site {
+						return
+					}
+					if (selected == cardMenuMinimize || selected == cardMenuHide) && sender == "control-panel" {
+						mode := stripCompact
+						if selected == cardMenuHide {
+							mode = stripHidden
+						}
+						m.setStripMode(mode)
 						return
 					}
 					if selected == cardMenuGitAction {

@@ -19,7 +19,7 @@ void devjay_show_settings(void *window, void *parent);
 void devjay_show_suggestions(void *window, void *parent, double x, double y, double width, double height);
 void devjay_show_viewer(void *window, void *parent, double x, double y, double width, double height);
 void devjay_apply_top_preference(void);
-void devjay_grow_card_window(void *window, double height, double viewportWidth, double viewportHeight);
+void devjay_fit_card_window(void *window, double height, double viewportWidth, double viewportHeight, int refit);
 void devjay_fit_panel(void *window, int mode, int count, int header, double extentWidth, double extentHeight);
 */
 import "C"
@@ -136,7 +136,7 @@ func fitControlPanel(window *application.WebviewWindow, config SiteConfig) {
 		mode = 2
 	}
 	header := 0
-	if config.decoration() != "none" {
+	if config.decoration() == "minimal" {
 		header = 22
 	}
 	width, height := 0, 0
@@ -185,8 +185,12 @@ func showViewerWindow(window, parent *application.WebviewWindow, anchor *cardAnc
 	})
 }
 
-func growCardWindow(window *application.WebviewWindow, height, viewportWidth, viewportHeight float64) {
+func fitCardWindow(window *application.WebviewWindow, height, viewportWidth, viewportHeight float64, refit bool) {
+	var shrink C.int
+	if refit {
+		shrink = 1
+	}
 	application.InvokeSync(func() {
-		C.devjay_grow_card_window(window.NativeWindow(), C.double(height), C.double(viewportWidth), C.double(viewportHeight))
+		C.devjay_fit_card_window(window.NativeWindow(), C.double(height), C.double(viewportWidth), C.double(viewportHeight), shrink)
 	})
 }

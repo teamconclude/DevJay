@@ -169,6 +169,9 @@ func (m *siteManager) refreshWindowVisibility() {
 }
 
 func snapshotForWindow(snapshot appSnapshot, id, viewerSite string) appSnapshot {
+	if id != "control-panel" {
+		snapshot.ShortcutHints = 0 // Only the full strip renders modifier hints.
+	}
 	site := viewerSite
 	if strings.HasPrefix(id, "site-") {
 		site = strings.TrimPrefix(id, "site-")

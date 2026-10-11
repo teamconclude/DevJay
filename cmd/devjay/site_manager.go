@@ -32,6 +32,9 @@ type SiteView struct {
 	DevelopmentAppsKnown bool             `json:"developmentAppsKnown"`
 }
 type appSnapshot struct {
+	StripMode     stripMode                `json:"stripMode"`
+	ShortcutError string                   `json:"shortcutError,omitempty"`
+	ShortcutHints uint32                   `json:"shortcutHints"`
 	Action        *CheckoutAction          `json:"action,omitempty"`
 	QuitMessage   string                   `json:"quitMessage,omitempty"`
 	SuggestedSite string                   `json:"suggestedSite,omitempty"`
@@ -45,6 +48,11 @@ type appSnapshot struct {
 	Error         string                   `json:"error"`
 }
 type siteManager struct {
+	stripMode                                                stripMode
+	compactSignature                                         string
+	shortcutError                                            string
+	shortcutHints                                            uint32
+	minimalItem, hiddenItem                                  *application.MenuItem
 	lifecycle                                                actionLifetime
 	quitMessage                                              string
 	removing                                                 bool
@@ -95,6 +103,8 @@ func (m *siteManager) run() {
 	// callbacks only wake this queue; none wait on it from the AppKit thread.
 	m.recoverViews()
 	startNativeMonitoring()
+	m.shortcutError = startGlobalShortcuts()
+	m.broadcast()
 	timer := time.NewTimer(0)
 	defer timer.Stop()
 	for {
@@ -105,6 +115,11 @@ func (m *siteManager) run() {
 			if m.app.Context().Err() == nil {
 				fn()
 			}
+		case action := <-stripControlEvents:
+			m.handleStripControl(action)
+		case <-shortcutHintEvents:
+			m.shortcutHints = pendingShortcutHints.Load()
+			m.publishSnapshot(false)
 		case <-nativeMonitorEvents():
 			m.handleNativeMonitorEvents(takeNativeMonitorEvents(), time.Now())
 		case <-m.developmentApps.changes:
@@ -121,6 +136,7 @@ func (m *siteManager) syncSettings() {
 	if !m.panelReady {
 		return
 	}
+	refreshMinimalStrip()
 	p := panelPreferences(m.panel)
 	m.allDesktopsItem.SetChecked(p["allDesktops"])
 	m.onTopItem.SetChecked(p["onTop"])
@@ -132,6 +148,7 @@ func (m *siteManager) openSettings() {
 		return
 	}
 	m.openSettingsPending = false
+	m.setStripMode(stripFull)
 	showSettingsWindow(m.settings, m.panel)
 	m.refreshSettingsEditor()
 	m.broadcast()
@@ -187,7 +204,7 @@ func (m *siteManager) snapshot() appSnapshot {
 	preferences["showIDEStatus"] = m.config.showIDEStatus()
 	m.observeDevelopmentApps(m.monitor.windowNumbers, positions)
 	settingsOpen := m.monitor.settingsOpen
-	result := appSnapshot{Action: m.action, QuitMessage: m.quitMessage, SuggestedSite: m.suggestedSite, Layout: m.config.layout(), Placements: m.config.Placements, SettingsOpen: settingsOpen, Decoration: m.config.decoration(), Sites: []SiteView{}, Manual: m.config.Manual, Preferences: preferences}
+	result := appSnapshot{StripMode: m.stripMode, ShortcutError: m.shortcutError, ShortcutHints: m.shortcutHints, Action: m.action, QuitMessage: m.quitMessage, SuggestedSite: m.suggestedSite, Layout: m.config.layout(), Placements: m.config.Placements, SettingsOpen: settingsOpen, Decoration: m.config.decoration(), Sites: []SiteView{}, Manual: m.config.Manual, Preferences: preferences}
 	if m.configError != nil {
 		result.Error = "Cannot read saved Sites. Configuration has not been overwritten: " + m.configError.Error()
 	}
@@ -222,6 +239,7 @@ func (m *siteManager) publishSnapshot(force bool) {
 		return
 	}
 	snapshot := m.snapshot()
+	m.updateCompactStrip(snapshot.Sites)
 	m.refreshWindowVisibility()
 	m.deliverSnapshot(snapshot, force)
 }
@@ -367,19 +385,26 @@ func (m *siteManager) registerEvents() {
 		})
 	})
 	m.app.Event.On("devjay:fit-cards", func(e *application.CustomEvent) {
-		var size struct{ Height, ViewportWidth, ViewportHeight float64 }
+		var size struct {
+			Height, ViewportWidth, ViewportHeight float64
+			Decoration                            string
+			Refit                                 bool
+		}
 		data, err := json.Marshal(e.Data)
 		if err != nil || json.Unmarshal(data, &size) != nil {
 			return
 		}
 		m.send(func() {
+			if size.Decoration != m.config.decoration() {
+				return // A delayed measurement from the previous decoration.
+			}
 			if e.Sender == "control-panel" && m.panelReady {
-				growCardWindow(m.panel, size.Height, size.ViewportWidth, size.ViewportHeight)
+				fitCardWindow(m.panel, size.Height, size.ViewportWidth, size.ViewportHeight, size.Refit)
 				return
 			}
 			for id, r := range m.runtime {
 				if e.Sender == "site-"+id && r.Ready {
-					growCardWindow(r.Window, size.Height, size.ViewportWidth, size.ViewportHeight)
+					fitCardWindow(r.Window, size.Height, size.ViewportWidth, size.ViewportHeight, false)
 					return
 				}
 			}
@@ -607,6 +632,7 @@ func (m *siteManager) shutdown() {
 	}
 	m.mu.Unlock()
 	saveWindowLayout(m.panel)
+	stopStripControls()
 	for _, r := range items {
 		if r.Cancel != nil {
 			r.Cancel()

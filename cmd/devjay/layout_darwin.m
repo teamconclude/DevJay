@@ -349,14 +349,19 @@ void devjay_fit_panel(void *pointer, int mode, int count, int header, double ext
 }
 
 
-void devjay_grow_card_window(void *pointer, double height, double viewportWidth, double viewportHeight) {
+void devjay_fit_card_window(void *pointer, double height, double viewportWidth, double viewportHeight, int refit) {
     NSWindow *window = (NSWindow *)pointer;
     NSScreen *screen = window.screen ?: nearest_screen(window.frame);
-    if (!window || !screen || !isfinite(height) || height <= 0 || height > 1000000) return;
+    if (!window || !screen || !isfinite(height) || height <= 0 || height > 1000000 ||
+        !isfinite(viewportWidth) || !isfinite(viewportHeight)) return;
     // Ignore measurements from before a user resize or decoration change.
     NSRect content = [window contentRectForFrameRect:window.frame];
     if (fabs(content.size.width - viewportWidth) > 2 || fabs(content.size.height - viewportHeight) > 2) return;
+    BOOL fitPanel = refit && [window.identifier isEqual:@"control-panel"];
+    if (fitPanel) height = MAX(120, height);
     NSRect wanted = [window frameRectForContentRect:NSMakeRect(0, 0, content.size.width, height)];
-    NSRect frame = ns_rect(dp_grow_height(dp_rect(window.frame), dp_rect(placement_bounds(screen)), wanted.size.height));
+    DPRect available = dp_rect(placement_bounds(screen));
+    NSRect frame = ns_rect(fitPanel ? dp_fit_height(dp_rect(window.frame), available, wanted.size.height)
+        : dp_grow_height(dp_rect(window.frame), available, wanted.size.height));
     if (!NSEqualRects(frame, window.frame)) [window setFrame:frame display:YES];
 }
