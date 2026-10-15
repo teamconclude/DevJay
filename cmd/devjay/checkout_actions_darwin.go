@@ -87,7 +87,16 @@ func (m *siteManager) prepareAction(req ActionRequest, r *siteRuntime, parent *a
 	m.broadcast()
 	go func() {
 		defer cancel()
-		plan, err := prepareCheckoutAction(ctx, r.Site.Path, req, merged)
+		var plan *CheckoutPlan
+		var err error
+		if r.FolderIdentity != "" && folderIdentity(r.Site.Path) != r.FolderIdentity {
+			err = errors.New("The Site folder moved or is unavailable. Locate it in Settings before continuing.")
+		} else {
+			plan, err = prepareCheckoutAction(ctx, r.Site.Path, req, merged)
+			if r.FolderIdentity != "" && folderIdentity(r.Site.Path) != r.FolderIdentity {
+				plan, err = nil, errors.New("The Site folder changed. Locate it in Settings before continuing.")
+			}
+		}
 		result := &CheckoutAction{SiteID: req.SiteID, Kind: req.Kind, Status: "ready", Plan: plan}
 		if err != nil {
 			result.Status, result.Message = "failed", err.Error()
@@ -184,7 +193,10 @@ func (m *siteManager) registerCheckoutActions() {
 			go func() {
 				defer m.lifecycle.finish()
 				// Network commands are bounded individually. Local mutations must finish.
-				result := applyCheckoutAction(context.Background(), plan)
+				result := CheckoutAction{Kind: plan.Kind, Status: "failed", Message: "The Site folder changed. Locate it in Settings before continuing."}
+				if r.FolderIdentity == "" || folderIdentity(r.Site.Path) == r.FolderIdentity {
+					result = applyCheckoutAction(context.Background(), plan)
+				}
 				result.SiteID = id
 				m.send(func() {
 					m.action = &result

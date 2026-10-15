@@ -41,6 +41,10 @@ check:
 	trap 'rm -f "$$sizing_bin"' EXIT; \
 	clang -Wall -Wextra -Werror -fblocks -framework AppKit -framework WebKit tests/card_sizing_test.m -o "$$sizing_bin"; \
 	"$$sizing_bin"
+	@set -e; settings_bin=$$(mktemp "$${TMPDIR:-/tmp}/devjay-settings-layout.XXXXXX"); \
+	trap 'rm -f "$$settings_bin"' EXIT; \
+	clang -Wall -Wextra -Werror -fblocks -framework AppKit -framework WebKit tests/settings_layout_test.m -o "$$settings_bin"; \
+	"$$settings_bin"
 	@set -e; menu_bin=$$(mktemp "$${TMPDIR:-/tmp}/devjay-card-menu.XXXXXX"); \
 	trap 'rm -f "$$menu_bin"' EXIT; \
 	clang -Wall -Wextra -Werror -fblocks -framework AppKit -framework WebKit tests/card_menu_test.m -o "$$menu_bin"; \

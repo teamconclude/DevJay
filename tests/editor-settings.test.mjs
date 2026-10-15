@@ -12,8 +12,8 @@ class Element {
 globalThis.document={createElement:tag=>new Element(tag)};
 const go={name:'GoLand',path:'/Applications/GoLand.app',pids:[42]};
 const editor={apps:[go],choice:go.path,useProject:true};
-function setup(){const root=new Element('div'),requests=[];const view=mountEditorSettings(root,r=>requests.push(r));return {...view,requests,editors:root.children[1].children[0].children[0],automatic:root.children[2].children[0],error:root.children[3]};}
-test('global preference and independent automatic option render without per-Site selection',()=>{
+function setup(){const root=new Element('div'),requests=[];const view=mountEditorSettings(root,r=>requests.push(r));const walk=node=>[node,...node.children.flatMap(walk)],nodes=walk(root);return {...view,requests,editors:nodes.find(n=>n.tag==='select'),automatic:nodes.find(n=>n.tag==='input'),error:nodes.find(n=>n.className?.includes('editor-settings-error'))};}
+test('Profile preference and independent automatic option render without per-Site selection',()=>{
  const v=setup();v.renderEditor({editor});
  assert.equal(v.editors.value,go.path);assert.equal(v.automatic.checked,true);assert.equal(v.editors.disabled,false);
  assert.equal(v.requests.length,0);
@@ -22,7 +22,7 @@ test('global preference and independent automatic option render without per-Site
  assert.equal(v.automatic.disabled,true);assert.equal(v.editors.disabled,true);
  v.renderEditor({editor:{...editor,useProject:false}});assert.equal(v.editors.value,go.path);assert.equal(v.automatic.checked,false);
 });
-test('editor selection and picker requests are global and re-enable after cancellation',()=>{
+test('editor selection and picker requests re-enable after cancellation',()=>{
  const v=setup();v.renderEditor({editor});v.editors.value=go.path;v.editors.onchange();
  assert.deepEqual(v.requests.at(-1),{operation:'select',editor:go.path});
  v.renderEditor({editor});v.editors.value='__choose_app__';v.editors.onchange();

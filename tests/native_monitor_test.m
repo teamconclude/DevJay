@@ -8,6 +8,7 @@ void devjay_native_monitor_changed(unsigned int flags) { receivedFlags |= flags;
 void dp_invalidate_space_cache(void) { invalidations++; }
 BOOL dp_spaces_available(void) { return NO; }
 NSString *dp_window_space(NSWindow *window) { (void)window; return nil; }
+NSString *dp_space_for_index(NSString *display, NSInteger index) { (void)display; (void)index; return nil; }
 BOOL dp_move_to_space(NSWindow *window, NSString *space) { (void)window; (void)space; return NO; }
 
 #include "../cmd/devjay/native_monitor_darwin.m"

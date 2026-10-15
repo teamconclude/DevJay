@@ -20,12 +20,13 @@ const (
 // The manager changes policy without owning a Git worker's state. Wakeups are
 // coalesced; becoming active refreshes once, while repeated snapshots do nothing.
 type gitWatchControl struct {
-	mu     sync.Mutex
-	wake   chan struct{}
-	active bool
-	paused bool
-	serial uint64
-	cancel context.CancelFunc
+	folderIdentity string // Immutable after the worker starts.
+	mu             sync.Mutex
+	wake           chan struct{}
+	active         bool
+	paused         bool
+	serial         uint64
+	cancel         context.CancelFunc
 }
 
 func newGitWatchControl() *gitWatchControl {
@@ -290,6 +291,18 @@ func watchGitWithControl(ctx context.Context, path string, control *gitWatchCont
 	}
 	readLocal := func() {
 		changes.clear()
+		if control.folderIdentity != "" && folderIdentity(path) != control.folderIdentity {
+			if remoteCancel != nil {
+				remoteCancel()
+				remoteCancel = nil
+			}
+			generation++
+			haveLocal = false
+			stopObserver()
+			publish(GitStatus{Tone: "warning", LocalNote: "Folder moved or unavailable. Locate it in Settings."})
+			nextSafety = time.Now().Add(gitWatchRetry)
+			return
+		}
 		resetObserver()
 		if workCtx.Err() != nil {
 			return

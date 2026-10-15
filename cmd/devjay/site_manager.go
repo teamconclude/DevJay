@@ -14,14 +14,18 @@ import (
 )
 
 type siteRuntime struct {
-	Site       Site
-	Window     *application.WebviewWindow
-	Ready      bool
-	Git        GitStatus
-	Cancel     context.CancelFunc
-	GitControl *gitWatchControl
+	FolderIdentity string
+	Site           Site
+	Window         *application.WebviewWindow
+	Ready          bool
+	Git            GitStatus
+	Cancel         context.CancelFunc
+	GitControl     *gitWatchControl
 }
 type SiteView struct {
+	NeedsPlacement bool `json:"needsPlacement,omitempty"`
+	Enabled        bool `json:"enabled"`
+	FolderMissing  bool `json:"folderMissing,omitempty"`
 	Site
 	Prefix               string           `json:"prefix"`
 	Name                 string           `json:"name"`
@@ -32,6 +36,8 @@ type SiteView struct {
 	DevelopmentAppsKnown bool             `json:"developmentAppsKnown"`
 }
 type appSnapshot struct {
+	Profiles      ProfilesView             `json:"profiles"`
+	Catalog       []SiteView               `json:"catalog,omitempty"`
 	StripMode     stripMode                `json:"stripMode"`
 	ShortcutError string                   `json:"shortcutError,omitempty"`
 	ShortcutHints uint32                   `json:"shortcutHints"`
@@ -48,6 +54,10 @@ type appSnapshot struct {
 	Error         string                   `json:"error"`
 }
 type siteManager struct {
+	settingsPage                                             string
+	addAfterID                                               string
+	profiles                                                 profileMonitor
+	folders                                                  folderMonitor
 	stripMode                                                stripMode
 	compactSignature                                         string
 	shortcutError                                            string
@@ -101,6 +111,7 @@ func (m *siteManager) send(fn func()) {
 func (m *siteManager) run() {
 	// Install the existing power observer before the wake bridge. Native
 	// callbacks only wake this queue; none wait on it from the AppKit thread.
+	m.initProfiles()
 	m.recoverViews()
 	startNativeMonitoring()
 	m.shortcutError = startGlobalShortcuts()
@@ -152,6 +163,10 @@ func (m *siteManager) openSettings() {
 	showSettingsWindow(m.settings, m.panel)
 	m.refreshSettingsEditor()
 	m.broadcast()
+	if m.settingsPage != "" {
+		dispatchWindowEvent(m.settings, "devjay:settings-page", m.settingsPage)
+		m.settingsPage = ""
+	}
 }
 func (m *siteManager) createWindow(site Site) {
 	window := m.app.Window.NewWithOptions(application.WebviewWindowOptions{Name: "site-" + site.ID, Title: "DevJay Site · " + filepath.Base(site.Path), URL: "/?site=" + site.ID, Width: 290, Height: 174, Frameless: m.config.decoration() != "normal", X: 160, Y: 260, InitialPosition: application.WindowXY, DisableResize: true, CloseButtonState: application.ButtonDisabled, MaximiseButtonState: application.ButtonDisabled, BackgroundColour: application.NewRGB(20, 24, 32), Mac: application.MacWindow{CornerType: application.MacWindowCornerTypeRounded, CollectionBehavior: application.MacWindowCollectionBehaviorManaged | application.MacWindowCollectionBehaviorFullScreenNone, TabbingMode: application.MacWindowTabbingModeDisallowed}})
@@ -164,29 +179,16 @@ func (m *siteManager) createWindow(site Site) {
 			m.mu.Lock()
 			r := m.runtime[site.ID]
 			m.mu.Unlock()
-			if r == nil || r.Ready {
+			if r == nil || r.Ready || r.Window != window {
 				return
 			}
+			m.prepareSitePlacement(site.ID)
 			restoreWindowLayout(window, "site-"+site.ID)
 			applyTopPreference()
-			ctx, cancel := context.WithCancel(m.app.Context())
 			m.mu.Lock()
 			r.Ready = true
-			r.Cancel = cancel
-			r.GitControl = newGitWatchControl()
 			m.mu.Unlock()
-			go watchGitWithControl(ctx, site.Path, r.GitControl, func(status GitStatus) {
-				m.send(func() {
-					if current := m.runtime[site.ID]; current == r {
-						m.mu.Lock()
-						previous := current.Git
-						current.Git = status
-						m.mu.Unlock()
-						m.siteViewersChanged(site.ID, previous, status)
-						m.publishSnapshot(false)
-					}
-				})
-			})
+			m.startSiteGit(r)
 			m.broadcast()
 		})
 	})
@@ -204,7 +206,7 @@ func (m *siteManager) snapshot() appSnapshot {
 	preferences["showIDEStatus"] = m.config.showIDEStatus()
 	m.observeDevelopmentApps(m.monitor.windowNumbers, positions)
 	settingsOpen := m.monitor.settingsOpen
-	result := appSnapshot{StripMode: m.stripMode, ShortcutError: m.shortcutError, ShortcutHints: m.shortcutHints, Action: m.action, QuitMessage: m.quitMessage, SuggestedSite: m.suggestedSite, Layout: m.config.layout(), Placements: m.config.Placements, SettingsOpen: settingsOpen, Decoration: m.config.decoration(), Sites: []SiteView{}, Manual: m.config.Manual, Preferences: preferences}
+	result := appSnapshot{Profiles: m.profilesView(), StripMode: m.stripMode, ShortcutError: m.shortcutError, ShortcutHints: m.shortcutHints, Action: m.action, QuitMessage: m.quitMessage, SuggestedSite: m.suggestedSite, Layout: m.config.layout(), Placements: m.config.Placements, SettingsOpen: settingsOpen, Decoration: m.config.decoration(), Sites: []SiteView{}, Manual: m.config.Manual, Preferences: preferences}
 	if m.configError != nil {
 		result.Error = "Cannot read saved Sites. Configuration has not been overwritten: " + m.configError.Error()
 	}
@@ -212,8 +214,11 @@ func (m *siteManager) snapshot() appSnapshot {
 		r := items[site.ID]
 		prefix, name := displayPath(site.Path)
 		apps := m.developmentApps.readings[site.ID]
-		result.Sites = append(result.Sites, SiteView{Site: site, Prefix: prefix, Name: name, Window: states[site.ID], Position: positions[site.ID], Git: r.Git,
-			DevelopmentApps: apps.Apps, DevelopmentAppsKnown: apps.Known})
+		view := SiteView{NeedsPlacement: m.needsSitePlacement(site.ID), Enabled: siteEnabled(m.config, site.ID), FolderMissing: m.folders.missing[site.ID], Site: site, Prefix: prefix, Name: name, Window: states[site.ID], Position: positions[site.ID], Git: r.Git, DevelopmentApps: apps.Apps, DevelopmentAppsKnown: apps.Known}
+		result.Catalog = append(result.Catalog, view)
+		if view.Enabled {
+			result.Sites = append(result.Sites, view)
+		}
 	}
 	return result
 }
@@ -253,10 +258,12 @@ func (m *siteManager) activate(id string) {
 	focusSite(r.Window)
 	m.broadcast()
 }
-func (m *siteManager) save(c SiteConfig) error {
+func (m *siteManager) save(c SiteConfig) error { return m.saveForTargets(c, m.profiles.targets) }
+func (m *siteManager) saveForTargets(c SiteConfig, targets []string) error {
 	if m.configError != nil {
 		return userMessage("Saved Site configuration needs repair before making changes.")
 	}
+	c = captureProfileChanges(m.config, c, targets)
 	if err := saveSites(siteConfigPath(), c); err != nil {
 		return userMessage("Could not save Sites: " + err.Error())
 	}
@@ -269,22 +276,83 @@ func (m *siteManager) siteError(message string) {
 	m.app.Event.Emit("devjay:site-error", message)
 }
 
-func (m *siteManager) add(path string) {
-	site, err := newSite(path, m.config.Sites)
-	if err != nil {
-		m.siteError(err.Error())
-		return
-	}
-	c := m.config
-	c.Sites = append(slices.Clone(c.Sites), site)
-	c.Order = append(slices.Clone(c.Order), site.ID)
-	if err = m.save(c); err != nil {
-		m.siteError(err.Error())
-		return
-	}
-	m.createWindow(site)
-	m.siteError("")
-	m.broadcast()
+func (m *siteManager) add(path string) { m.addAfter(path, m.addAfterID) }
+func (m *siteManager) addAfter(path, after string) {
+	existing := slices.Clone(m.config.Sites)
+	profile := m.config.ActiveProfile
+	go func() {
+		site, err := newSite(path, existing)
+		reference := FolderReference{}
+		if err == nil {
+			reference = bookmarkFolder(site.Path)
+		}
+		m.send(func() {
+			if err != nil {
+				m.siteError(err.Error())
+				return
+			}
+			if profile != m.config.ActiveProfile {
+				m.siteError("The Profile changed. Add the folder again.")
+				return
+			}
+			if slices.ContainsFunc(m.config.Sites, func(s Site) bool { return s.Path == site.Path || s.ID == site.ID }) {
+				m.siteError("That folder is already a Site, or the list changed. Try again.")
+				return
+			}
+			if reference.Identity != "" && slices.ContainsFunc(m.config.Sites, func(s Site) bool { return m.config.Folders[s.ID].Identity == reference.Identity }) {
+				m.folders.due = time.Now()
+				m.siteError("That folder already belongs to a Site. DevJay is checking its new location; use Locate if needed.")
+				return
+			}
+			c := m.config
+			c.Sites = append(slices.Clone(c.Sites), site)
+			c.Folders = maps.Clone(c.Folders)
+			if c.Folders == nil {
+				c.Folders = map[string]FolderReference{}
+			}
+			c.Folders[site.ID] = reference
+			if after == "" {
+				items := orderedSites(m.config)
+				if len(items) > 0 {
+					after = items[len(items)-1].ID
+				}
+			}
+			desktop := len(m.config.Sites)
+			if index := slices.IndexFunc(orderedSites(m.config), func(s Site) bool { return s.ID == after }); index >= 0 {
+				desktop = index + 1
+			}
+			if position := m.monitor.positions[after]; position.Known {
+				desktop = position.Desktop + 1
+			}
+			c.Profiles = slices.Clone(c.Profiles)
+			for i, p := range c.Profiles {
+				order := []string{}
+				for _, previous := range orderedSites(applyProfileSettings(m.config, p.Settings)) {
+					order = append(order, previous.ID)
+				}
+				p.Settings.Order = insertSiteAfter(order, site.ID, after)
+				p.Settings.Manual = true
+				p.PlacementHints = maps.Clone(p.PlacementHints)
+				if p.PlacementHints == nil {
+					p.PlacementHints = map[string]SitePlacementHint{}
+				}
+				p.PlacementHints[site.ID] = SitePlacementHint{After: after, Desktop: desktop}
+				c.Profiles[i] = p
+			}
+			if i := profileIndex(c, c.ActiveProfile); i >= 0 {
+				c.Order, c.Manual = slices.Clone(c.Profiles[i].Settings.Order), true
+			} else {
+				c.Order = insertSiteAfter(c.Order, site.ID, after)
+			}
+			if err := m.saveForTargets(c, nil); err != nil {
+				m.siteError(err.Error())
+				return
+			}
+			m.createWindow(site)
+			m.siteError("")
+			m.broadcast()
+		})
+	}()
 }
 func (m *siteManager) remove(id string) {
 	if m.actionBusy() {
@@ -292,7 +360,7 @@ func (m *siteManager) remove(id string) {
 		return
 	}
 	r := m.runtime[id]
-	if r == nil {
+	if !slices.ContainsFunc(m.config.Sites, func(s Site) bool { return s.ID == id }) {
 		return
 	}
 	c := m.config
@@ -302,8 +370,25 @@ func (m *siteManager) remove(id string) {
 		c.Placements = maps.Clone(c.Placements)
 		delete(c.Placements, id)
 	}
-	if err := m.save(c); err != nil {
+	c.Folders = maps.Clone(c.Folders)
+	delete(c.Folders, id)
+	c.Profiles = slices.Clone(c.Profiles)
+	for i, p := range c.Profiles {
+		p.Excluded = slices.DeleteFunc(slices.Clone(p.Excluded), func(v string) bool { return v == id })
+		p.Settings.Order = slices.DeleteFunc(slices.Clone(p.Settings.Order), func(v string) bool { return v == id })
+		p.Settings.Placements = maps.Clone(p.Settings.Placements)
+		delete(p.Settings.Placements, id)
+		p.PlacementHints = maps.Clone(p.PlacementHints)
+		delete(p.PlacementHints, id)
+		c.Profiles[i] = p
+	}
+	if err := m.saveForTargets(c, nil); err != nil {
 		m.siteError(err.Error())
+		return
+	}
+	if r == nil {
+		m.siteError("")
+		m.broadcast()
 		return
 	}
 	for viewerID, viewer := range m.viewers {
@@ -328,7 +413,7 @@ func (m *siteManager) remove(id string) {
 	m.siteError("")
 	m.broadcast()
 }
-func (m *siteManager) browse() {
+func (m *siteManager) browse(after string) {
 	if m.browsing {
 		return
 	}
@@ -340,7 +425,7 @@ func (m *siteManager) browse() {
 			if err != nil {
 				m.siteError("Could not open the folder picker.")
 			} else if path != "" {
-				m.add(path)
+				m.addAfter(path, after)
 			} else {
 				m.siteError("")
 			}
@@ -348,6 +433,16 @@ func (m *siteManager) browse() {
 	}()
 }
 func (m *siteManager) registerEvents() {
+	m.registerFolderEvents()
+	m.registerProfileEvents()
+	m.app.Event.On("devjay:add-after", func(e *application.CustomEvent) {
+		if e.Sender != "settings" {
+			return
+		}
+		if id, ok := e.Data.(string); ok {
+			m.send(func() { m.addAfterID = id })
+		}
+	})
 	m.registerEditorSettingsEvents()
 	m.app.Event.On("devjay:app-tooltip-refresh", func(e *application.CustomEvent) {
 		m.send(func() {
@@ -459,12 +554,16 @@ func (m *siteManager) registerEvents() {
 			return
 		}
 		m.send(func() {
-			if !m.settings.IsVisible() || m.config.layout() != "custom" || !validPlacements(m.config.Sites, positions) {
+			if !m.settings.IsVisible() || m.config.layout() != "custom" || !validPlacements(visibleSites(m.config), positions) {
 				m.broadcast()
 				return
 			}
 			c := m.config
-			c.Placements = positions
+			c.Placements = maps.Clone(c.Placements)
+			if c.Placements == nil {
+				c.Placements = map[string]CardPlacement{}
+			}
+			maps.Copy(c.Placements, positions)
 			c.Manual = true
 			if err := m.save(c); err != nil {
 				m.siteError(err.Error())
@@ -527,7 +626,7 @@ func (m *siteManager) registerEvents() {
 	m.app.Event.On("devjay:settings-close", func(e *application.CustomEvent) {
 		if e.Sender == "settings" {
 			m.settings.Hide()
-			m.send(m.broadcast)
+			m.send(func() { m.profiles.targets = nil; m.broadcast() })
 		}
 	})
 	m.app.Event.On("devjay:activate", func(e *application.CustomEvent) {
@@ -548,7 +647,8 @@ func (m *siteManager) registerEvents() {
 	})
 	m.app.Event.On("devjay:browse", func(e *application.CustomEvent) {
 		if e.Sender == "settings" {
-			m.send(m.browse)
+			after, _ := e.Data.(string)
+			m.send(func() { m.browse(after) })
 		}
 	})
 	m.app.Event.On("devjay:remove", func(e *application.CustomEvent) {
@@ -565,7 +665,7 @@ func (m *siteManager) registerEvents() {
 				return
 			}
 			if value, ok := e.Data.(bool); ok {
-				m.send(func() { setPanelPreference(m.panel, pref, value); m.syncSettings() })
+				m.send(func() { m.setViewPreference(pref, value) })
 			}
 		})
 	}
@@ -660,21 +760,22 @@ func (m *siteManager) shouldQuit() bool {
 }
 
 func (m *siteManager) confirmRemove(id string) {
-	r := m.runtime[id]
-	if r == nil || m.removing {
+	index := slices.IndexFunc(m.config.Sites, func(s Site) bool { return s.ID == id })
+	if index < 0 || m.removing {
 		return
 	}
 	if m.actionBusy() {
 		m.siteError("Wait for the checkout action to finish before removing a Site.")
 		return
 	}
+	site := m.config.Sites[index]
 	m.removing = true
-	dialog := m.app.Dialog.Question().SetTitle("Remove Site?").SetMessage("Remove " + filepath.Base(r.Site.Path) + " from DevJay? Its saved position and order will be removed. Files in the folder are kept.").AttachToWindow(m.settings)
+	dialog := m.app.Dialog.Question().SetTitle("Remove Site?").SetMessage("Remove " + filepath.Base(site.Path) + " from all Profiles? Files in the folder are kept.").AttachToWindow(m.settings)
 	dialog.AddButton("Cancel").SetAsDefault().SetAsCancel().OnClick(func() { m.send(func() { m.removing = false }) })
 	dialog.AddButton("Remove Site").OnClick(func() {
 		m.send(func() {
 			m.removing = false
-			if m.runtime[id] == r {
+			if slices.Contains(m.config.Sites, site) {
 				m.remove(id)
 			}
 		})

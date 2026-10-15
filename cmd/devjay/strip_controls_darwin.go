@@ -159,7 +159,7 @@ func (m *siteManager) showControlPanel() {
 }
 
 func (m *siteManager) activateSiteNumber(index int) {
-	sites := orderedSites(m.config)
+	sites := visibleSites(m.config)
 	if index >= 0 && index < len(sites) {
 		m.activate(sites[index].ID)
 	}

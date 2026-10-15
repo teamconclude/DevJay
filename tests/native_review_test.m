@@ -212,7 +212,7 @@ static void test_card_height_refit(void) {
         styleMask:NSWindowStyleMaskBorderless backing:NSBackingStoreBuffered defer:NO] autorelease];
     panel.identifier = @"control-panel";
     NSRect original = panel.frame;
-    devjay_fit_card_window(panel, 160, 500, 300, 0); // Ordinary snapshots cannot shrink.
+    devjay_fit_card_window(panel, 160, 500, 300, 0); // Grow-only requests cannot shrink.
     assert(NSEqualRects(panel.frame, original));
     devjay_fit_card_window(panel, 160, 400, 300, 1); // Reject pre-resize measurements.
     assert(NSEqualRects(panel.frame, original));
@@ -222,11 +222,11 @@ static void test_card_height_refit(void) {
     assert(NSHeight(panel.frame) == 160 && NSWidth(panel.frame) == 500);
     assert(NSMinY(panel.frame) == NSMinY(original));
     devjay_fit_card_window(panel, 1, 500, 160, 1);
-    assert(NSHeight(panel.frame) == 120);
+    assert(NSHeight(panel.frame) == 132);
     panel.identifier = @"site-height-test";
-    devjay_fit_card_window(panel, 100, 500, 120, 1); // Site windows remain grow-only even with this flag.
-    assert(NSHeight(panel.frame) == 120);
-    devjay_fit_card_window(panel, 220, 500, 120, 0);
+    devjay_fit_card_window(panel, 100, 500, 132, 1); // Site windows remain grow-only even with this flag.
+    assert(NSHeight(panel.frame) == 132);
+    devjay_fit_card_window(panel, 220, 500, 132, 0);
     assert(NSHeight(panel.frame) == 220 && NSMinY(panel.frame) == NSMinY(original));
     panel.identifier = @"control-panel";
     panel.styleMask = NSWindowStyleMaskTitled;
@@ -234,6 +234,59 @@ static void test_card_height_refit(void) {
     devjay_fit_card_window(panel, 160, 500, 300, 1);
     assert([panel contentRectForFrameRect:panel.frame].size.height == 160);
     assert(NSHeight(panel.frame) > 160); // Native chrome is added once.
+}
+
+static void test_profile_layout_isolation(void) {
+    NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+    NSDictionary *legacy = [[defaults dictionaryForKey:@"DevJay.WindowLayout.v1"] retain];
+    NSDictionary *initial = @{@"control-panel": @{@"frame": @"{{20, 20}, {500, 180}}"}};
+    [defaults setObject:initial forKey:@"DevJay.WindowLayout.v1"];
+    NSString *signature = display_signature();
+    assert(signature.length);
+    NSString *a = @"DevJay.WindowLayout.Profile.test-home", *b = @"DevJay.WindowLayout.Profile.test-cabin";
+    [defaults removeObjectForKey:a]; [defaults removeObjectForKey:b];
+    devjay_profile_activate("test-home",signature.UTF8String,1);
+    assert([[defaults dictionaryForKey:a] isEqual:initial]);
+    NSWindow *window = [[[NSWindow alloc] initWithContentRect:NSMakeRect(50,60,290,174)
+        styleMask:NSWindowStyleMaskBorderless backing:NSBackingStoreBuffered defer:NO] autorelease];
+    window.identifier = @"site-profile-fixture";
+    DevJayLayoutObserver *observer = [[[DevJayLayoutObserver alloc] init] autorelease];observer->window=window;
+    objc_setAssociatedObject(window, &layoutObserverKey, observer, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    [observer save];
+    assert(devjay_profile_capture(window));
+    NSDictionary *home = [[defaults dictionaryForKey:a] copy];
+    devjay_profile_pause(1);
+    assert(!devjay_profile_capture(window));
+    [window setFrameOrigin:NSMakePoint(90,100)];[observer save];
+    assert([[defaults dictionaryForKey:a] isEqual:home]);
+    devjay_profile_pause(0);
+    [profileDisplaySignature release];profileDisplaySignature=[@"disconnected-display-set" copy];
+    [observer save];assert([[defaults dictionaryForKey:a] isEqual:home]);
+    devjay_profile_activate("test-cabin",signature.UTF8String,0);
+    assert(!observer->window); // Delayed outgoing callbacks cannot write Cabin.
+    [observer save]; assert(![[defaults dictionaryForKey:b] objectForKey:window.identifier]);
+    observer = [[[DevJayLayoutObserver alloc] init] autorelease]; observer->window=window;
+    objc_setAssociatedObject(window, &layoutObserverKey, observer, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    [observer save];
+    assert([[defaults dictionaryForKey:b] objectForKey:window.identifier]);
+    assert([[defaults dictionaryForKey:a] isEqual:home]);
+    assert([[defaults dictionaryForKey:@"DevJay.WindowLayout.v1"] isEqual:initial]);
+    devjay_profile_delete("test-cabin"); // The active layout is protected even at the native boundary.
+    assert([[defaults dictionaryForKey:b] objectForKey:window.identifier]);
+    devjay_profile_delete("test-home");
+    assert(![defaults objectForKey:a]);
+    assert([[defaults dictionaryForKey:@"DevJay.WindowLayout.v1"] isEqual:initial]);
+    [observer stopObserving];[home release];
+    [defaults removeObjectForKey:a];[defaults removeObjectForKey:b];
+    if(legacy)[defaults setObject:legacy forKey:@"DevJay.WindowLayout.v1"];else[defaults removeObjectForKey:@"DevJay.WindowLayout.v1"];
+    [legacy release];[layoutKey release];layoutKey=@"DevJay.WindowLayout.v1";
+    [profileDisplaySignature release];profileDisplaySignature=nil;profileLayoutPaused=NO;
+
+    NSArray *displays=@[@{@"Display Identifier":@"left",@"Spaces":@[@{@"type":@0,@"uuid":@"one"},@{@"type":@4,@"uuid":@"full-screen"},@{@"type":@0,@"uuid":@"two"}]},
+        @{@"Display Identifier":@"right",@"Spaces":@[@{@"type":@0,@"uuid":@"right-one"}]}];
+    assert([space_at_index(displays,@"left",1) isEqual:@"two"]);
+    assert([space_at_index(displays,@"right",0) isEqual:@"right-one"]);
+    assert(!space_at_index(displays,@"left",2));assert(!space_at_index(displays,@"missing",0));
 }
 
 int main(void) {
@@ -246,6 +299,7 @@ int main(void) {
         test_viewer_placement();
         test_switch_placement();
         test_card_height_refit();
+        test_profile_layout_isolation();
         NSView *panel = [[[NSView alloc] init] autorelease];
         NSView *confirmation = [[[NSView alloc] init] autorelease];
         IMP original = class_getMethodImplementation(NSView.class, @selector(acceptsFirstMouse:));

@@ -6,7 +6,8 @@ enum {
     DevJayMonitorPlacement = 1u << 1,
     DevJayMonitorVisibility = 1u << 2,
     DevJayMonitorApplications = 1u << 3,
-    DevJayMonitorPower = 1u << 4
+    DevJayMonitorPower = 1u << 4,
+    DevJayMonitorDisplays = 1u << 5
 };
 
 void devjay_start_native_monitor(void);

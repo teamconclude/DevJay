@@ -43,7 +43,7 @@ void devjay_start_native_monitor(void) {
         devjay_observe_native(workspace, name, DevJayMonitorPower | DevJayMonitorVisibility, NO);
     }
     devjay_observe_native(windows, NSApplicationDidChangeScreenParametersNotification,
-        DevJayMonitorPlacement | DevJayMonitorVisibility, NO);
+        DevJayMonitorDisplays | DevJayMonitorPlacement | DevJayMonitorVisibility, NO);
     devjay_observe_native(windows, DevJayLayoutChangedNotification,
         DevJayMonitorPlacement | DevJayMonitorVisibility, YES);
     for (NSNotificationName name in @[NSApplicationDidBecomeActiveNotification,

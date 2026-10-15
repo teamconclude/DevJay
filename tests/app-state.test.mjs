@@ -8,7 +8,9 @@ import {installCardActivation} from '../cmd/devjay/frontend/card-interaction.js'
 import {prCheckIndicator,prTagTone} from '../cmd/devjay/frontend/pr-status.js';
 import {nextNotice} from '../cmd/devjay/frontend/notice.js';
 import {rebasedPublishWarning} from '../cmd/devjay/frontend/suggested-actions.js';
-const source=(await readFile(new URL('../cmd/devjay/frontend/app.js',import.meta.url),'utf8')).replace(/^import .*;\n/gm,'');
+const navigationSource=(await readFile(new URL('../cmd/devjay/frontend/settings-navigation.js',import.meta.url),'utf8')).replace(/export /g,'');
+const profilesSource=(await readFile(new URL('../cmd/devjay/frontend/profile-settings.js',import.meta.url),'utf8')).replace(/export /g,'');
+const source=navigationSource+'\n'+profilesSource+'\n'+(await readFile(new URL('../cmd/devjay/frontend/app.js',import.meta.url),'utf8')).replace(/^import .*;\n/gm,'');
 
 // Exercise the real snapshot renderer with a small DOM and the Wails boundary.
 function app(search='', actionResult=true) {
@@ -20,6 +22,7 @@ function app(search='', actionResult=true) {
   get textContent(){return (this._textContent || '')+this.children.map(child=>child.textContent).join('');}
   set textContent(text){this._textContent=text;for(const child of this.children || [])child.parent=null;this.children=[];}
   append(...nodes){for(const n of nodes){n.remove();n.parent=this;this.children.push(n);}}
+  prepend(...nodes){for(const n of [...nodes].reverse())this.insertBefore(n,this.children[0]);}
   remove(){if(this.parent){const a=this.parent.children;a.splice(a.indexOf(this),1);this.parent=null;}}
   replaceChildren(...nodes){if(this.contains(document.activeElement))document.activeElement=document.body;this.textContent='';this.append(...nodes);}
   insertBefore(n,next){n.remove();n.parent=this;const i=this.children.indexOf(next);this.children.splice(i<0?this.children.length:i,0,n);}
@@ -32,10 +35,11 @@ function app(search='', actionResult=true) {
   querySelector(s){return this.querySelectorAll(s)[0]||null;}
   getBoundingClientRect(){return {left:10,top:20,width:270,height:140};}
   focus(){document.activeElement=this;}
+  select(){this.selectionStart=0;this.selectionEnd=(this.value||'').length;}
   get firstElementChild(){return this.children[0];}
  }
  const root=new Element('main'),body=new Element('body');
- document={body,activeElement:body,createElement:tag=>new Element(tag),createTextNode:text=>{const n=new Element('text');n.textContent=text;return n;},querySelector:s=>s==='#app'?root:body.querySelector(s),querySelectorAll:s=>body.querySelectorAll(s),addEventListener(){}};
+ document={body,activeElement:body,createElement:tag=>new Element(tag),createElementNS:(_namespace,tag)=>new Element(tag),createTextNode:text=>{const n=new Element('text');n.textContent=text;return n;},querySelector:s=>s==='#app'?root:body.querySelector(s),querySelectorAll:s=>body.querySelectorAll(s),addEventListener(){}};
  body.append(root);
  const events={},calls=[];
  let drag, bridgeReport;
@@ -44,7 +48,7 @@ function app(search='', actionResult=true) {
   window:{addEventListener:noop,getSelection:()=>({isCollapsed:true})},
   Events:{On:(name,fn)=>events[name]=fn,Emit:(...args)=>{calls.push(args);return Promise.resolve();}},Window:{},
   createBridge:(send,report)=>{bridgeReport=report;return {emit:async(n,d)=>{await send(`devjay:${n}`,d);report(actionResult===false?'Delivery failed':'',actionResult===false);return actionResult;},reply:noop};},
-  uiReady:()=>()=>readyCount++,installCardSizing:()=>noop,mountEditorSettings:()=>({renderEditor:noop}),
+  uiReady:()=>()=>readyCount++,installCardSizing:()=>noop,installPathLabels:()=>noop,mountEditorSettings:()=>({renderEditor:noop}),
   mountGitViewer:()=>noop,cardStatus,rebasedPublishWarning,cardBounds,
   mountSuggestedActions:()=>noop,mountViewerSuggestions:()=>noop,
   installPanelDrag:(_list,options)=>{drag=options;},installCardActivation,installDragOriginGuard:noop,installCardHover:noop,installCardMenu:noop,
@@ -58,6 +62,91 @@ function app(search='', actionResult=true) {
 const site=(id,branch='main')=>({id,path:`/tmp/${id}`,prefix:'/tmp/',name:id,git:{branch},position:{label:'Desktop 1'},window:{}});
 const state=sites=>({sites,preferences:{},layout:'horizontal',settingsOpen:true});
 const appLabels=view=>view.root.querySelectorAll('.development-app-group').map(group=>group.attrs['aria-label']);
+
+test('Settings sidebar switches pages without rebuilding their controls',()=>{
+ const view=app('?settings');view.snapshot(state([site('a')]));
+ const pages=view.root.querySelectorAll('.settings-page'),buttons=view.root.querySelectorAll('.settings-nav-item');
+ assert.equal(pages.length,5);assert.equal(pages.filter(p=>!p.hidden).length,1);
+ const row=view.root.querySelector('.site-row');
+ buttons.find(b=>b.textContent==='Windows & Cards').onclick();
+ assert.equal(pages.filter(p=>!p.hidden)[0].id,'settings-page-windows');
+ buttons.find(b=>b.textContent==='Sites').onclick();
+ assert.equal(view.root.querySelector('.site-row'),row);
+ assert.equal(buttons.find(b=>b.textContent==='Sites').attrs['aria-current'],'page');
+ view.event('devjay:settings-page','profiles');
+ assert.equal(pages.filter(p=>!p.hidden)[0].id,'settings-page-profiles');
+});
+
+test('Locate folder retains the Site ID and renamed folders update Settings labels',async()=>{
+ const view=app('?settings'),item={...site('a'),folderMissing:true};view.snapshot(state([item]));
+ view.root.querySelector('.locate-site').onclick();await Promise.resolve();
+ assert.equal(view.calls.find(([name])=>name==='devjay:locate-folder')[1],'a');
+ assert.match(view.root.querySelector('.row-status').textContent,/Folder missing/);
+ view.snapshot(state([{...item,path:'/tmp/renamed',name:'renamed',folderMissing:false}]));
+ assert.match(view.root.querySelector('.path').textContent,/renamed/);
+ assert.equal(view.root.querySelector('.site-row').dataset.id,'a');
+});
+
+test('Profile scope preserves the active Profile and sends only selected target IDs',async()=>{
+ const view=app('?settings'),profiles={current:'home',profiles:[{id:'home',name:'Home'},{id:'cabin',name:'Cabin'}],targets:['home'],displays:[],automatic:true};
+ view.snapshot({...state([site('a')]),profiles});
+ const boxes=view.root.querySelector('.profile-scope-options').querySelectorAll('input');
+ assert.equal(boxes[0].checked,true);assert.equal(boxes[0].disabled,true);
+ boxes[1].checked=true;boxes[1].onchange();await Promise.resolve();
+ const request=view.calls.find(([name,data])=>name==='devjay:profile'&&data.operation==='scope')[1];
+ assert.deepEqual(Array.from(request.targets),['home','cabin']);
+});
+
+const profileState={current:'home',profiles:[{id:'home',name:'Home'},{id:'office',name:'Office'}],targets:['home'],displays:[],automatic:true};
+test('New profile dialog requires a name, survives snapshots, and saves only on submit',async()=>{
+ const view=app('?settings');view.snapshot({...state([]),profiles:profileState});
+ const intro=view.root.querySelector('.profile-intro');intro.querySelector('button').onclick();
+ const dialog=view.document.body.querySelector('.profile-dialog'),input=dialog.querySelector('input'),form=dialog.querySelector('form');
+ const submit=dialog.querySelectorAll('button').find(b=>b.type==='submit');
+ assert.equal(view.document.body.querySelector('.profile-modal').hidden,false);assert.equal(view.document.activeElement,input);assert.equal(submit.disabled,true);
+ input.value='   ';await form.onsubmit({preventDefault(){}});assert.equal(view.calls.filter(([name])=>name==='devjay:profile').length,0);
+ input.value=' Laptop ';input.oninput();assert.equal(submit.disabled,false);
+ view.snapshot({...state([]),profiles:{...profileState,targets:['home','office']}});
+ assert.equal(input.value,' Laptop ');assert.equal(view.calls.filter(([name])=>name==='devjay:profile').length,0);
+ await form.onsubmit({preventDefault(){}});
+ assert.equal(view.document.body.querySelector('.profile-modal').hidden,true);
+ const sent=view.calls.find(([name])=>name==='devjay:profile')[1];assert.equal(sent.operation,'create');assert.equal(sent.name,'Laptop');
+ assert.equal(view.root.querySelector('.profile-active'),null);
+ assert.equal(view.root.querySelectorAll('select').find(s=>s.attrs['aria-label']==='Active profile').value,'home');
+});
+
+test('Manage profiles renames the chosen row independently of the selector and retains failed edits',async()=>{
+ const view=app('?settings',false);view.snapshot({...state([]),profiles:profileState});
+ const row=view.root.querySelectorAll('.profile-list-row')[1];row.querySelectorAll('button')[0].onclick();
+ const dialog=view.document.body.querySelector('.profile-dialog'),input=dialog.querySelector('input');assert.equal(input.value,'Office');
+ input.value='Studio';await dialog.querySelector('form').onsubmit({preventDefault(){}});
+ const sent=view.calls.find(([name])=>name==='devjay:profile')[1];assert.equal(sent.id,'office');assert.equal(sent.operation,'rename');assert.equal(sent.name,'Studio');
+ assert.equal(view.document.body.querySelector('.profile-modal').hidden,false);assert.equal(input.value,'Studio');assert.match(dialog.querySelector('.error').textContent,/Could not save/);
+ assert.equal(dialog.querySelectorAll('button')[0].disabled,false);
+});
+
+test('Profile deletion protects the active row and requires a separate confirmation',async()=>{
+ const view=app('?settings');view.snapshot({...state([]),profiles:profileState});
+ const rows=view.root.querySelectorAll('.profile-list-row');assert.equal(rows[0].querySelectorAll('button')[1].disabled,true);
+ const remove=rows[1].querySelectorAll('button')[1];assert.equal(remove.disabled,false);remove.onclick();
+ const dialog=view.document.body.querySelector('.profile-dialog');assert.match(dialog.textContent,/Delete “Office”/);assert.equal(dialog.querySelector('input').parent.hidden,true);assert.equal(view.calls.filter(([name])=>name==='devjay:profile').length,0);
+ dialog.querySelectorAll('button')[0].onclick();assert.equal(view.document.body.querySelector('.profile-modal').hidden,true);assert.equal(view.calls.filter(([name])=>name==='devjay:profile').length,0);
+ remove.onclick();await dialog.querySelector('form').onsubmit({preventDefault(){}});
+ const sent=view.calls.find(([name])=>name==='devjay:profile')[1];assert.equal(sent.id,'office');assert.equal(sent.operation,'delete');assert.equal(view.document.body.querySelector('.profile-modal').hidden,true);
+});
+
+test('Profile dialog traps Tab and closes on Escape without closing Settings',()=>{
+ const view=app('?settings');view.snapshot({...state([]),profiles:profileState});
+ view.root.querySelector('.profile-intro').querySelector('button').onclick();
+ const dialog=view.document.body.querySelector('.profile-dialog'),modal=dialog.parent;
+ const key=dialog.listeners.keydown[0],cancel=dialog.querySelectorAll('button')[0];
+ assert.equal(view.root.inert,true);
+ key({key:'Tab',shiftKey:true,preventDefault(){}});assert.equal(view.document.activeElement,cancel);
+ key({key:'Tab',shiftKey:false,preventDefault(){}});assert.equal(view.document.activeElement,dialog.querySelector('input'));
+ let stopped=false;key({key:'Escape',preventDefault(){},stopPropagation(){stopped=true;}});
+ assert.equal(stopped,true);assert.equal(modal.hidden,true);assert.equal(view.root.inert,false);
+ assert.equal(view.calls.filter(([name])=>name==='devjay:settings-close').length,0);
+});
 
 test('held shortcut hints follow card order, skip unavailable bindings and never navigate',()=>{
  const view=app(),items=Array.from({length:10},(_,i)=>site(`site-${i}`));

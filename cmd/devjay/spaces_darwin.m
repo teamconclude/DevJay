@@ -60,6 +60,20 @@ static NSArray *spaces(void) {
     return result;
 }
 
+static NSString *space_at_index(NSArray *displays, NSString *identifier, NSInteger ordinal) {
+    if (ordinal < 0) return nil;
+    for (NSDictionary *display in displays) {
+        if (![display[@"Display Identifier"] isEqual:identifier] && displays.count != 1) continue;
+        NSInteger index = 0;
+        for (NSDictionary *space in display[@"Spaces"]) {
+            if ([space[@"type"] integerValue] != 0) continue;
+            if (index++ == ordinal) return [space[@"uuid"] isKindOfClass:NSString.class] ? space[@"uuid"] : nil;
+        }
+    }
+    return nil;
+}
+NSString *dp_space_for_index(NSString *display, NSInteger index) { return space_at_index(display_spaces(), display, index); }
+
 NSString *dp_window_space(NSWindow *window) {
     if (!dp_spaces_available() || window.windowNumber <= 0 ||
         (window.collectionBehavior & NSWindowCollectionBehaviorCanJoinAllSpaces)) return nil;

@@ -12,6 +12,8 @@ A **Site** is a local folder—usually a Git clone or worktree—with a small De
 
 A Site follows its folder: checking out another branch updates the card. Switching Sites activates a window without changing branches or files. Any local folder can be a Site.
 
+Registered Sites also follow recognized folder renames and moves. If a folder cannot be found, **Settings → Sites → Locate…** reconnects it while keeping its desktop, position, and card order.
+
 ## Install or build
 
 DevJay requires **macOS 13 or newer**. Git is needed for repository status; GitHub PR information also needs the GitHub CLI (`gh`) and your existing sign-in.
@@ -36,6 +38,8 @@ This builds and opens `bin/DevJay.app`. Development builds use separate Sites an
 4. Repeat for your other folders, then click control-panel cards to move between them.
 
 In Settings, choose a horizontal, vertical, or custom layout, adjust window appearance, and select your preferred editor. Drag cards by their headings while Settings is open to rearrange them. Removing a Site unregisters it after confirmation and leaves its folder untouched.
+
+Settings has sidebar pages for **Sites**, **Profiles**, **Windows & Cards**, **Editors & Apps**, and **Keyboard Shortcuts**. Profiles remember arrangements for monitor combinations such as Office, Home, and Laptop, and can switch automatically when displays change. Use **Apply changes to** to edit one or several Profiles. See the [Profile guide](docs/USER_GUIDE.md#profiles-and-settings-pages) for setup and placement recovery.
 
 ## Check your work
 

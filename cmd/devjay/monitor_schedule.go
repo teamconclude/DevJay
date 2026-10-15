@@ -57,11 +57,15 @@ func (m *siteManager) updateGitWatchActivity() {
 }
 
 func (m *siteManager) handleNativeMonitorEvents(flags nativeMonitorFlags, now time.Time) {
+	if flags&nativeMonitorDisplays != 0 {
+		m.profiles.due = now.Add(2 * time.Second)
+	}
 	if flags == 0 {
 		return
 	}
 	if flags&nativeMonitorPower != 0 {
 		m.recoverViews()
+		m.profiles.due = now.Add(2 * time.Second)
 	}
 	if flags&(nativeMonitorSpace|nativeMonitorPlacement) != 0 {
 		// The notification can arrive before AppKit finishes the transition.
@@ -92,6 +96,8 @@ func (m *siteManager) handleNativeMonitorEvents(flags nativeMonitorFlags, now ti
 }
 
 func (m *siteManager) pollMonitoring(now time.Time) {
+	m.pollProfiles(now)
+	m.pollFolders(now)
 	if m.monitor.nativeDue.IsZero() || !now.Before(m.monitor.nativeDue) {
 		m.recoverViews()
 		m.monitor.windowsValid = false
@@ -122,6 +128,14 @@ func (m *siteManager) nextMonitorDelay(now time.Time) time.Duration {
 		due = now
 	}
 	if !m.recovery.paused {
+		due = earlierDeadline(due, m.profiles.due)
+		if !m.folders.busy && m.configError == nil {
+			if m.folders.due.IsZero() {
+				due = now
+			} else {
+				due = earlierDeadline(due, m.folders.due)
+			}
+		}
 		due = earlierDeadline(due, m.monitor.settleDue)
 		due = earlierDeadline(due, m.developmentApps.nextDue(now))
 		due = earlierDeadline(due, m.recovery.nextDue())
@@ -169,6 +183,13 @@ func (m *siteManager) refreshWindowVisibility() {
 }
 
 func snapshotForWindow(snapshot appSnapshot, id, viewerSite string) appSnapshot {
+	if id == "settings" && snapshot.Catalog != nil {
+		snapshot.Sites = snapshot.Catalog
+	}
+	snapshot.Catalog = nil
+	if id != "settings" {
+		snapshot.Profiles = ProfilesView{}
+	}
 	if id != "control-panel" {
 		snapshot.ShortcutHints = 0 // Only the full strip renders modifier hints.
 	}

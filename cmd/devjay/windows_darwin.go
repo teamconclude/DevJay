@@ -128,6 +128,7 @@ func refreshAppTooltip(window *application.WebviewWindow) {
 }
 
 func fitControlPanel(window *application.WebviewWindow, config SiteConfig) {
+	sites := visibleSites(config)
 	mode := 0
 	if config.layout() == "vertical" {
 		mode = 1
@@ -141,7 +142,7 @@ func fitControlPanel(window *application.WebviewWindow, config SiteConfig) {
 	}
 	width, height := 0, 0
 	if mode == 2 && len(config.Placements) > 0 {
-		for i, site := range orderedSites(config) {
+		for i, site := range sites {
 			p, ok := config.Placements[site.ID]
 			if !ok {
 				p = CardPlacement{X: (i % 3) * 224, Y: (i / 3) * 160}
@@ -151,7 +152,7 @@ func fitControlPanel(window *application.WebviewWindow, config SiteConfig) {
 		}
 	}
 	application.InvokeSync(func() {
-		C.devjay_fit_panel(window.NativeWindow(), C.int(mode), C.int(len(config.Sites)), C.int(header), C.double(width), C.double(height))
+		C.devjay_fit_panel(window.NativeWindow(), C.int(mode), C.int(len(sites)), C.int(header), C.double(width), C.double(height))
 	})
 }
 

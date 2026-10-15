@@ -437,24 +437,13 @@ void devjay_show_settings(void *pointer, void *parentPointer) {
     NSWindow *window = (NSWindow *)pointer;
     NSWindow *parent = (NSWindow *)parentPointer;
     window.identifier = @"settings";
-    WKWebView *view = devjay_webview(window.contentView);
-    if (!view) { devjay_show_popup(window, parent); return; }
-    // Measure natural content height, excluding the viewport minimum and the
-    // footer's spare space. This also respects the user's current window width.
-    NSString *script = @"(() => { const root = document.querySelector('#app'); if (!root) return 0; const saved = root.style.minHeight; root.style.minHeight = '0'; const height = Math.ceil(root.getBoundingClientRect().height); root.style.minHeight = saved; window.scrollTo(0, 0); return height; })()";
-    [view evaluateJavaScript:script completionHandler:^(id result, NSError *error) {
-        if (!error && [result isKindOfClass:NSNumber.class]) {
-            CGFloat height = [result doubleValue];
-            NSRect area = (parent.screen ?: NSScreen.mainScreen).visibleFrame;
-            if (isfinite(height) && height > 0) {
-                NSRect frame = window.frame;
-                NSRect fitted = [window frameRectForContentRect:NSMakeRect(0, 0, view.bounds.size.width, height + 2)];
-                frame.size.height = MIN(MAX(fitted.size.height, window.minSize.height), MAX(1, area.size.height - 16));
-                [window setFrame:frame display:NO];
-            }
-        }
-        devjay_show_popup(window, parent);
-    }];
+    // Sidebar pages scroll inside a stable, user-resizable Settings window.
+    NSRect area = (parent.screen ?: NSScreen.mainScreen).visibleFrame;
+    NSRect frame = window.frame;
+    frame.size.width = MIN(frame.size.width, MAX(1, area.size.width - 16));
+    frame.size.height = MIN(frame.size.height, MAX(1, area.size.height - 16));
+    [window setFrame:frame display:NO];
+    devjay_show_popup(window, parent);
 }
 static void devjay_show_context_window(NSWindow *window, NSWindow *parent, double x, double y, double width, double height, BOOL viewer) {
     NSRect anchor = parent.frame;

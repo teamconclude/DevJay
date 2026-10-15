@@ -84,7 +84,7 @@ enum { DevJayStripFull, DevJayStripCompact, DevJayStripHidden };
     // Reserve room for the keycap so long names remain readable and truncated.
     NSMutableParagraphStyle *paragraph = [[[NSMutableParagraphStyle alloc] init] autorelease];
     paragraph.alignment = NSTextAlignmentCenter;
-    paragraph.lineBreakMode = NSLineBreakByTruncatingTail;
+    paragraph.lineBreakMode = NSLineBreakByTruncatingMiddle;
     NSDictionary *titleStyle = @{NSFontAttributeName:self.font, NSForegroundColorAttributeName:self.contentTintColor,
         NSParagraphStyleAttributeName:paragraph};
     CGFloat height = [self.title sizeWithAttributes:titleStyle].height;
@@ -137,7 +137,7 @@ static void style_strip_button(NSButton *button, BOOL active) {
         : [NSColor colorWithRed:0.235 green:0.282 blue:0.361 alpha:1]).CGColor;
     button.contentTintColor = [NSColor colorWithRed:0.93 green:0.95 blue:0.98 alpha:1];
     button.font = [NSFont systemFontOfSize:16 weight:NSFontWeightSemibold];
-    button.cell.lineBreakMode = NSLineBreakByTruncatingTail;
+    button.cell.lineBreakMode = NSLineBreakByTruncatingMiddle;
 }
 
 @interface DevJayStripControls : NSObject {

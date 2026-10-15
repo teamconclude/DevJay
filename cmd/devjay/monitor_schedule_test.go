@@ -34,10 +34,15 @@ func TestSnapshotForWindowKeepsOnlyItsSiteWithoutChangingSharedState(t *testing.
 
 func TestMonitorSleepsUntilActualDeadline(t *testing.T) {
 	now := time.Unix(1000, 0)
-	m := siteManager{monitor: monitorSchedule{nativeDue: now.Add(nativeMonitorFallback)}}
-	if got := m.nextMonitorDelay(now); got != nativeMonitorFallback {
+	m := siteManager{monitor: monitorSchedule{nativeDue: now.Add(nativeMonitorFallback)}, folders: folderMonitor{due: now.Add(15 * time.Second)}, profiles: profileMonitor{due: now.Add(nativeMonitorFallback)}}
+	if got := m.nextMonitorDelay(now); got != 15*time.Second {
 		t.Fatal("quiet manager polls", got)
 	}
+	m.folders.busy = true
+	if got := m.nextMonitorDelay(now); got != nativeMonitorFallback {
+		t.Fatal("running folder scan was scheduled twice", got)
+	}
+	m.folders.busy = false
 	m.recovery.add("site-a")
 	m.recovery.request("site-a", now, false)
 	if got := m.nextMonitorDelay(now); got != uiRecoveryDelay {
@@ -50,6 +55,17 @@ func TestMonitorSleepsUntilActualDeadline(t *testing.T) {
 	m.recovery.paused = true
 	if got := m.nextMonitorDelay(now); got != nativeMonitorFallback {
 		t.Fatal("sleeping manager runs UI work", got)
+	}
+}
+
+func TestSettingsReceivesHiddenSitesButStripDoesNot(t *testing.T) {
+	all := appSnapshot{Profiles: ProfilesView{Current: "home"}, Sites: []SiteView{{Site: Site{ID: "a"}, Enabled: true}}, Catalog: []SiteView{{Site: Site{ID: "a"}, Enabled: true}, {Site: Site{ID: "b"}}}}
+	settings, strip := snapshotForWindow(all, "settings", ""), snapshotForWindow(all, "control-panel", "")
+	if len(settings.Sites) != 2 || settings.Profiles.Current != "home" || settings.Catalog != nil {
+		t.Fatal("Settings lost catalog")
+	}
+	if len(strip.Sites) != 1 || strip.Profiles.Current != "" || strip.Catalog != nil {
+		t.Fatal("strip leaked hidden Sites or Profile metadata")
 	}
 }
 

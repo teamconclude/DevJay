@@ -10,6 +10,46 @@ import (
 	"time"
 )
 
+func TestGitMonitorRejectsReplacementSiteFolder(t *testing.T) {
+	repo := trackedFixture(t)
+	control := newGitWatchControl()
+	control.folderIdentity = folderIdentity(repo)
+	if control.folderIdentity == "" {
+		t.Fatal("missing folder identity")
+	}
+	if err := os.Rename(repo, repo+"-moved"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(repo + "-moved") })
+	if err := os.Mkdir(repo, 0700); err != nil {
+		t.Fatal(err)
+	}
+	fixtureGit(t, repo, "init")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	statuses := make(chan GitStatus, 1)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		watchGitWithControl(ctx, repo, control, func(s GitStatus) {
+			select {
+			case statuses <- s:
+			default:
+			}
+		})
+	}()
+	select {
+	case status := <-statuses:
+		if status.Head != "" || status.Branch != "" || !strings.Contains(status.LocalNote, "Folder moved") {
+			t.Fatalf("read replacement folder: %+v", status)
+		}
+	case <-ctx.Done():
+		t.Fatal("no missing-folder status")
+	}
+	cancel()
+	<-done
+}
+
 func TestGitChangeScheduleCoalescesAndBoundsWrites(t *testing.T) {
 	now := time.Unix(100, 0)
 	var schedule gitChangeSchedule

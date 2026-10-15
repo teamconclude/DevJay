@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -28,16 +29,22 @@ type CardPlacement struct {
 	Z int `json:"z"`
 }
 type SiteConfig struct {
-	PreferredEditor  string                   `json:"preferredEditor,omitempty"`
-	UseProjectEditor *bool                    `json:"useProjectEditor,omitempty"`
-	ShowIDEStatus    *bool                    `json:"showIDEStatus,omitempty"`
-	Layout           string                   `json:"layout,omitempty"`
-	Placements       map[string]CardPlacement `json:"placements,omitempty"`
-	Decoration       string                   `json:"decoration,omitempty"`
-	Version          int                      `json:"version"`
-	Sites            []Site                   `json:"sites"`
-	Manual           bool                     `json:"manual"`
-	Order            []string                 `json:"order"`
+	Profiles          []Profile                  `json:"profiles,omitempty"`
+	ActiveProfile     string                     `json:"activeProfile,omitempty"`
+	AutomaticProfiles *bool                      `json:"automaticProfiles,omitempty"`
+	AllDesktops       *bool                      `json:"allDesktops,omitempty"`
+	OnTop             *bool                      `json:"onTop,omitempty"`
+	Folders           map[string]FolderReference `json:"folders,omitempty"`
+	PreferredEditor   string                     `json:"preferredEditor,omitempty"`
+	UseProjectEditor  *bool                      `json:"useProjectEditor,omitempty"`
+	ShowIDEStatus     *bool                      `json:"showIDEStatus,omitempty"`
+	Layout            string                     `json:"layout,omitempty"`
+	Placements        map[string]CardPlacement   `json:"placements,omitempty"`
+	Decoration        string                     `json:"decoration,omitempty"`
+	Version           int                        `json:"version"`
+	Sites             []Site                     `json:"sites"`
+	Manual            bool                       `json:"manual"`
+	Order             []string                   `json:"order"`
 }
 
 func (c SiteConfig) useProjectEditor() bool { return c.UseProjectEditor == nil || *c.UseProjectEditor }
@@ -138,6 +145,9 @@ func loadSites(path string) (SiteConfig, error) {
 	if c.Sites == nil {
 		c.Sites = []Site{}
 	}
+	if err := validateProfiles(c); err != nil {
+		return c, err
+	}
 	return c, nil
 }
 func saveSites(path string, c SiteConfig) error {
@@ -191,7 +201,16 @@ func newSite(path string, existing []Site) (Site, error) {
 		}
 	}
 	sum := sha256.Sum256([]byte(resolved))
-	return Site{hex.EncodeToString(sum[:16]), resolved}, nil
+	id := hex.EncodeToString(sum[:16])
+	// A moved Site retains its ID. Reusing its old path must create another ID.
+	for slices.ContainsFunc(existing, func(s Site) bool { return s.ID == id }) {
+		var raw [16]byte
+		if _, err := rand.Read(raw[:]); err != nil {
+			return Site{}, err
+		}
+		id = hex.EncodeToString(raw[:])
+	}
+	return Site{id, resolved}, nil
 }
 func displayPath(path string) (prefix, name string) {
 	home, _ := os.UserHomeDir()

@@ -65,7 +65,7 @@ func main() {
 	})
 	manager.panel = panel
 	manager.watchView("control-panel", panel)
-	settings := app.Window.NewWithOptions(application.WebviewWindowOptions{Name: "settings", EnableFileDrop: true, Title: "DevJay Settings", URL: "/?settings", Width: 700, Height: 570, MinWidth: 540, MinHeight: 400, Hidden: true, MaximiseButtonState: application.ButtonDisabled, BackgroundColour: application.NewRGB(20, 24, 32), Mac: application.MacWindow{CornerType: application.MacWindowCornerTypeRounded, CollectionBehavior: application.MacWindowCollectionBehaviorMoveToActiveSpace | application.MacWindowCollectionBehaviorFullScreenNone, TabbingMode: application.MacWindowTabbingModeDisallowed}})
+	settings := app.Window.NewWithOptions(application.WebviewWindowOptions{Name: "settings", EnableFileDrop: true, Title: "DevJay Settings", URL: "/?settings", Width: 880, Height: 620, MinWidth: 760, MinHeight: 440, Hidden: true, MaximiseButtonState: application.ButtonDisabled, BackgroundColour: application.NewRGB(20, 24, 32), Mac: application.MacWindow{CornerType: application.MacWindowCornerTypeRounded, CollectionBehavior: application.MacWindowCollectionBehaviorMoveToActiveSpace | application.MacWindowCollectionBehaviorFullScreenNone, TabbingMode: application.MacWindowTabbingModeDisallowed}})
 	manager.settings = settings
 	manager.watchView("settings", settings)
 	settings.OnWindowEvent(events.Common.WindowFilesDropped, func(e *application.WindowEvent) {
@@ -94,7 +94,7 @@ func main() {
 		}
 		e.Cancel()
 		settings.Hide()
-		manager.send(manager.broadcast)
+		manager.send(func() { manager.profiles.targets = nil; manager.broadcast() })
 	})
 	panel.OnWindowEvent(events.Common.WindowRuntimeReady, func(*application.WindowEvent) {
 		manager.send(func() {
@@ -104,6 +104,7 @@ func main() {
 					log.Print("Control Panel click handling unavailable")
 				}
 				manager.panelReady = true
+				manager.applyProfileViewSettings()
 			}
 			if manager.openSettingsPending {
 				manager.openSettings()
@@ -151,10 +152,10 @@ func main() {
 		})
 	})
 	manager.allDesktopsItem = view.AddCheckbox("Control panel always visible", true).OnClick(func(ctx *application.Context) {
-		manager.send(func() { setPanelPreference(panel, "allDesktops", ctx.IsChecked()); manager.syncSettings() })
+		manager.send(func() { manager.setViewPreference("allDesktops", ctx.IsChecked()) })
 	})
 	manager.onTopItem = view.AddCheckbox("Show all windows on top", true).OnClick(func(ctx *application.Context) {
-		manager.send(func() { setPanelPreference(panel, "onTop", ctx.IsChecked()); manager.syncSettings() })
+		manager.send(func() { manager.setViewPreference("onTop", ctx.IsChecked()) })
 	})
 	view.Add("Settings…").SetAccelerator("CmdOrCtrl+,").OnClick(func(*application.Context) { manager.send(manager.openSettings) })
 	view.Add("Reload windows").OnClick(func(*application.Context) {
@@ -173,7 +174,7 @@ func main() {
 	}
 	menu.AddRole(application.WindowMenu)
 	app.Menu.Set(menu)
-	for _, site := range manager.config.Sites {
+	for _, site := range visibleSites(manager.config) {
 		manager.createWindow(site)
 	}
 	app.Event.OnApplicationEvent(events.Common.ApplicationStarted, func(*application.ApplicationEvent) { go manager.run() })

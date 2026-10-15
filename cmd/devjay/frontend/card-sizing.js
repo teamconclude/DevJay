@@ -1,5 +1,4 @@
-// Only grow when content overflows. Keep manually chosen space and avoid
-// shrinking/jumping each time a transient status or suggested action disappears.
+// Independent Site windows only grow when their content overflows.
 export function requiredContentHeight(viewportHeight, scrollHeight, clientHeight) {
   if (![viewportHeight, scrollHeight, clientHeight].every(Number.isFinite) || viewportHeight <= 0 || clientHeight <= 0) return null;
   const overflow = scrollHeight - clientHeight;
@@ -22,20 +21,20 @@ export function fittedPanelHeight(list) {
 }
 
 export function installCardSizing(root, list, requestFit, busy = () => false) {
-  let frame = 0, lastRequest = '', fittedContext;
+  let frame = 0, lastRequest = '';
   function measure() {
     frame = 0;
     if (busy() || !list.children.length) return;
     const workspace = document.body.classList.contains('workspace');
     const decoration = document.body.dataset.decoration;
-    const context = [decoration, document.body.dataset.layout, document.body.dataset.freePlacement].join('/');
-    const refit = !workspace && fittedContext !== context;
+    const refit = !workspace;
     // WebKit can clip a flex card internally without overflowing the list.
     // Re-measure its natural content after status/app rows arrive, too.
-    const panelHeight = workspace ? null : Math.max(120, fittedPanelHeight(list));
+    // Leave one small line of breathing room beyond the fitted content. Fit in
+    // both directions so disappearing status rows release their old height.
+    const panelHeight = workspace ? null : Math.max(120, fittedPanelHeight(list)) + 12;
     const height = workspace ? requiredContentHeight(window.innerHeight, root.scrollHeight, root.clientHeight)
-      : refit ? panelHeight : requiredContentHeight(window.innerHeight, panelHeight, window.innerHeight);
-    fittedContext = context;
+      : Math.abs(panelHeight - window.innerHeight) > 1 ? panelHeight : null;
     if (height === null) { lastRequest = ''; return; }
     const size = {height, viewportWidth: window.innerWidth, viewportHeight: window.innerHeight, decoration, refit};
     const key = JSON.stringify(size);

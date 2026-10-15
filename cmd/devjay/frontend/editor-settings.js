@@ -1,6 +1,5 @@
 export function mountEditorSettings(root, request) {
   const make=(tag,text)=>{const n=document.createElement(tag);if(text)n.textContent=text;return n;};
-  root.append(make('h2','Editor'));
   const row=make('div');row.className='editor-settings-row';
   const label=make('label','Preferred editor'),editors=make('select');
   editors.setAttribute('aria-label','Preferred editor');label.append(editors);row.append(label);

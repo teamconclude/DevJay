@@ -4,6 +4,9 @@ import { createBridge } from './bridge.js';
 import { nextNotice } from './notice.js';
 import { uiReady } from './ui-ready.js';
 import { installCardSizing } from './card-sizing.js';
+import { installPathLabels } from './path-label.js';
+import { mountSettingsNavigation } from './settings-navigation.js';
+import { mountProfileSettings } from './profile-settings.js';
 import { mountEditorSettings } from './editor-settings.js';
 import { mountGitViewer } from './git-viewer.js';
 import { cardStatus } from './card-status.js';
@@ -21,8 +24,9 @@ const siteID = params.get('site');
 const settings = params.has('settings');
 const actions = params.has('actions');
 const viewer = params.has('viewer');
-let renderSuggestedActions, renderViewerSnapshot, editorSettings;
+let renderSuggestedActions, renderViewerSnapshot, editorSettings, settingsNavigation, profileSettings;
 const root = document.querySelector('#app');
+if (!viewer && !actions) installPathLabels(document.body);
 let snapshot = {sites: []}, dragging = null, panelDragging = false;
 let sitePublishPending = null;
 let nativeVisible = true, renderedSnapshot = false, deferredSnapshot = null;
@@ -62,7 +66,11 @@ for (const name of ['pr-open-result','app-activate-result']) Events.On(`devjay:$
   }
 });
 if (!settings && !viewer && !actions) installCardMenu(root, data => emit('card-menu', data), !siteID);
-function pathLabel(site) { const n = el('div', 'path'); n.title = site.path; n.append(el('span', 'prefix', site.prefix), el('strong', '', site.name)); return n; }
+function pathLabel(site) {
+  const n = el('div', 'path');n.title=site.path;n.setAttribute('aria-label',site.path);
+  n.dataset.pathPrefix=site.prefix||'';n.dataset.pathName=site.name||'';
+  n.append(el('span','prefix',n.dataset.pathPrefix),el('strong','',n.dataset.pathName));return n;
+}
 const waitingAttentionDuration = 4000;
 const waitingAttention = new Map();
 let waitingAttentionSerial = 0;
@@ -298,7 +306,7 @@ function details(site, parent, showIDEStatus) {
   if (showIDEStatus) parent.append(developmentAppIndicator(site));
 }
 
-let list, decoration, layout, siteError, siteErrorTimer, shortcutError;
+let list, decoration, layout, siteError, siteErrorTimer, shortcutError, addAfter;
 if (viewer) {
   document.body.className = 'git-viewer';
   let currentView = null, currentSnapshot = {sites:[]};
@@ -317,48 +325,58 @@ if (viewer) {
   document.addEventListener('keydown', e => { if (e.key === 'Escape') emit('suggestions-close'); });
 } else if (settings) {
   document.body.className = 'settings';
-  const sitesHeading = el('div', 'sites-heading'); sitesHeading.append(el('h2', '', 'Sites'), button('Add', () => emit('browse'))); root.append(sitesHeading);
-  root.append(el('p', 'help', 'Drop a folder below to add a site.'));
+  settingsNavigation = mountSettingsNavigation(root);
+  const pages=settingsNavigation.sections;
+  profileSettings=mountProfileSettings(pages.profiles,settingsNavigation.scope,data=>emit('profile',data));
+  Events.On('devjay:settings-page',event=>settingsNavigation.show(event.data));
+  let section=pages.sites;
+  const sitesHeading = el('div', 'sites-heading'); sitesHeading.append(el('h2', '', 'Sites'), button('Add', () => emit('browse',addAfter?.value||''))); section.append(sitesHeading);
+  section.append(el('p', 'help', 'Drop a folder below to add a Site to all Profiles. Uncheck a Site to hide it in the selected Profiles.'));
+  const afterLabel=el('label','profile-field','Add new Sites after');addAfter=el('select');addAfter.setAttribute('aria-label','Add new Sites after');addAfter.onchange=()=>emit('add-after',addAfter.value);afterLabel.append(addAfter);section.append(afterLabel);
   list = el('div', 'site-list'); list.id = 'site-drop-zone'; list.setAttribute('data-file-drop-target', ''); list.setAttribute('aria-label', 'Sites');
   const dropArea = el('div', 'site-drop-area');
-  siteError = el('div', 'site-drop-error'); siteError.hidden = true; siteError.setAttribute('role', 'alert');
-  dropArea.append(list, siteError); root.append(dropArea);
+  siteError = el('div', 'settings-error'); siteError.hidden = true; siteError.setAttribute('role', 'alert');
+  dropArea.append(list); section.append(dropArea);
   const sorting = el('div', 'sorting'); sorting.setAttribute('role', 'radiogroup'); sorting.setAttribute('aria-label', 'Sorting'); sorting.append(el('span', '', 'Sorting:'));
   for (const [value, title] of [['name', 'By name'], ['manual', 'Manual']]) {
     const label = el('label'); const radio = el('input'); radio.type = 'radio'; radio.name = 'sorting'; radio.value = value;
     radio.onchange = () => { if (radio.checked) emit('sorting', value); };
     label.append(radio, document.createTextNode(title)); sorting.append(label);
   }
-  root.append(sorting);
-  editorSettings = mountEditorSettings(root, data => emit('editor-settings-request', data));
+  section.append(sorting);
+  section=pages.editors;
+  section.append(el('h2','','Editors & Apps'));
+  editorSettings = mountEditorSettings(section, data => emit('editor-settings-request', data));
   Events.On('devjay:editor-settings-state', event => editorSettings.renderEditor(event.data));
-  root.append(el('h2', '', 'Global shortcuts'));
-  root.append(el('p', 'help', '⌃⌥⌘M toggles a single row of Site names. Right-click → Hide strip leaves a tiny restore button. ⌃⌥⌘1–9 visits a Site’s desktop in card order. Hold Control–Option–Command first to see the numbers on the cards. When hidden, the row appears only while those modifiers are held. ⌃⌥⌘0 restores the full strip. These work while other apps are active.'));
-  shortcutError = el('p', 'help error'); shortcutError.hidden = true; shortcutError.setAttribute('role', 'status'); root.append(shortcutError);
-  root.append(el('h2', '', 'View settings'));
-  for (const [key, title] of [['allDesktops', 'Control panel always visible'], ['onTop', 'Show all windows on top'], ['showIDEStatus', 'Show development app status']]) {
+  section=pages.shortcuts;
+  section.append(el('h2', '', 'Keyboard Shortcuts'));
+  section.append(el('p', 'help', '⌃⌥⌘M toggles a single row of Site names. Right-click → Hide strip leaves a tiny restore button. ⌃⌥⌘1–9 visits a Site’s desktop in card order. Hold Control–Option–Command first to see the numbers on the cards. When hidden, the row appears only while those modifiers are held. ⌃⌥⌘0 restores the full strip. These work while other apps are active.'));
+  shortcutError = el('p', 'help error'); shortcutError.hidden = true; shortcutError.setAttribute('role', 'status'); section.append(shortcutError);
+  section=pages.windows;
+  section.append(el('h2', '', 'Windows & Cards'));
+  for (const [key, title] of [['allDesktops', 'Control panel always visible'], ['onTop', 'Show all windows on top']]) {
     const label = el('label', 'preference'); const box = el('input'); box.type = 'checkbox'; box.dataset.pref = key; box.onchange = () => emit(key, box.checked);
-    label.append(box, document.createTextNode(title)); root.append(label);
+    label.append(box, document.createTextNode(title)); section.append(label);
   }
-  root.append(el('p', 'help', 'Show IDEs, terminals and AI apps on Site cards. Turning this off stops app detection.'));
+  const appLabel=el('label','preference'),appStatus=el('input');appStatus.type='checkbox';appStatus.dataset.pref='showIDEStatus';appStatus.onchange=()=>emit('showIDEStatus',appStatus.checked);appLabel.append(appStatus,document.createTextNode('Show development app status'));pages.editors.append(el('h3','','App indicators'),appLabel,el('p','help','Show IDEs, terminals and AI apps on Site cards. Turning this off stops app detection.'));
   const panelLayout = el('label', 'decoration-setting', 'Control panel layout');
   layout = el('select'); layout.setAttribute('aria-label', 'Control panel layout');
   for (const value of ['horizontal', 'vertical', 'custom']) {
     const option = el('option', '', value[0].toUpperCase() + value.slice(1)); option.value = value; layout.append(option);
   }
   layout.onchange = () => emit('layout', layout.value);
-  panelLayout.append(layout); root.append(panelLayout);
-  const resetCards = button('Reset card positions', () => emit('reset-placements'), 'reset-card-positions'); root.append(resetCards);
+  panelLayout.append(layout); section.append(panelLayout);
+  const resetCards = button('Reset card positions', () => emit('reset-placements'), 'reset-card-positions'); section.append(resetCards);
   const appearance = el('label', 'decoration-setting', 'Window decoration');
   decoration = el('select'); decoration.setAttribute('aria-label', 'Window decoration');
   for (const [value, title] of [['none', 'None'], ['minimal', 'Minimal'], ['normal', 'Normal']]) {
     const option = el('option', '', title); option.value = value; decoration.append(option);
   }
   decoration.onchange = () => emit('decoration', decoration.value);
-  appearance.append(decoration); root.append(appearance);
+  appearance.append(decoration); section.append(appearance);
   const actions = el('div', 'settings-actions');
   actions.append(button('Done', () => emit('settings-close'), 'done'));
-  root.append(notice, actions);
+  settingsNavigation.footer.append(siteError,notice,actions);
   document.addEventListener('keydown', e => { if (e.key === 'Escape') emit('settings-close'); });
 } else if (siteID) {
   document.body.className = 'workspace'; document.body.dataset.decoration = 'none'; root.title = 'Drag to move this Site';
@@ -510,12 +528,15 @@ function render(state) {
   document.body.dataset.decoration = state.decoration || 'none';
   if (decoration) decoration.value = state.decoration || 'none';
   if (settings) {
+    profileSettings.render(state.profiles);
+    const afterKey=JSON.stringify(state.sites.map(s=>[s.id,s.name]));
+    if(addAfter.dataset.signature!==afterKey){const selected=addAfter.value;addAfter.replaceChildren();const end=el('option','','Last Site');end.value='';addAfter.append(end);for(const site of state.sites){const option=el('option','',site.name);option.value=site.id;addAfter.append(option);}addAfter.value=state.sites.some(s=>s.id===selected)?selected:'';addAfter.dataset.signature=afterKey;}
     shortcutError.textContent = state.shortcutError || '';
     shortcutError.hidden = !state.shortcutError;
     document.querySelectorAll('[data-pref]').forEach(n => { n.checked = n.dataset.pref === 'showIDEStatus' ? showIDEStatus : state.preferences[n.dataset.pref]; });
     document.querySelectorAll('[name=sorting]').forEach(n => { n.checked = n.value === (state.manual ? 'manual' : 'name'); });
     if (dragging) return;
-    const signature = state.sites.map(s => s.id).join(',');
+    const signature = JSON.stringify(state.sites.map(s => [s.id,s.path,s.enabled,s.needsPlacement]));
     if (list.dataset.signature !== signature) {
       const focused = document.activeElement?.closest('.site-row');
       const focusedID = focused?.dataset.id;
@@ -524,23 +545,27 @@ function render(state) {
       state.sites.forEach((site, index) => {
         const row = el('div', 'site-row'); row.dataset.id = site.id;
         const description = el('div', 'row-description'); description.append(pathLabel(site), el('div', 'row-status help')); row.append(description);
+        const included=el('input');included.type='checkbox';included.checked=site.enabled!==false;included.setAttribute('aria-label',`Show ${site.name} in selected Profiles`);included.onchange=()=>emit('profile',{operation:'site',siteID:site.id,enabled:included.checked});row.prepend(included);
+        const locate=button('Locate…',()=>emit('locate-folder',site.id),'locate-site');locate.title=`Locate folder for ${site.name}`;locate.setAttribute('aria-label',locate.title);const rowActions=el('div','site-row-actions');rowActions.append(locate);
+        if(site.needsPlacement){const keep=button('Keep here',()=>emit('profile',{operation:'placement',siteID:site.id}),'keep-placement');keep.title='Keep this Site on its current desktop in this Profile';rowActions.append(keep);}
+        row.append(rowActions);
         const remove = button('×', () => emit('remove', site.id), 'remove-site');
         remove.setAttribute('aria-label', `Remove ${site.name}`); remove.title = 'Remove Site'; row.append(remove);
         row.tabIndex = 0; row.setAttribute('aria-label', `Reorder ${site.name}`); row.title = 'Drag to reorder, or use Up and Down arrow keys';
         row.onkeydown = e => { if (e.target === row && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) { e.preventDefault(); reorder(site.id, index + (e.key === 'ArrowUp' ? -1 : 1)); } };
-        row.onpointerdown = e => { if (!e.target.closest('button')) { row.focus(); startSiteDrag(e, row, row); } };
+        row.onpointerdown = e => { if (!e.target.closest('button,input')) { row.focus(); startSiteDrag(e, row, row); } };
         list.append(row);
       });
       const restored = [...list.children].find(row => row.dataset.id === focusedID);
       if (restored) (focusRemove ? restored.querySelector('.remove-site') : restored).focus();
     }
-    for (const site of state.sites) { const row = [...list.children].find(n => n.dataset.id === site.id); const status = row.querySelector('.row-status'); status.textContent = [site.git.branch, site.position.label || 'Desktop unknown'].filter(Boolean).join(' · '); status.title = status.textContent; }
+    for (const site of state.sites) { const row = [...list.children].find(n => n.dataset.id === site.id); const status = row.querySelector('.row-status'); status.textContent = site.folderMissing ? 'Folder missing — Locate…' : site.enabled === false ? 'Hidden in this Profile' : site.needsPlacement ? 'Choose a desktop, then Keep here' : [site.git.branch, site.position.label || 'Desktop unknown'].filter(Boolean).join(' · '); status.title = status.textContent; }
   } else if (siteID) {
     const site = state.sites.find(s => s.id === siteID); if (!site) { list.replaceChildren(); list.dataset.details = ''; return; }
     details(site, list, showIDEStatus); root.title = `${site.path}\n${site.position.label || 'Desktop unknown'}\nDrag to move this Site`;
   } else {
     if (!state.sites.length) {
-      if (!list.firstElementChild?.classList.contains('empty')) list.replaceChildren(button('Add your first Site in Settings', () => emit('settings-open'), 'empty'));
+      if (!list.firstElementChild?.classList.contains('empty')) list.replaceChildren(button('Manage Sites in Settings', () => emit('settings-open'), 'empty'));
       refreshAppTooltip(state);
       return;
     }

@@ -51,3 +51,15 @@ test('branch chooser opening waits for the Site-bound backend acknowledgement',a
  assert.equal(await opened,false);
  assert.match(reports.at(-1)[0],/Site's window/);
 });
+
+test('Profile dialogs wait for persistence and report rejected changes',async()=>{
+ for(const operation of ['create','rename','delete']){
+  let sent,finished=false;
+  const bridge=createBridge(async(name,data)=>{sent=[name,data];},()=>{},100);
+  const pending=bridge.emit('profile',{operation,id:'office',name:'Office'}).then(ok=>{finished=true;return ok;});
+  await Promise.resolve();await Promise.resolve();
+  assert.equal(sent[0],'devjay:profile');assert.ok(sent[1].requestID);assert.equal(finished,false);
+  bridge.reply({requestID:sent[1].requestID,error:'Could not save Profiles'});
+  assert.equal(await pending,false);
+ }
+});

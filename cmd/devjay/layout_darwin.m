@@ -5,7 +5,10 @@
 #import "spaces_darwin.h"
 #import "native_monitor_darwin.h"
 
-static NSString * const layoutKey = @"DevJay.WindowLayout.v1";
+static NSString *layoutKey = @"DevJay.WindowLayout.v1";
+static NSString *profileDisplaySignature;
+static BOOL profileLayoutPaused;
+static NSString *display_signature(void);
 static const char layoutObserverKey;
 @class DevJayLayoutObserver;
 
@@ -142,7 +145,8 @@ static NSScreen *nearest_screen(NSRect frame) {
 
 @implementation DevJayLayoutObserver
 - (void)save {
-    if (adjusting || window == nil) return;
+    if (adjusting || window == nil || profileLayoutPaused ||
+        (profileDisplaySignature && ![profileDisplaySignature isEqual:display_signature()])) return;
     // AppKit can move windows before sending the display-change notification.
     // Do not overwrite their old edge distances with that automatic position.
     if (hasPlacement) {
@@ -191,6 +195,8 @@ static NSScreen *nearest_screen(NSRect frame) {
     }
 }
 - (void)restoreDesktop {
+    if (!window || profileLayoutPaused ||
+        (profileDisplaySignature && ![profileDisplaySignature isEqual:display_signature()])) return;
     if (desiredSpace.length && !(window.collectionBehavior & NSWindowCollectionBehaviorCanJoinAllSpaces)) {
         if (![dp_window_space(window) isEqual:desiredSpace]) dp_move_to_space(window, desiredSpace);
     }
@@ -218,6 +224,7 @@ static NSScreen *nearest_screen(NSRect frame) {
 - (void)windowMoved:(NSNotification *)notification { [self save]; }
 - (void)screensChanged:(NSNotification *)notification {
     dp_invalidate_space_cache();
+    if (profileLayoutPaused || (profileDisplaySignature && ![profileDisplaySignature isEqual:display_signature()])) return;
     BOOL wasAdjusting = adjusting;
     adjusting = YES;
     NSScreen *screen = nil;
@@ -268,6 +275,8 @@ void devjay_restore_layout(void *pointer, const char *identifier) {
     if (window == nil) return;
     NSString *key = identifier ? [NSString stringWithUTF8String:identifier] : nil;
     if (!key.length) return;
+    DevJayLayoutObserver *previous = objc_getAssociatedObject(window, &layoutObserverKey);
+    [previous stopObserving];
     window.identifier = key;
     NSDictionary *all = [NSUserDefaults.standardUserDefaults dictionaryForKey:layoutKey];
     id state = all[window.identifier];
@@ -358,10 +367,85 @@ void devjay_fit_card_window(void *pointer, double height, double viewportWidth, 
     NSRect content = [window contentRectForFrameRect:window.frame];
     if (fabs(content.size.width - viewportWidth) > 2 || fabs(content.size.height - viewportHeight) > 2) return;
     BOOL fitPanel = refit && [window.identifier isEqual:@"control-panel"];
-    if (fitPanel) height = MAX(120, height);
+    if (fitPanel) height = MAX(132, height);
     NSRect wanted = [window frameRectForContentRect:NSMakeRect(0, 0, content.size.width, height)];
     DPRect available = dp_rect(placement_bounds(screen));
     NSRect frame = ns_rect(fitPanel ? dp_fit_height(dp_rect(window.frame), available, wanted.size.height)
         : dp_grow_height(dp_rect(window.frame), available, wanted.size.height));
     if (!NSEqualRects(frame, window.frame)) [window setFrame:frame display:YES];
+}
+
+// Display IDs identify hardware; names, resolution and position are presentation.
+static NSString *display_signature(void) {
+    NSMutableArray *ids = [NSMutableArray array];
+    for (NSScreen *screen in NSScreen.screens) { NSString *identifier = screen_identifier(screen); if (identifier.length) [ids addObject:identifier]; }
+    return [[ids sortedArrayUsingSelector:@selector(compare:)] componentsJoinedByString:@","];
+}
+
+char *devjay_profile_displays(void) {
+    NSMutableArray *displays = [NSMutableArray array];
+    for (NSScreen *screen in NSScreen.screens) {
+        [displays addObject:@{@"id":screen_identifier(screen), @"name":screen.localizedName ?: @"Display",
+            @"x":@(screen.frame.origin.x), @"y":@(screen.frame.origin.y), @"width":@(screen.frame.size.width), @"height":@(screen.frame.size.height)}];
+    }
+    NSData *data = [NSJSONSerialization dataWithJSONObject:@{@"signature":display_signature(), @"displays":displays} options:0 error:nil];
+    NSString *json = data ? [[[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] autorelease] : nil;
+    return json ? strdup(json.UTF8String) : NULL;
+}
+
+void devjay_profile_pause(int paused) { profileLayoutPaused = paused != 0; }
+
+int devjay_profile_capture(void *pointer) {
+    DevJayLayoutObserver *observer = objc_getAssociatedObject((NSWindow *)pointer, &layoutObserverKey);
+    if (!observer || !observer->window || observer->adjusting || profileLayoutPaused ||
+        ![profileDisplaySignature isEqual:display_signature()]) return 0;
+    [observer save];
+    return 1;
+}
+
+int devjay_profile_seed_site(const char *identifier, const char *after, int desktop, const char *enabledJSON) {
+    if (profileLayoutPaused || ![profileDisplaySignature isEqual:display_signature()]) return 0;
+    NSString *key = [@"site-" stringByAppendingString:[NSString stringWithUTF8String:identifier]];
+    NSDictionary *saved = [NSUserDefaults.standardUserDefaults dictionaryForKey:layoutKey] ?: @{};
+    if (saved[key]) return 0; // Never displace an already saved Site.
+    NSString *neighbor = [@"site-" stringByAppendingString:[NSString stringWithUTF8String:after]];
+    NSDictionary *anchor = saved[neighbor] ?: saved[@"control-panel"];
+    if (![anchor isKindOfClass:NSDictionary.class] || ![anchor[@"screen"] isKindOfClass:NSString.class]) return 0;
+    NSString *space = dp_space_for_index(anchor[@"screen"],desktop);
+    if (!space.length) return 0;
+    NSData *data = [[NSString stringWithUTF8String:enabledJSON] dataUsingEncoding:NSUTF8StringEncoding];
+    NSArray *enabled = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+    for (NSString *site in enabled) {
+        NSDictionary *placement = saved[[@"site-" stringByAppendingString:site]];
+        if ([placement[@"spaceUUID"] isEqual:space]) return 0;
+    }
+    NSMutableDictionary *placement = [[anchor mutableCopy] autorelease];
+    placement[@"spaceUUID"] = space;
+    NSMutableDictionary *all = [[saved mutableCopy] autorelease];all[key] = placement;
+    [NSUserDefaults.standardUserDefaults setObject:all forKey:layoutKey];
+    return 1;
+}
+
+void devjay_profile_activate(const char *identifier, const char *signature, int migrate) {
+    // Freeze outgoing records before replacing observers. A changed display set
+    // already prevents save from recording macOS's automatic fallback positions.
+    for (NSWindow *window in NSApp.windows) {
+        DevJayLayoutObserver *observer = objc_getAssociatedObject(window, &layoutObserverKey);
+        [observer save]; [observer stopObserving];
+    }
+    NSString *key = [@"DevJay.WindowLayout.Profile." stringByAppendingString:[NSString stringWithUTF8String:identifier]];
+    if (migrate && ![NSUserDefaults.standardUserDefaults objectForKey:key]) {
+        NSDictionary *legacy = [NSUserDefaults.standardUserDefaults dictionaryForKey:@"DevJay.WindowLayout.v1"];
+        if (legacy) [NSUserDefaults.standardUserDefaults setObject:legacy forKey:key];
+    }
+    if (![layoutKey isEqual:@"DevJay.WindowLayout.v1"]) [layoutKey release];
+    layoutKey = [key copy];
+    [profileDisplaySignature release]; profileDisplaySignature = [[NSString stringWithUTF8String:signature] copy];
+    profileLayoutPaused = NO;
+}
+
+void devjay_profile_delete(const char *identifier) {
+    if (!identifier || !identifier[0]) return;
+    NSString *key = [@"DevJay.WindowLayout.Profile." stringByAppendingString:[NSString stringWithUTF8String:identifier]];
+    if (![key isEqual:layoutKey]) [NSUserDefaults.standardUserDefaults removeObjectForKey:key];
 }

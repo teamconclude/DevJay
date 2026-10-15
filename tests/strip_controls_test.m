@@ -132,6 +132,7 @@ int main(void) {
             assert(buttons.count == 2);
             DevJayStripRestoreButton *first = buttons[0], *second = buttons[1];
             assert([first.title isEqual:@"Alpha"] && [second.title isEqual:@"Beta"]);
+            assert(first.cell.lineBreakMode == NSLineBreakByTruncatingMiddle);
             assert(first.layer.borderWidth == 2 && second.layer.borderWidth == 1);
             assert([first acceptsFirstMouse:nil] && !first.acceptsFirstResponder);
             [second performClick:nil]; assert([selectedSite isEqual:@"site-b"]);
