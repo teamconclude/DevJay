@@ -357,18 +357,23 @@ body[data-monitor-visible="false"] .development-app-working-dots > span { animat
 .development-app-icon [hidden] { display: none; }
 .metric-row { display: flex; align-items: center; gap: 5px; min-width: 0; line-height: 19px; white-space: nowrap; flex-wrap: wrap; }
 .metric-label { flex: 0 0 39px; color: #97a6bb; font-size: 10px; }
+.metric-label.metric-icon-label { flex-basis: 11px; height: 14px; line-height: 0; display: inline-flex; align-items: center; }
+.metric-icon-label svg { display: block; width: 11px; height: 11px; }
 .metric { display: inline-flex; align-items: baseline; gap: 3px; border-radius: 4px; padding: 0 4px; background: #ffffff07; }
+.metric.local-edits { color: #9cc6ff; }
 .metric strong { font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .metric-symbol { font-size: 13px; font-weight: 600; }
 .metric-unit { font-size: 10px; }
 .status-line { display: flex; align-items: baseline; gap: 5px; font-size: 11px; line-height: 14px; min-width: 0; }
 .status-line > span:last-child { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .status-symbol { flex: 0 0 11px; font-weight: 600; text-align: center; }
+.status-line.base-update { color: #a6b3c6; }
+button.base-update:hover, button.base-update.status-hover, button.base-update:focus-visible { color: #c0ccdd; }
 .status-line.error, .status-line.warning { font-weight: 600; }
 .quiet-status { font-weight: 500; }
 .pr-status.muted, .freshness { font-size: 10px; }
 .strip .card-status .copyable, .strip .card-status .copyable * { pointer-events: auto; --wails-draggable: no-drag; }
-.review-row .metric-label { flex-basis: auto; min-width: 39px; font-variant-numeric: tabular-nums; }
+.review-row .metric-label:not(.metric-icon-label) { flex-basis: auto; min-width: 39px; font-variant-numeric: tabular-nums; }
 
 /* Scroll only the outer window/list if the display cannot fit all content. */
 /* fit-content keeps flex cards at least as tall as their contents in WebKit,

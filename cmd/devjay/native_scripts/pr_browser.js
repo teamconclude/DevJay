@@ -10,11 +10,14 @@ function browserWindows(browser) {
   const app = Application(browser.id);
   if (!app.running()) return [];
   // Resolve windows by stable IDs before changing front-to-back ordering.
-  return app.windows().map(function (window) {
+  return (app.windows() || []).map(function (window) {
     const id = window.id();
     const stable = app.windows.byId(id);
-    return {app: app, browser: browser, window: stable, tabs: stable.tabs()};
-  });
+    // Auxiliary/closing browser windows can report null instead of a tab list.
+    // They cannot be inspected or used as a destination for a new PR tab.
+    const tabs = stable.tabs();
+    return Array.isArray(tabs) && tabs.length ? {app: app, browser: browser, window: stable, tabs: tabs} : null;
+  }).filter(function (entry) { return entry !== null; });
 }
 
 function activatePRWindow(entry, tabIndex) {

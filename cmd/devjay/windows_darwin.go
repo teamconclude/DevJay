@@ -17,6 +17,7 @@ void devjay_save_layout(void *window);
 char *devjay_desktop_position(void *window);
 void devjay_show_settings(void *window, void *parent);
 void devjay_show_suggestions(void *window, void *parent, double x, double y, double width, double height);
+void devjay_show_message(void *parent, double x, double y, double width, double height, const char *title, const char *message);
 void devjay_show_viewer(void *window, void *parent, double x, double y, double width, double height);
 void devjay_apply_top_preference(void);
 void devjay_fit_card_window(void *window, double height, double viewportWidth, double viewportHeight, int refit);
@@ -193,5 +194,22 @@ func fitCardWindow(window *application.WebviewWindow, height, viewportWidth, vie
 	}
 	application.InvokeSync(func() {
 		C.devjay_fit_card_window(window.NativeWindow(), C.double(height), C.double(viewportWidth), C.double(viewportHeight), shrink)
+	})
+}
+
+func showMessageDialog(parent *application.WebviewWindow, anchor *cardAnchor, title, message string) {
+	windowNavigationGeneration.Add(1)
+	if anchor == nil || !anchor.valid() {
+		anchor = &cardAnchor{}
+	}
+	nativeTitle, nativeMessage := C.CString(title), C.CString(message)
+	defer C.free(unsafe.Pointer(nativeTitle))
+	defer C.free(unsafe.Pointer(nativeMessage))
+	application.InvokeSync(func() {
+		var nativeParent unsafe.Pointer
+		if parent != nil {
+			nativeParent = parent.NativeWindow()
+		}
+		C.devjay_show_message(nativeParent, C.double(anchor.X), C.double(anchor.Y), C.double(anchor.Width), C.double(anchor.Height), nativeTitle, nativeMessage)
 	})
 }

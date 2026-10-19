@@ -190,13 +190,19 @@ test('desktop Site and panel branch labels do not open the branch chooser',async
  }
 });
 
-test('metric headings stay plain text while counts keep their viewer and browser actions',async()=>{
+test('metric headings stay noninteractive while counts keep their viewer and browser actions',async()=>{
  for(const search of ['', '?site=a']) {
   const view=app(search), item=site('a');
   item.git={branch:'main',changes:2,ahead:1,behind:0,github:'PR #12 · Approved',pullRequests:[{number:12}],reviews:[{number:12,blockers:1,warnings:0}]};
   view.snapshot(state([item]));
   const labels=view.root.querySelectorAll('.metric-label');
-  assert.deepEqual(labels.map(node=>node.textContent),['Edits','Branch','Review']);
+  assert.deepEqual(labels.map(node=>node.textContent || node.attrs['aria-label']),['Edits','Branch','Review']);
+  for(const [index,label] of labels.entries()) {
+   const name=['Edits','Branch','Review'][index];
+   assert.equal(label.textContent,'');assert.equal(label.attrs.role,'img');
+   assert.equal(label.title,name);assert.equal(label.dataset.appTooltip,name);
+   assert.equal(label.querySelector('svg').attrs['aria-hidden'],'true');
+  }
   assert.match(view.root.querySelector('.card-status').textContent,/2edits/);
   for(const label of labels){assert.equal(label.tag,'span');assert.equal(label.onclick,undefined);}
   const counts=view.root.querySelectorAll('.metric');
@@ -407,6 +413,7 @@ test('PR tags live in card headers, open the PR, and disappear when the PR is go
   await tag.onclick();
   const request=view.calls.find(([name])=>name==='devjay:pr-open')[1];
   assert.equal(request.siteID,'a');assert.equal(request.number,1234);
+  assert.deepEqual(JSON.parse(JSON.stringify(request.anchor)),{x:10,y:20,width:270,height:140});
   assert.equal(view.calls.some(([name])=>name==='devjay:activate'||name==='devjay:viewer-open'),false);
   view.snapshot(state([{...item,git:{branch:'feature',github:'No open pull request'}}]));
   assert.equal(view.root.querySelector('.pr-tag'),null);
@@ -486,12 +493,12 @@ test('edit and commit badges retain their category for click and context menus',
 });
 
 
-test('PR navigation errors appear only in the requesting card window',()=>{
+test('PR navigation information appears only in the requesting card window',()=>{
  const panel=app(),siteView=app('?site=a');
- const result={siteID:'a',number:1234,sender:'control-panel',error:'Browser did not confirm opening the PR.'};
+ const result={siteID:'a',number:1234,sender:'control-panel',message:'Opened in your default browser.'};
  panel.event('devjay:pr-open-result',result);siteView.event('devjay:pr-open-result',result);
- assert.equal(panel.root.querySelector('.notice').textContent,result.error);
- assert.equal(panel.root.querySelector('.notice').classList.contains('error'),true);
+ assert.equal(panel.root.querySelector('.notice').textContent,result.message);
+ assert.equal(panel.root.querySelector('.notice').classList.contains('error'),false);
  assert.equal(siteView.root.querySelector('.notice').textContent,'');
 });
 
@@ -1142,7 +1149,7 @@ test('merged cards explicitly say PR merged and preserve browser click and menu 
   assert.equal(row.textContent,'✓PR merged');
   assert.equal(cardMenuTarget(row.children[1]).number,42);
   await row.onclick();
-  assert.deepEqual(JSON.parse(JSON.stringify(view.calls.filter(([name])=>name==='devjay:pr-open'))),[['devjay:pr-open',{siteID:'a',number:42}]]);
+  assert.deepEqual(JSON.parse(JSON.stringify(view.calls.filter(([name])=>name==='devjay:pr-open'))),[['devjay:pr-open',{siteID:'a',number:42,anchor:{x:10,y:20,width:270,height:140}}]]);
   assert.equal(view.calls.some(([name])=>name==='devjay:action-prepare'||name==='devjay:action-confirm'),false);
  }
 });

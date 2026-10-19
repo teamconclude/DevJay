@@ -122,6 +122,45 @@ static void test_confirmation_card_anchor(void) {
     method_setImplementation(activation, original);
 }
 
+static void test_message_dialog_card_anchor(void) {
+    NSRect area = NSScreen.mainScreen.visibleFrame;
+    if (area.size.width < 1000 || area.size.height < 550) return;
+    NSWindow *strip = [[[NSWindow alloc] initWithContentRect:NSMakeRect(area.origin.x+30,area.origin.y+10,900,174)
+        styleMask:NSWindowStyleMaskBorderless backing:NSBackingStoreBuffered defer:NO] autorelease];
+    strip.identifier = @"control-panel";
+    strip.contentView = [[[WKWebView alloc] initWithFrame:NSMakeRect(0,0,900,174)] autorelease];
+    NSRect before = strip.frame;
+    Method activation = class_getInstanceMethod(NSApplication.class, @selector(activateIgnoringOtherApps:));
+    IMP original = method_setImplementation(activation, (IMP)recordActivation);
+    devjay_show_message(strip,400,10,200,140,"Could not open PR #25","Test browser failure");
+    NSWindow *window = nil;
+    for (NSWindow *candidate in NSApp.windows) {
+        if ([candidate.identifier isEqual:@"message-dialog"]) { window = candidate; break; }
+    }
+    assert(window && window.isVisible && NSApp.modalWindow == nil);
+    assert(fabs(NSMidX(window.frame)-(area.origin.x+530)) < 1);
+    assert(fabs(NSMinY(window.frame)-(area.origin.y+184)) < 1);
+    assert(NSEqualRects(strip.frame,before));
+    DevJayMessageDialog *controller = (DevJayMessageDialog *)window.delegate;
+    [window retain];
+    [controller cancelOperation:nil];
+    assert(!window.isVisible && window.delegate == nil);
+    [window release];
+    devjay_show_message(strip,200,10,200,140,"Could not open PR #26","Another test failure");
+    window = nil;
+    for (NSWindow *candidate in NSApp.windows) {
+        if ([candidate.identifier isEqual:@"message-dialog"] && candidate.isVisible) { window = candidate; break; }
+    }
+    assert(window && fabs(NSMidX(window.frame)-(area.origin.x+330)) < 1);
+    controller = (DevJayMessageDialog *)window.delegate;
+    NSAlert *alert = [controller valueForKey:@"alert"];
+    [window retain];
+    [alert.buttons.firstObject performClick:nil];
+    assert(!window.isVisible && window.delegate == nil);
+    [window release];
+    method_setImplementation(activation, original);
+}
+
 static void test_confirmation_site_center(void) {
     NSRect area = NSScreen.mainScreen.visibleFrame;
     if (area.size.width < 500 || area.size.height < 500) return;
@@ -295,6 +334,7 @@ int main(void) {
         [NSApp setActivationPolicy:NSApplicationActivationPolicyProhibited];
         test_strip_focus_isolation();
         test_confirmation_card_anchor();
+        test_message_dialog_card_anchor();
         test_confirmation_site_center();
         test_viewer_placement();
         test_switch_placement();

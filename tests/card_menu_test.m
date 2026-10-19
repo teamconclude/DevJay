@@ -15,7 +15,7 @@ static int popupCount;
 static NSPoint expectedPoint;
 static BOOL singleAction, stripMenu, stripBackground, chooseHide;
 static BOOL rebaseAction, rebaseDisabled, publishAction, directPublish, mergedAction;
-static NSString *syncTitle;
+static NSString *syncTitle, *singleTitle;
 
 // Exercise the real menu, targets and cleanup without displaying or tracking
 // a menu in the user's desktop. Actual inactive-window behavior needs UI QA.
@@ -32,12 +32,12 @@ static BOOL selectTestItem(NSMenu *menu, SEL selector, NSMenuItem *item, NSPoint
     }
     assert(menu.numberOfItems == (directPublish ? 4 : (singleAction ? 4 : 5) + (rebaseAction ? 1 : 0)));
     if (!directPublish) {
-        assert([[menu itemAtIndex:0].title isEqualToString:mergedAction ? @"Open PR #42 in browser" : singleAction ? @"Show GoLand" : @"View changes"]);
+        assert([[menu itemAtIndex:0].title isEqualToString:mergedAction ? @"Open PR #42 in browser" : singleAction ? (singleTitle ?: @"Show GoLand") : @"View changes"]);
         if (!singleAction) assert([[menu itemAtIndex:1].title isEqualToString:mergedAction ? @"Open PR #42 in new browser tab" : @"View changes in new window"]);
     }
     NSInteger separator = directPublish ? 1 : (singleAction ? 1 : 2) + (rebaseAction ? 1 : 0);
     if (rebaseAction) {
-        NSMenuItem *rebase = [menu itemAtIndex:directPublish ? 0 : 2];
+        NSMenuItem *rebase = [menu itemAtIndex:directPublish ? 0 : singleAction ? 1 : 2];
         assert([rebase.title isEqualToString:syncTitle ?: (mergedAction ? @"Return to develop & delete branch…" : publishAction ? @"Push rebased branch…" : @"Rebase and push…")]);
         assert(rebase.tag == 5 && rebase.enabled == !rebaseDisabled);
         assert(rebase.toolTip.length > 0);
@@ -124,6 +124,15 @@ int main(void) {
         syncTitle = @"Push 2 commits…"; rebaseDisabled = NO; chosenIndex = 2;
         assert(devjay_card_menu(window, 22, 41, first, second, settings, quit, syncTitle.UTF8String, "", "Check remote before confirmation.", 0) == 5);
         assert(popupCount == 23);
+        singleAction = YES; singleTitle = @"View branch history"; syncTitle = @"Replace from remote…";
+        // Omitting the second viewer choice must preserve the Git action tag.
+        chosenIndex = 1;
+        assert(devjay_card_menu(window, 22, 41, singleTitle.UTF8String, "", settings, quit, syncTitle.UTF8String, "", "Check remote before confirmation.", 0) == 5);
+        chosenIndex = 0;
+        assert(devjay_card_menu(window, 22, 41, singleTitle.UTF8String, "", settings, quit, syncTitle.UTF8String, "", "Check remote before confirmation.", 0) == 1);
+        rebaseDisabled = YES; chosenIndex = -1;
+        assert(devjay_card_menu(window, 22, 41, singleTitle.UTF8String, "", settings, quit, syncTitle.UTF8String, "Commit or stash local edits before replacing this branch.", "", 0) == 0);
+        singleAction = NO; rebaseDisabled = NO;
         stripMenu = YES;
         assert(devjay_card_menu(window, 22, 41, first, second, settings, quit, "", "", "", 1) == 6);
         stripBackground = YES;

@@ -5,7 +5,9 @@ import (
 	_ "embed"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -36,7 +38,15 @@ func openPullRequestBrowserWith(ctx context.Context, url string, newTab bool, ru
 	data, err := run(ctx, 45*time.Second, "/usr/bin/osascript",
 		"-l", "JavaScript", "-e", prBrowserScript, "--", url, strconv.FormatBool(newTab))
 	if err != nil {
-		return "", errors.New("The browser did not confirm opening the PR. Check it before trying again.")
+		detail := err.Error()
+		var failure *commandFailure
+		if errors.As(err, &failure) && strings.TrimSpace(failure.stderr) != "" {
+			detail = strings.TrimSpace(failure.stderr)
+		}
+		if len(detail) > 1024 {
+			detail = detail[:1024] + "…"
+		}
+		return "", fmt.Errorf("The browser did not confirm opening the PR. Check it before trying again.\n\nBrowser helper: %s", detail)
 	}
 	var result prBrowserResult
 	if json.Unmarshal(data, &result) != nil {
@@ -65,22 +75,30 @@ func openPullRequestBrowserWith(ctx context.Context, url string, newTab bool, ru
 }
 
 func (m *siteManager) emitPROpenResult(req prOpenRequest, sender, message string, err error) {
+	if err != nil {
+		// Keep navigation failures outside the card layout. A native dialog
+		// stays readable until dismissed and cannot be cleared by a fit event.
+		parent := m.panel
+		if sender != "control-panel" {
+			if site := m.runtime[req.SiteID]; site != nil {
+				parent = site.Window
+			}
+		}
+		showMessageDialog(parent, req.Anchor, "Could not open PR #"+strconv.Itoa(req.Number), err.Error())
+		return
+	}
 	result := struct {
 		SiteID  string `json:"siteID"`
 		Number  int    `json:"number"`
 		Sender  string `json:"sender"`
 		Message string `json:"message,omitempty"`
-		Error   string `json:"error,omitempty"`
 	}{SiteID: req.SiteID, Number: req.Number, Sender: sender, Message: message}
-	if err != nil {
-		result.Error = err.Error()
-	}
 	m.app.Event.Emit("devjay:pr-open-result", result)
 }
 
 // Call only on the manager queue, including native context menu callbacks.
 func (m *siteManager) openPR(req prOpenRequest, sender string) {
-	if !validPRSender(sender, req.SiteID) {
+	if !validPRSender(sender, req.SiteID) || !req.Anchor.valid() {
 		return
 	}
 	site := m.runtime[req.SiteID]

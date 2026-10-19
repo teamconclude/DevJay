@@ -102,18 +102,46 @@ func TestCardMenuActionLabels(t *testing.T) {
 		req    cardMenuRequest
 		labels [4]string
 	}{
-		{cardMenuRequest{Kind: "edits"}, [4]string{"View changes", "View changes in new window", "DevJay settings…", "Quit DevJay"}},
-		{cardMenuRequest{Kind: "branch"}, [4]string{"View branch history", "View branch history in new window", "DevJay settings…", "Quit DevJay"}},
+		{cardMenuRequest{Kind: "edits"}, [4]string{"View changes", "", "DevJay settings…", "Quit DevJay"}},
+		{cardMenuRequest{Kind: "branch"}, [4]string{"View branch history", "", "DevJay settings…", "Quit DevJay"}},
+		{cardMenuRequest{Kind: "edits", hasViewer: true}, [4]string{"View changes", "View changes in new window", "DevJay settings…", "Quit DevJay"}},
+		{cardMenuRequest{Kind: "branch", hasViewer: true}, [4]string{"View branch history", "View branch history in new window", "DevJay settings…", "Quit DevJay"}},
 		{cardMenuRequest{Kind: "site"}, [4]string{"Go to Site desktop", "", "DevJay settings…", "Quit DevJay"}},
 		{cardMenuRequest{BundleID: "com.jetbrains.goland", appName: "GoLand"}, [4]string{"Show GoLand", "", "DevJay settings…", "Quit DevJay"}},
-		{cardMenuRequest{Kind: "local"}, [4]string{"View local commits", "View local commits in new window", "DevJay settings…", "Quit DevJay"}},
-		{cardMenuRequest{Kind: "remote"}, [4]string{"View remote commits", "View remote commits in new window", "DevJay settings…", "Quit DevJay"}},
+		{cardMenuRequest{Kind: "local", hasViewer: true}, [4]string{"View local commits", "View local commits in new window", "DevJay settings…", "Quit DevJay"}},
+		{cardMenuRequest{Kind: "remote", hasViewer: true}, [4]string{"View remote commits", "View remote commits in new window", "DevJay settings…", "Quit DevJay"}},
 		{cardMenuRequest{Kind: "edits", Number: 123}, [4]string{"Open PR #123 in browser", "Open PR #123 in new browser tab", "DevJay settings…", "Quit DevJay"}},
 	} {
 		if got := cardMenuLabels(test.req); got != test.labels {
 			t.Errorf("menu for %#v = %#v, want %#v", test.req, got, test.labels)
 		}
 	}
+}
+
+func TestCardMenuNewWindowRequiresAnExistingViewerForThisSite(t *testing.T) {
+	m := &siteManager{viewers: map[string]*gitViewerWindow{
+		"other": {state: &GitView{SiteID: "other", Kind: "branch"}},
+	}}
+	check := func(wantNewWindow bool) {
+		t.Helper()
+		for _, kind := range []string{"auto", "edits", "branch", "local", "remote"} {
+			req := m.resolveCardMenuRequest(cardMenuRequest{SiteID: "site", Kind: kind}, GitStatus{Branch: "feature"})
+			labels := cardMenuLabels(req)
+			if labels[0] == "" || (labels[1] != "") != wantNewWindow {
+				t.Fatalf("wrong viewer choices for %s: %v", kind, labels)
+			}
+			if !validCardMenuSelection(req, cardMenuView, PullRequestLink{}, GitStatus{}) ||
+				validCardMenuSelection(req, cardMenuViewNew, PullRequestLink{}, GitStatus{}) != wantNewWindow {
+				t.Fatalf("selection does not match the displayed choices for %s", kind)
+			}
+		}
+	}
+	check(false)
+	// A viewer in another category is still reused, even while loading.
+	m.viewers["own"] = &gitViewerWindow{state: &GitView{SiteID: "site", Kind: "edits", Loading: true}}
+	check(true)
+	delete(m.viewers, "own")
+	check(false)
 }
 
 func TestMergedCardMenuPreparesDeletionAndRejectsChangedState(t *testing.T) {
@@ -235,6 +263,7 @@ func TestSitePublishSourceOnlyAuthorizesItsCurrentRebasedBranch(t *testing.T) {
 }
 
 func TestHeadingMenuChoosesChangesOrHistoryWithoutChangingExplicitTargets(t *testing.T) {
+	m := &siteManager{}
 	for _, test := range []struct {
 		git  GitStatus
 		want string
@@ -245,12 +274,12 @@ func TestHeadingMenuChoosesChangesOrHistoryWithoutChangingExplicitTargets(t *tes
 		{GitStatus{Branch: "main", LocalNote: "Could not read local status"}, "edits"},
 		{GitStatus{}, "edits"},
 	} {
-		req := resolveCardMenuRequest(cardMenuRequest{Kind: "auto"}, test.git)
+		req := m.resolveCardMenuRequest(cardMenuRequest{Kind: "auto"}, test.git)
 		if req.Kind != test.want {
 			t.Errorf("heading for %#v = %q", test.git, req.Kind)
 		}
 		for _, kind := range []string{"edits", "branch", "site"} {
-			if got := resolveCardMenuRequest(cardMenuRequest{Kind: kind}, test.git); got.Kind != kind {
+			if got := m.resolveCardMenuRequest(cardMenuRequest{Kind: kind}, test.git); got.Kind != kind {
 				t.Fatal("explicit target changed")
 			}
 		}

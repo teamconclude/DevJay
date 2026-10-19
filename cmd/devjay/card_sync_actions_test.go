@@ -2,6 +2,59 @@ package main
 
 import "testing"
 
+func TestCardReplacementRequiresVerifiedHistoryAndRevalidatesSelection(t *testing.T) {
+	status := GitStatus{Branch: "feature", Head: "head", Tracking: "origin/feature", Ahead: 2, Behind: 3,
+		Rewritten: true, CanReplaceRemote: true, Base: &BranchBase{Branch: "develop", Tracking: "origin/develop", Behind: 4}}
+	for _, kind := range []string{"site", "branch", "edits", "local", "remote"} {
+		option := makeCardGitOption(cardMenuRequest{Kind: kind}, status)
+		if option == nil || option.Kind != "replace" || option.DisabledReason != "" || option.title() != "Replace from remote…" || option.tooltip() == "" {
+			t.Fatalf("missing replacement: %+v", option)
+		}
+		req, ok := option.request("site", status)
+		if !ok || req.Kind != "replace" || req.SiteID != "site" || req.Branch != status.Branch || req.Head != status.Head || req.DeleteBranch {
+			t.Fatalf("wrong replacement preparation: %+v", req)
+		}
+		newer := status
+		newer.Behind++
+		newer.RemoteNote = "Last remote check failed"
+		if _, ok := option.request("site", newer); !ok {
+			t.Fatal("preparation should allow fetching a newer remote tip")
+		}
+		for _, change := range []func(*GitStatus){
+			func(s *GitStatus) { s.Head = "new" }, func(s *GitStatus) { s.Head = "" },
+			func(s *GitStatus) { s.Branch = "other" }, func(s *GitStatus) { s.Branch = "(detached)" },
+			func(s *GitStatus) { s.Tracking = "other/feature" }, func(s *GitStatus) { s.Tracking = "" },
+			func(s *GitStatus) { s.CanReplaceRemote = false }, func(s *GitStatus) { s.Changes = 1 },
+			func(s *GitStatus) { s.Conflicts = 1 }, func(s *GitStatus) { s.LocalNote = "unavailable" },
+		} {
+			current := status
+			change(&current)
+			if _, ok := option.request("site", current); ok {
+				t.Fatalf("accepted stale or unsafe replacement: %+v", current)
+			}
+		}
+	}
+	for _, change := range []func(*GitStatus){
+		func(s *GitStatus) { s.Changes = 1 }, func(s *GitStatus) { s.Conflicts = 1 }, func(s *GitStatus) { s.LocalNote = "unknown" },
+	} {
+		current := status
+		change(&current)
+		option := makeCardGitOption(cardMenuRequest{Kind: "branch"}, current)
+		if option == nil || option.DisabledReason == "" || option.tooltip() != option.DisabledReason {
+			t.Fatalf("blocked replacement must explain why: %+v", option)
+		}
+	}
+	for _, menu := range []cardMenuRequest{{Kind: "site", BundleID: "app"}, {Kind: "branch", Number: 12}, {Kind: "branch", GitAction: "update"}, {Kind: "branch", GitAction: "push"}} {
+		if makeCardGitOption(menu, status) != nil {
+			t.Fatalf("replacement changed a dedicated menu: %+v", menu)
+		}
+	}
+	status.CanReplaceRemote = false
+	if option := makeCardGitOption(cardMenuRequest{Kind: "branch"}, status); option != nil && option.Kind == "replace" {
+		t.Fatal("rewrite warning alone must not authorize replacement")
+	}
+}
+
 func TestCardIncomingActionRevalidatesFastForwardEligibility(t *testing.T) {
 	status := GitStatus{Branch: "develop", Head: "head", Tracking: "origin/develop", Behind: 3, IsMainBranch: true}
 	for _, menu := range []cardMenuRequest{{Kind: "branch", GitAction: "update"}, {Kind: "branch"}, {Kind: "site"}, {Kind: "edits"}} {

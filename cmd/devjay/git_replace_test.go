@@ -21,6 +21,26 @@ func replacementFixture(t *testing.T) (string, string) {
 	return repo, seed
 }
 
+func TestCardReplacementPreparesWithoutChangingCheckout(t *testing.T) {
+	repo, _ := replacementFixture(t)
+	ctx := context.Background()
+	s, meta := inspectLocal(ctx, repo)
+	s.CanReplaceRemote = canReplaceFromRemote(ctx, s, meta)
+	option := makeCardGitOption(cardMenuRequest{Kind: "branch"}, s)
+	req, ok := option.request("site", s)
+	if !ok || req.Kind != "replace" {
+		t.Fatalf("verified rewritten history did not offer replacement: %+v", option)
+	}
+	before := checkoutFingerprint(t, repo)
+	plan, err := prepareCheckoutAction(ctx, repo, req, nil)
+	if err != nil || plan.Kind != "replace" || plan.Head != s.Head || plan.TargetHead != fixtureGit(t, repo, "rev-parse", "@{upstream}") {
+		t.Fatalf("replacement preparation failed: %+v, %v", plan, err)
+	}
+	if after := checkoutFingerprint(t, repo); !reflect.DeepEqual(before, after) {
+		t.Fatalf("menu preparation changed checkout: before=%v after=%v", before, after)
+	}
+}
+
 func TestReplacementRepeatedRewritesPreserveRecoveryAndTracking(t *testing.T) {
 	ctx := context.Background()
 	repo, seed := replacementFixture(t)

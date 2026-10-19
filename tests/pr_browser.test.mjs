@@ -11,7 +11,7 @@ function fixture(specs) {
   const actions = [];
   for (const spec of specs) {
     const windows = (spec.windows || []).map((urls, index) => {
-      const list = urls.map(url => ({url: () => url}));
+      const list = urls?.map(url => ({url: () => url}));
       const window = {id: () => index + 1, tabs: () => list};
       window.tabs.push = tab => { actions.push(['tab', spec.id, index, tab.url()]); list.push(tab); };
       for (const property of ['currentTab', 'miniaturized', 'activeTabIndex', 'minimized', 'index']) {
@@ -21,7 +21,7 @@ function fixture(specs) {
     });
     const app = {
       running: () => spec.running !== false,
-      windows: () => { if (spec.denied) throw Error('not allowed'); return windows; },
+      windows: () => { if (spec.denied) throw Error('not allowed'); return spec.nullWindows ? null : windows; },
       Tab: ({url}) => ({url: () => url}),
       activate: () => { if (spec.failActivate) throw Error('activation failed'); actions.push(['activate', spec.id]); }
     };
@@ -90,4 +90,23 @@ test('uncertain navigation errors never request fallback that could duplicate a 
   assert.ok(f.navigate(url).error);
   assert.ok(f.navigate(url, true).error);
   assert.equal(f.actions.filter(a => a[0] === 'tab').length, 1);
+});
+
+
+test('skips windows with null or empty tab lists and still finds a usable PR window', () => {
+  const f = fixture([{id: 'safari', safari: true, windows: [null, [], [url]]}]);
+  assert.deepEqual(f.navigate(url), {handled: true});
+  assert.deepEqual(f.actions.map(a => a[0]), ['currentTab', 'miniaturized', 'index', 'activate']);
+  assert.equal(f.actions[0][2], 2);
+  const newTab = fixture([{id: 'safari', safari: true, windows: [null, [], [url]]}]);
+  assert.deepEqual(newTab.navigate(url, true, 'safari'), {handled: true});
+  assert.deepEqual(newTab.actions[0], ['tab', 'safari', 2, url]);
+});
+
+test('windows without tabs permit safe fallback without attempting navigation', () => {
+  for (const spec of [{id: 'safari', windows: [null, []]}, {id: 'safari', nullWindows: true}]) {
+    const f = fixture([spec]);
+    assert.deepEqual(f.navigate(url, false, 'safari'), {handled: false, unavailable: false});
+    assert.deepEqual(f.actions, []);
+  }
 });

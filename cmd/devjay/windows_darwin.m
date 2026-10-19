@@ -502,3 +502,49 @@ void devjay_show_viewer(void *pointer, void *parentPointer, double x, double y, 
     window.identifier = @"git-viewer";
     devjay_show_context_window(window,(NSWindow *)parentPointer,x,y,width,height,YES);
 }
+
+// Present the native alert as a dismissible window without NSAlert's automatic
+// screen centering or a modal loop that stalls the manager's main-thread calls.
+@interface DevJayMessageDialog : NSResponder <NSWindowDelegate> {
+    NSAlert *alert;
+}
+- (id)initWithTitle:(NSString *)title message:(NSString *)message;
+- (NSWindow *)window;
+- (void)dismiss:(id)sender;
+@end
+@implementation DevJayMessageDialog
+- (id)initWithTitle:(NSString *)title message:(NSString *)message {
+    if ((self = [super init])) {
+        alert = [NSAlert new];
+        alert.alertStyle = NSAlertStyleWarning;
+        alert.messageText = title;
+        alert.informativeText = message;
+        NSButton *ok = [alert addButtonWithTitle:@"OK"];
+        ok.target = self;
+        ok.action = @selector(dismiss:);
+        ok.keyEquivalent = @"\r";
+        [alert layout];
+        alert.window.identifier = @"message-dialog";
+        alert.window.releasedWhenClosed = NO;
+        alert.window.delegate = self;
+        self.nextResponder = alert.window.nextResponder;
+        alert.window.nextResponder = self;
+    }
+    return self;
+}
+- (NSWindow *)window { return alert.window; }
+- (void)dismiss:(id)sender { [alert.window close]; }
+- (void)cancelOperation:(id)sender { [self dismiss:sender]; }
+- (void)windowWillClose:(NSNotification *)notification {
+    alert.window.delegate = nil;
+    alert.window.nextResponder = self.nextResponder;
+    [self autorelease]; // Initial ownership lasts until the user dismisses it.
+}
+- (void)dealloc { [alert release]; [super dealloc]; }
+@end
+
+void devjay_show_message(void *parentPointer, double x, double y, double width, double height, const char *title, const char *message) {
+    DevJayMessageDialog *dialog = [[DevJayMessageDialog alloc]
+        initWithTitle:[NSString stringWithUTF8String:title] message:[NSString stringWithUTF8String:message]];
+    devjay_show_context_window(dialog.window, (NSWindow *)parentPointer, x, y, width, height, YES);
+}

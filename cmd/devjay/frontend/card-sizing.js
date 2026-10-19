@@ -21,13 +21,25 @@ export function fittedPanelHeight(list) {
 }
 
 export function installCardSizing(root, list, requestFit, busy = () => false) {
-  let frame = 0, lastRequest = '';
+  let frame = 0, lastRequest = '', lastLayout = '', timer = 0, pending = null;
+  function cancelPending() {
+    clearTimeout(timer);
+    timer = 0;
+    pending = null;
+  }
   function measure() {
     frame = 0;
-    if (busy() || !list.children.length) return;
+    if (busy() || !list.children.length) { cancelPending(); return; }
     const workspace = document.body.classList.contains('workspace');
     const decoration = document.body.dataset.decoration;
     const refit = !workspace;
+    // Fit the first cards and explicit layout/width changes promptly. Body
+    // attributes are rewritten by ordinary snapshots, so compare their values.
+    // A native height fit must not bypass the delay for a subsequent shrink.
+    const layout = JSON.stringify([window.innerWidth, decoration,
+      document.body.dataset.layout, document.body.dataset.freePlacement]);
+    const immediate = workspace || layout !== lastLayout;
+    lastLayout = layout;
     // WebKit can clip a flex card internally without overflowing the list.
     // Re-measure its natural content after status/app rows arrive, too.
     // Leave one small line of breathing room beyond the fitted content. Fit in
@@ -35,12 +47,30 @@ export function installCardSizing(root, list, requestFit, busy = () => false) {
     const panelHeight = workspace ? null : Math.max(120, fittedPanelHeight(list)) + 12;
     const height = workspace ? requiredContentHeight(window.innerHeight, root.scrollHeight, root.clientHeight)
       : Math.abs(panelHeight - window.innerHeight) > 1 ? panelHeight : null;
-    if (height === null) { lastRequest = ''; return; }
+    if (height === null) { cancelPending(); lastRequest = ''; return; }
     const size = {height, viewportWidth: window.innerWidth, viewportHeight: window.innerHeight, decoration, refit};
     const key = JSON.stringify(size);
     // A screen-limited window may still overflow. Don't keep requesting a size
     // the native side cannot provide until its content or viewport changes.
-    if (key !== lastRequest) { lastRequest = key; requestFit(size); }
+    if (key === lastRequest) { cancelPending(); return; }
+    if (!immediate) {
+      // Ignore fleeting rows, then keep spare room longer before collapsing.
+      // Only a different target restarts the wait; same-height text updates do
+      // not starve a real fit. The timer remeasures instead of sending old data.
+      if (pending?.key !== key) {
+        cancelPending();
+        const delay = height > window.innerHeight ? 300 : 3000;
+        pending = {key, deadline: performance.now() + delay};
+      }
+      const remaining = pending.deadline - performance.now();
+      if (remaining > 0) {
+        if (!timer) timer = setTimeout(() => { timer = 0; schedule(); }, remaining);
+        return;
+      }
+    }
+    cancelPending();
+    lastRequest = key;
+    requestFit(size);
   }
   function schedule() { if (!frame) frame = requestAnimationFrame(measure); }
   new MutationObserver(schedule).observe(root, {childList:true, subtree:true, characterData:true});
@@ -48,7 +78,7 @@ export function installCardSizing(root, list, requestFit, busy = () => false) {
   new ResizeObserver(schedule).observe(root);
   window.addEventListener('resize', schedule);
   // A live window drag/resize may have deferred native fitting.
-  window.addEventListener('pointerup', () => { lastRequest = ''; schedule(); });
+  window.addEventListener('pointerup', () => { lastRequest = ''; lastLayout = ''; schedule(); });
   document.fonts?.ready.then(schedule);
   schedule();
   return schedule;

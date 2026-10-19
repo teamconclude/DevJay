@@ -17,6 +17,7 @@ type cardMenuRequest struct {
 	PublishButton  bool        `json:"publishButton,omitempty"`
 	GitAction      string      `json:"gitAction,omitempty"`
 	appName        string
+	hasViewer      bool    // Captured from manager state, never supplied by the frontend.
 	X              float64 `json:"x"`
 	Y              float64 `json:"y"`
 }
@@ -110,6 +111,8 @@ func makeCardGitOption(req cardMenuRequest, git GitStatus) *cardGitOption {
 	// their own action, and app/PR menus retain their dedicated purpose.
 	if req.Number == 0 && req.BundleID == "" && req.BaseBranch == "" && !req.PublishRebased {
 		switch {
+		case git.CanReplaceRemote:
+			return makeCardSyncOption("replace", git)
 		case git.Rebased:
 			req.Kind, req.PublishRebased = "branch", true
 		case git.Behind > 0:
@@ -168,6 +171,11 @@ func makeCardGitOption(req cardMenuRequest, git GitStatus) *cardGitOption {
 func makeCardSyncOption(kind string, git GitStatus) *cardGitOption {
 	option := &cardGitOption{Kind: kind, Branch: git.Branch, Head: git.Head, Tracking: git.Tracking}
 	switch kind {
+	case "replace":
+		if !git.CanReplaceRemote || git.Tracking == "" {
+			return nil
+		}
+		option.Target = git.Tracking
 	case "update":
 		if git.Behind <= 0 || git.Tracking == "" || git.Rebased || git.CanReplaceRemote {
 			return nil
@@ -190,6 +198,8 @@ func makeCardSyncOption(kind string, git GitStatus) *cardGitOption {
 		option.DisabledReason = "Local and remote history differ. Review branch history and update manually."
 	case kind == "update" && git.Changes > 0:
 		option.DisabledReason = "Commit or stash local edits before updating this branch."
+	case kind == "replace" && git.Changes > 0:
+		option.DisabledReason = "Commit or stash local edits before replacing this branch."
 	}
 	return option
 }
@@ -199,6 +209,8 @@ func (option *cardGitOption) title() string {
 		return ""
 	}
 	switch option.Kind {
+	case "replace":
+		return "Replace from remote…"
 	case "update":
 		return "Fetch and update " + option.Branch + "…"
 	case "push":
@@ -220,6 +232,8 @@ func (option *cardGitOption) tooltip() string {
 		return option.DisabledReason
 	}
 	switch option.Kind {
+	case "replace":
+		return "Fetch " + option.Target + " and verify that the local tip was previously published, then confirm replacement with a recovery copy of the old commits."
 	case "push":
 		return "Check the remote, then confirm pushing committed work. Local edits stay on your computer."
 	case "update":
@@ -236,7 +250,7 @@ func (option *cardGitOption) request(siteID string, git GitStatus) (ActionReques
 		return ActionRequest{}, false
 	}
 	menu := cardMenuRequest{Kind: "branch", BaseBranch: option.Target, PublishRebased: option.Kind == "publish"}
-	if option.Kind == "update" || option.Kind == "push" {
+	if option.Kind == "update" || option.Kind == "push" || option.Kind == "replace" {
 		menu.BaseBranch, menu.GitAction = "", option.Kind
 	}
 	if option.Kind == "merged" {
@@ -252,7 +266,7 @@ func (option *cardGitOption) request(siteID string, git GitStatus) (ActionReques
 	if option.Kind == "publish" {
 		return ActionRequest{SiteID: siteID, Kind: "publish", Branch: option.Branch, Head: option.Head}, true
 	}
-	if option.Kind == "update" || option.Kind == "push" {
+	if option.Kind == "update" || option.Kind == "push" || option.Kind == "replace" {
 		return ActionRequest{SiteID: siteID, Kind: option.Kind, Branch: option.Branch, Head: option.Head}, true
 	}
 	remote, found := strings.CutSuffix(option.Tracking, "/"+option.Target)
@@ -268,13 +282,14 @@ func validAppBundleID(bundle string) bool {
 
 // Resolve the heading exception against backend state before showing the menu;
 // keep that visible choice fixed if a later Git reading arrives while it tracks.
-func resolveCardMenuRequest(req cardMenuRequest, git GitStatus) cardMenuRequest {
+func (m *siteManager) resolveCardMenuRequest(req cardMenuRequest, git GitStatus) cardMenuRequest {
 	if req.Kind == "auto" {
 		req.Kind = "branch"
 		if git.Changes > 0 || git.Conflicts > 0 || git.Branch == "" || git.LocalNote != "" {
 			req.Kind = "edits"
 		}
 	}
+	req.hasViewer = m.existingViewer(viewerRequest{SiteID: req.SiteID, Kind: req.Kind}) != nil
 	return req
 }
 
@@ -296,7 +311,11 @@ func cardMenuLabels(req cardMenuRequest) [4]string {
 		return [4]string{"Go to Site desktop", "", "DevJay settings…", "Quit DevJay"}
 	}
 	subject := map[string]string{"edits": "changes", "branch": "branch history", "local": "local commits", "remote": "remote commits"}[req.Kind]
-	return [4]string{"View " + subject, "View " + subject + " in new window", "DevJay settings…", "Quit DevJay"}
+	second := ""
+	if req.hasViewer {
+		second = "View " + subject + " in new window"
+	}
+	return [4]string{"View " + subject, second, "DevJay settings…", "Quit DevJay"}
 }
 
 // Site/window membership is checked separately for every action. App actions
@@ -312,7 +331,7 @@ func validCardMenuSelection(req cardMenuRequest, action cardMenuAction, original
 		return action == cardMenuView
 	}
 	if req.Number == 0 {
-		return true
+		return action == cardMenuView || req.hasViewer
 	}
 	current, ok := requestedPR(status, req.Number)
 	return ok && current.URL == originalPR.URL

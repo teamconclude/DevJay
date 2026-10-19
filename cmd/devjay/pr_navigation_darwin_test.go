@@ -58,3 +58,13 @@ func TestBrowserNavigationFallbackRequiresExplicitNoActionResult(t *testing.T) {
 		})
 	}
 }
+
+func TestBrowserNavigationPreservesHelperFailureDetails(t *testing.T) {
+	_, err := openPullRequestBrowserWith(context.Background(), "https://github.com/team/project/pull/25", false,
+		func(context.Context, time.Duration, string, ...string) ([]byte, error) {
+			return nil, &commandFailure{err: errors.New("exit status 1"), stderr: "execution error: null tab list (-2700)\n"}
+		})
+	if err == nil || !strings.Contains(err.Error(), "null tab list (-2700)") {
+		t.Fatalf("missing diagnostic: %v", err)
+	}
+}

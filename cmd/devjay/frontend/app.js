@@ -210,7 +210,7 @@ function details(site, parent, showIDEStatus) {
   if (!siteID) title.setAttribute('aria-label', `Activate ${site.path}, ${site.git.branch || 'folder'}`);
   heading.append(title);
   const pullRequests = site.git.pullRequests || [];
-  const openPR = number => emit('pr-open', {siteID:site.id, number});
+  const openPR = number => emit('pr-open', {siteID:site.id, number, anchor:cardBounds(parent)});
   if (pullRequests.length) {
     const tags = el('div', 'card-prs');
     for (const pr of pullRequests) {
@@ -247,7 +247,26 @@ function details(site, parent, showIDEStatus) {
   function metrics(label, values, title, prNumber) {
     if (!values.length) return;
     const row = el('div', 'metric-row copyable');
-    row.append(el('span', 'metric-label', label));
+    const heading = el('span', 'metric-label', label);
+    const iconShapes = {
+      Edits: [['path',{d:'m10.5 2.5 3 3M2 14l3.5-.75L14 4.75 11.25 2 2.75 10.5 2 14Z'}]],
+      Branch: [['path',{d:'M4 4.75v6.5M12 4.75V6a4 4 0 0 1-4 4H4'}], ...[[4,3],[4,13],[12,3]].map(([cx,cy])=>['circle',{cx,cy,r:1.75}])],
+      Review: [['path',{d:'M3 2h10a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1H7l-4 3v-3H3a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1ZM5 5h6M5 8h4'}]],
+    }[label];
+    if (iconShapes) {
+      heading.textContent = ''; heading.classList.add('metric-icon-label');
+      heading.title = label; heading.dataset.appTooltip = label;
+      heading.setAttribute('role', 'img'); heading.setAttribute('aria-label', label);
+      const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      for (const [name, value] of Object.entries({viewBox:'0 0 16 16',width:11,height:11,fill:'none',stroke:'currentColor','stroke-width':1.5,'stroke-linecap':'round','stroke-linejoin':'round','aria-hidden':'true',focusable:'false'})) icon.setAttribute(name, value);
+      for (const [tag, attrs] of iconShapes) {
+        const shape = document.createElementNS('http://www.w3.org/2000/svg', tag);
+        for (const [name, value] of Object.entries(attrs)) shape.setAttribute(name, value);
+        icon.append(shape);
+      }
+      heading.append(icon);
+    }
+    row.append(heading);
     if (title) { row.classList.add('review-row'); row.title = title; row.setAttribute('aria-label', `${label}: ${title}`); }
     for (const item of values) {
       const badge = statusButton(item.view, `metric ${item.tone}`, prNumber); badge.title = item.title; badge.setAttribute('aria-label', `View ${item.title}`);
@@ -266,7 +285,7 @@ function details(site, parent, showIDEStatus) {
     if (status.alert.publishRebased) row.dataset.publishRebased = 'true';
   }
   if (status.quiet) line(status.quiet, 'good quiet-status', '✓', 'Matches the remote at the last successful check', 'branch');
-  if (status.base) line(status.base, 'warning', '↳', status.baseTitle, 'branch').dataset.baseBranch = site.git.base.branch;
+  if (status.base) line(status.base, site.git.base.note ? 'warning' : 'base-update', '↳', status.baseTitle, 'branch').dataset.baseBranch = site.git.base.branch;
   const singlePR = pullRequests.length === 1 ? pullRequests[0].number : null;
   if (status.pr) {
     for (const label of status.pr.split('; ')) {

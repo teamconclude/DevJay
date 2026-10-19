@@ -77,10 +77,17 @@ int main(void) {
         [view loadHTMLString:html baseURL:nil];
         spin(&loaded);
         // Pump animation frames explicitly: this fixture never displays a window.
-        evaluate(view, @"var frames=[],requests=[],list=document.querySelector('.cards');"
+        evaluate(view, @"var frames=[],requests=[],now=0,nextTimer=1,timers=new Map(),list=document.querySelector('.cards');"
             "window.requestAnimationFrame=fn=>{frames.push(fn);return frames.length;};"
+            "performance.now=()=>now;"
+            "window.setTimeout=(fn,delay)=>{let id=nextTimer++;timers.set(id,{fn,at:now+delay});return id;};"
+            "window.clearTimeout=id=>timers.delete(id);"
             "var schedule=installCardSizing(document.querySelector('#app'),list,size=>requests.push(size));"
-            "function measure(){schedule();while(frames.length)frames.shift()();}"
+            "function measureNow(){schedule();while(frames.length)frames.shift()();}"
+            "function advance(ms){let end=now+ms;while(true){let next=[...timers].sort((a,b)=>a[1].at-b[1].at)[0];"
+            "if(!next||next[1].at>end)break;let [id,t]=next;now=t.at;timers.delete(id);t.fn();"
+            "while(frames.length)frames.shift()();}now=end;}"
+            "function measure(){measureNow();advance(3000);}"
             "var shortCard=`<div class='card-heading'><button class='card-title'><div class='path'>~/Project</div>"
             "<div class='branch'>main</div></button></div><div class='card-status'><div class='status-line'>Checking repository…</div></div>`;"
             "list.innerHTML=Array.from({length:4},()=>`<div class='card'>${shortCard}</div>`).join('');measure();");
@@ -96,7 +103,14 @@ int main(void) {
             "<div class='development-app'><button class='development-app-group has-agents'>"
             "<span class='development-app-icon'><span class='development-app-initials'>GL</span></span><span>Claude Code</span></button>"
             "<button class='development-app-group has-agents'><span class='development-app-icon'>T</span><span>Terminal agent</span></button></div>`;"
-            "list.querySelectorAll('.card').forEach(c=>c.innerHTML=richCard);measure();");
+            "list.querySelectorAll('.card').forEach(c=>c.innerHTML=richCard);measureNow();");
+        assert([evaluate(view, @"requests.length === 0") boolValue]);
+        assertReadable(view, NO);
+        evaluate(view, @"advance(150);list.querySelectorAll('.card').forEach(c=>c.innerHTML=shortCard);measureNow();advance(3000)");
+        assert([evaluate(view, @"requests.length === 0") boolValue]);
+        evaluate(view, @"list.querySelectorAll('.card').forEach(c=>c.innerHTML=richCard);measureNow();advance(299)");
+        assert([evaluate(view, @"requests.length === 0") boolValue]);
+        evaluate(view, @"advance(1)");
         assert([evaluate(view, @"requests.length === 1 && requests[0].refit") boolValue]);
         assert([evaluate(view, @"requests[0].height === Math.max(120, fittedPanelHeight(list)) + 12") boolValue]);
         CGFloat fullHeight = [evaluate(view, @"requests[0].height") doubleValue];
@@ -110,7 +124,9 @@ int main(void) {
         evaluate(view, @"[...list.children].slice(0,-1).forEach(c=>c.innerHTML=shortCard);measure()");
         assert([evaluate(view, @"requests.length === 1") boolValue]);
         // Keep the tallest remaining card readable, then shrink when its rows disappear.
-        evaluate(view, @"list.lastElementChild.innerHTML=shortCard;measure()");
+        evaluate(view, @"list.lastElementChild.innerHTML=shortCard;measureNow();advance(2999)");
+        assert([evaluate(view, @"requests.length === 1") boolValue]);
+        evaluate(view, @"advance(1)");
         assert([evaluate(view, @"requests.length === 2 && requests.at(-1).refit") boolValue]);
         assert([evaluate(view, @"requests.at(-1).height") doubleValue] == initialHeight);
         [window setContentSize:NSMakeSize(920, initialHeight)];

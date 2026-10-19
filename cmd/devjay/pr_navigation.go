@@ -18,9 +18,10 @@ type PullRequestLink struct {
 }
 
 type prOpenRequest struct {
-	SiteID string `json:"siteID"`
-	Number int    `json:"number"`
-	NewTab bool   `json:"newTab"`
+	Anchor *cardAnchor `json:"anchor,omitempty"`
+	SiteID string      `json:"siteID"`
+	Number int         `json:"number"`
+	NewTab bool        `json:"newTab"`
 }
 
 var githubRepositoryName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]*/[A-Za-z0-9_.-]+$`)
