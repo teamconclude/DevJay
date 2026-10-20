@@ -57,8 +57,8 @@ Background monitoring fetches remote information without changing your local bra
 
 ## Useful controls
 
-- Right-click the strip and choose **Minimize strip** for a shallow row of clickable Site names, or **Hide strip** to hide it completely. **⌃⌥⌘D** hides/shows the strip; **⌃⌥⌘S** hides/shows Site windows. Their hidden state survives restarts and desktop navigation. **⌃⌥⌘M** toggles the compact row globally; **⌃⌥⌘0** restores the full strip.
-- **⌃⌥⌘1–9** visits Site desktops in card order from any app (Control–Option–Command plus a number). Hold the modifiers first to see numbered hints; a hidden strip briefly shows its row until you release them.
+- Right-click the strip and choose **Minimize strip** for a shallow row of clickable Site names, or **Hide strip** to hide it completely. **⌃⌥⌘D** hides/shows the strip; **⌃⌥⌘S** hides/shows Site windows. The Site-window visibility choice survives restarts and desktop navigation. **⌃⌥⌘M** toggles the compact row globally; **⌃⌥⌘0** restores the full strip.
+- **⌃⌥⌘1–9** visits Site desktops in card order from any app (Control–Option–Command plus a number). Hold the modifiers first to see numbered hints on the full or minimized strip. A hidden strip stays hidden.
 - **⌘1–9** selects Sites in card order; **⌘0** shows DevJay. These shortcuts work while the app is active.
 - **⌘Q** quits and saves the layout. Activate a Site or Settings first if the strip has left keyboard focus in another app.
 - If desktop switching does not work, enable **System Settings → Desktop & Dock → Mission Control → When switching to an application, switch to a Space with open windows for the application**, and keep DevJay’s Dock assignment at **None**.

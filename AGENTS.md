@@ -8,7 +8,6 @@ DevJay is a macOS strip for parallel development. A **Site** is a local folder p
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): source map, state flow, safety boundaries, storage, and validation.
 - [docs/USER_GUIDE.md](docs/USER_GUIDE.md): detailed current behavior and recovery instructions.
 - [PLAN.md](PLAN.md): remaining work and validation gaps, not a description of current capabilities.
-- [CODE_REVIEW_FIXES.md](CODE_REVIEW_FIXES.md): historical review fixes and regression context.
 
 ## Working in this repository
 

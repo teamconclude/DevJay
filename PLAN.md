@@ -50,7 +50,7 @@ Strip-height smoothing follow-up on 18 October: automatic content fits wait for 
 
 ## Validation still needed
 
-Existing automated tests and prior smoke checks do not close these broader validation tasks. Record machine/macOS versions, scenarios, and outcomes; see [CODE_REVIEW_FIXES.md](CODE_REVIEW_FIXES.md) for prior results.
+Existing automated tests and prior smoke checks do not close these broader validation tasks. Record machine/macOS versions, scenarios, and outcomes. Prior validation results are recorded below.
 
 Card placement correction on 3 October: explicit card opens now position both new and reused viewers above and horizontally centered on the clicked card, using below-card placement when needed and screen-edge clamping. Removed viewer obstacle avoidance that could displace this anchor. Reused viewers update their parent/anchor even before runtime readiness; Site-window opens retain parent centering, and Switch retains its successful control-relative placement. Focused Go viewer-reuse regressions, native placement and geometry checks, Go vet, build/signature verification and diff checks passed. The development app was rebuilt and restarted. Automated coverage includes reopening from different sources, overlapping viewers, edge/negative coordinates and unchanged Switch geometry. The user confirmed the corrected placement works well, having also confirmed the Switch placement. Broader multi-monitor/Space behavior remains unverified.
 
@@ -128,7 +128,7 @@ Incoming-rewrite follow-up on 1 October: a remote amendment no longer marks an u
 ## Optional later enhancements
 
 - Extend the initial waiting indicators to standalone desktop apps, custom agent-home locations, remote sessions, and Codex sessions outside the default local daemon. Keep confirmed waiting separate from attention requested and response ready. Current indicators combine explicit Claude registry/Codex daemon state with best-effort folder and host-process evidence, refreshing about every ten seconds; they do not prove a particular window/tab owns the session. Optional integrations could improve association and update latency. Revalidate the local interfaces across agent versions.
-- Configurable global shortcut bindings and an optional menu-bar entry (fixed global shortcuts are implemented).
+- An optional menu-bar entry (custom global shortcut bindings are implemented).
 - A compact freshness/status details view and a discoverable recovery-reference browser.
 - Automatic app updates after a reliable signed release process exists.
 - Visibility limited to desktops containing Sites, if platform support is reliable.
