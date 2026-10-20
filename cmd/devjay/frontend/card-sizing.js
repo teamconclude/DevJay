@@ -7,7 +7,7 @@ export function requiredContentHeight(viewportHeight, scrollHeight, clientHeight
 
 // Measure the card row's natural height without stretching it to fill a saved
 // window. Restore the styles before painting; horizontal scrollbars still count.
-export function fittedPanelHeight(list) {
+export function fittedStripHeight(list) {
   const overhead = window.innerHeight - list.clientHeight;
   const {flex, height} = list.style;
   try {
@@ -44,9 +44,9 @@ export function installCardSizing(root, list, requestFit, busy = () => false) {
     // Re-measure its natural content after status/app rows arrive, too.
     // Leave one small line of breathing room beyond the fitted content. Fit in
     // both directions so disappearing status rows release their old height.
-    const panelHeight = workspace ? null : Math.max(120, fittedPanelHeight(list)) + 12;
+    const stripHeight = workspace ? null : Math.max(120, fittedStripHeight(list)) + 12;
     const height = workspace ? requiredContentHeight(window.innerHeight, root.scrollHeight, root.clientHeight)
-      : Math.abs(panelHeight - window.innerHeight) > 1 ? panelHeight : null;
+      : Math.abs(stripHeight - window.innerHeight) > 1 ? stripHeight : null;
     if (height === null) { cancelPending(); lastRequest = ''; return; }
     const size = {height, viewportWidth: window.innerWidth, viewportHeight: window.innerHeight, decoration, refit};
     const key = JSON.stringify(size);

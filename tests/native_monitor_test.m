@@ -18,7 +18,7 @@ BOOL dp_move_to_space(NSWindow *window, NSString *space) { (void)window; (void)s
 @interface MonitorTestWindow : NSObject {
 @public
     NSString *name;
-    BOOL shown, mini, active;
+    BOOL shown, mini, active, transparent;
     NSWindowOcclusionState occlusion;
 }
 @end
@@ -26,6 +26,7 @@ BOOL dp_move_to_space(NSWindow *window, NSString *space) { (void)window; (void)s
 - (BOOL)isKindOfClass:(Class)class { return class == NSWindow.class || [super isKindOfClass:class]; }
 - (NSString *)identifier { return name; }
 - (BOOL)isVisible { return shown; }
+- (CGFloat)alphaValue { return transparent ? 0 : 1; }
 - (BOOL)isMiniaturized { return mini; }
 - (BOOL)isOnActiveSpace { return active; }
 - (NSWindowOcclusionState)occlusionState { return occlusion; }
@@ -119,6 +120,9 @@ int main(void) {
         window->name = @"site-one";
 
         assert(devjay_monitor_window_visible(window));
+        window->transparent = YES;
+        assert(!devjay_monitor_window_visible(window));
+        window->transparent = NO;
         window->active = NO;
         assert(!devjay_monitor_window_visible(window));
         window->active = YES; window->shown = NO;

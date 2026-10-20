@@ -54,7 +54,7 @@ func (m *siteManager) initProfiles() {
 	migrate := len(m.config.Profiles) == 0
 	if migrate {
 		c := m.config
-		preferences := panelPreferences(m.panel)
+		preferences := stripPreferences(m.strip)
 		all, top := preferences["allDesktops"], preferences["onTop"]
 		c.AllDesktops, c.OnTop = &all, &top
 		id := newProfileID()
@@ -88,6 +88,7 @@ func (m *siteManager) pollProfiles(now time.Time) {
 		return
 	}
 	m.profiles.displays = displays
+	syncNativeProfilePrompt(displays.Signature)
 	current := m.config.Profiles[profileIndex(m.config, m.config.ActiveProfile)]
 	if slices.Contains(current.Displays, displays.Signature) {
 		m.profiles.prompted = ""
@@ -116,20 +117,15 @@ func (m *siteManager) pollProfiles(now time.Time) {
 		return
 	}
 	m.profiles.prompted = displays.Signature
-	dialog := m.app.Dialog.Question().SetTitle("Choose a Profile for these displays").SetMessage("DevJay detected a different monitor combination. Create a Profile or choose an existing one. Your saved window arrangements are kept until you choose.").AttachToWindow(m.panel)
-	dialog.AddButton("Not now").SetAsCancel().OnClick(func() {})
-	open := func() {
-		m.send(func() {
-			if readProfileDisplays().Signature != displays.Signature {
-				return
-			}
-			m.settingsPage = "profiles"
-			m.openSettings()
-		})
+	showNativeProfilePrompt(m.strip, displays.Signature)
+}
+
+func (m *siteManager) handleProfilePrompt(signature string) {
+	if signature == "" || signature != m.profiles.unknown || readProfileDisplays().Signature != signature {
+		return // A choice from a monitor combination that has already changed.
 	}
-	dialog.AddButton("Choose Profile…").OnClick(open)
-	dialog.AddButton("Create Profile…").SetAsDefault().OnClick(open)
-	dialog.Show()
+	m.settingsPage = "profiles"
+	m.openSettings()
 }
 
 func (m *siteManager) switchProfile(id string, bind bool) {
@@ -160,6 +156,7 @@ func (m *siteManager) switchProfile(id string, bind bool) {
 		m.profiles.message = err.Error()
 		return
 	}
+	syncNativeProfilePrompt("")
 	m.closeSuggestions()
 	for viewerID := range m.viewers {
 		m.closeViewer(viewerID)
@@ -170,10 +167,10 @@ func (m *siteManager) switchProfile(id string, bind bool) {
 	m.profiles.displays = displays
 	m.profiles.unknown, m.profiles.message, m.profiles.prompted = "", "", ""
 	m.syncProfileSites()
-	m.panel.SetFrameless(c.decoration() != "normal")
-	m.panel.SetTitle("DevJay")
-	if m.panelReady {
-		restoreWindowLayout(m.panel, "control-panel")
+	m.strip.SetFrameless(c.decoration() != "normal")
+	m.strip.SetTitle("DevJay")
+	if m.stripReady {
+		restoreWindowLayout(m.strip, "strip")
 	}
 	for siteID, r := range m.runtime {
 		r.Window.SetFrameless(c.decoration() != "normal")
@@ -254,12 +251,12 @@ func (m *siteManager) syncProfileSites() {
 }
 
 func (m *siteManager) applyProfileViewSettings() {
-	if !m.panelReady {
+	if !m.stripReady {
 		return
 	}
 	all, top := m.config.AllDesktops, m.config.OnTop
-	setPanelPreference(m.panel, "allDesktops", all == nil || *all)
-	setPanelPreference(m.panel, "onTop", top == nil || *top)
+	setStripPreference(m.strip, "allDesktops", all == nil || *all)
+	setStripPreference(m.strip, "onTop", top == nil || *top)
 	m.syncSettings()
 }
 func (m *siteManager) setViewPreference(name string, value bool) {
@@ -274,7 +271,7 @@ func (m *siteManager) setViewPreference(name string, value bool) {
 		m.broadcast()
 		return
 	}
-	setPanelPreference(m.panel, name, value)
+	setStripPreference(m.strip, name, value)
 	m.syncSettings()
 }
 

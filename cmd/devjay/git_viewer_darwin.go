@@ -92,7 +92,7 @@ func (m *siteManager) forgetViewer(id string) {
 		}
 		if m.suggestionsParent == r.window {
 			m.suggestionsAnchor = nil
-			m.suggestionsParent = m.panel
+			m.suggestionsParent = m.strip
 			if site := m.runtime[r.state.SiteID]; site != nil && site.Ready {
 				m.suggestionsParent = site.Window
 			}
@@ -115,7 +115,7 @@ func (m *siteManager) openViewer(req viewerRequest, parent *application.WebviewW
 		m.viewerSequence++
 		r.used = m.viewerSequence
 		// Explicit opens follow their current source, including a viewer first
-		// opened from a Site and later requested from its control-panel card.
+		// opened from a Site and later requested from its strip card.
 		r.parent, r.anchor = parent, req.Anchor
 		for id, candidate := range m.viewers {
 			if candidate == r {
@@ -191,8 +191,8 @@ func (m *siteManager) registerViewerEvents() {
 				return
 			}
 			var parent *application.WebviewWindow
-			if sender == "control-panel" {
-				parent = m.panel
+			if sender == "strip" {
+				parent = m.strip
 			} else if sender == "site-"+req.SiteID {
 				parent = r.Window
 			}

@@ -72,7 +72,18 @@ func refreshPullRequestChecks(ctx context.Context, m gitMeta, cache *remoteCache
 	}
 	cache.Reviews = reviews
 	cache.CheckHeads = heads
-	cache.PullRequests = openPullRequestLinks(out, m.GitHubRepo)
+	links := openPullRequestLinks(out, m.GitHubRepo)
+	// Authorship follows the PR, not its commits or CI runs. Reuse the full
+	// refresh's confirmed author without adding avatar queries to CI polling.
+	for i := range links {
+		for _, previous := range cache.PullRequests {
+			if links[i].Number == previous.Number && links[i].URL == previous.URL {
+				links[i].OtherAuthor = previous.OtherAuthor
+				break
+			}
+		}
+	}
+	cache.PullRequests = links
 	owner, _, _ := strings.Cut(m.GitHubRepo, "/")
 	cache.GitHub = prSummary(out, owner)
 	return full

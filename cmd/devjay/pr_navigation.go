@@ -10,11 +10,12 @@ import (
 // URLs are derived from verified repository identity and PR numbers, never
 // supplied by a frontend event or copied from arbitrary GitHub response text.
 type PullRequestLink struct {
-	Number  int    `json:"number"`
-	URL     string `json:"url"`
-	State   string `json:"state"`
-	IsDraft bool   `json:"isDraft"`
-	CIState string `json:"ciState,omitempty"`
+	Number      int                `json:"number"`
+	URL         string             `json:"url"`
+	State       string             `json:"state"`
+	IsDraft     bool               `json:"isDraft"`
+	CIState     string             `json:"ciState,omitempty"`
+	OtherAuthor *PullRequestAuthor `json:"otherAuthor,omitempty"`
 }
 
 type prOpenRequest struct {
@@ -77,5 +78,5 @@ func requestedPR(status GitStatus, number int) (PullRequestLink, bool) {
 }
 
 func validPRSender(sender, siteID string) bool {
-	return siteID != "" && (sender == "control-panel" || sender == "site-"+siteID)
+	return siteID != "" && (sender == "strip" || sender == "site-"+siteID)
 }

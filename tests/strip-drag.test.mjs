@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-const source = await readFile(new URL('../cmd/devjay/frontend/panel-drag.js', import.meta.url), 'utf8');
+const source = await readFile(new URL('../cmd/devjay/frontend/strip-drag.js', import.meta.url), 'utf8');
 const { insertionIndex, snap } = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
 const rect = (left, top) => ({left, top, width:216, height:152, bottom:top+152});
 test('reordering finds positions before, between, and after horizontal cards', () => {

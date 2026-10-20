@@ -278,15 +278,53 @@ void devjay_track_hover(void *pointer) {
         }];
 }
 
+// Site visibility is independent of navigation. Ordered-out windows still
+// identify their desktop; briefly ordering an invisible target in lets AppKit
+// navigate there without revealing any of the hidden Site cards.
+static const char siteHiddenKey, siteNavigationKey, siteNavigationMinimizedKey;
+static BOOL devjay_site_window_hidden(NSWindow *window) {
+    return [objc_getAssociatedObject(window, &siteHiddenKey) boolValue];
+}
+static void devjay_restore_navigation_minimized(NSWindow *window) {
+    if ([objc_getAssociatedObject(window, &siteNavigationMinimizedKey) boolValue]) {
+        objc_setAssociatedObject(window, &siteNavigationMinimizedKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        NSWindowAnimationBehavior animation = window.animationBehavior;
+        window.animationBehavior = NSWindowAnimationBehaviorNone;
+        if (!window.isMiniaturized) [window miniaturize:nil];
+        window.animationBehavior = animation;
+    }
+}
+static void devjay_finish_hidden_navigation(NSWindow *window, id navigation) {
+    if (!devjay_site_window_hidden(window) || objc_getAssociatedObject(window, &siteNavigationKey) != navigation) return;
+    objc_setAssociatedObject(window, &siteNavigationKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    devjay_restore_navigation_minimized(window);
+    [window orderOut:nil];
+}
+void devjay_set_site_window_hidden(void *pointer, int hidden) {
+    NSWindow *window = (NSWindow *)pointer;
+    if (![window.identifier hasPrefix:@"site-"]) return;
+    if (objc_getAssociatedObject(window, &siteNavigationKey)) {
+        [window orderOut:nil];
+        devjay_restore_navigation_minimized(window);
+    }
+    objc_setAssociatedObject(window, &siteNavigationKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(window, &siteHiddenKey, @(hidden != 0), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    window.alphaValue = hidden ? 0 : 1;
+    window.ignoresMouseEvents = hidden != 0;
+    if (hidden) [window orderOut:nil];
+}
+
 // Called on the AppKit main thread through application.InvokeSync.
 unsigned int devjay_window_state(void *pointer) {
     NSWindow *window = (NSWindow *)pointer;
     if (window == nil) return 0;
     unsigned int flags = 0;
-    if (window.isOnActiveSpace && window.isVisible && !window.isMiniaturized) flags |= 1;
-    if (window.isKeyWindow && NSApp.isActive) flags |= 2;
+    BOOL hidden = devjay_site_window_hidden(window);
+    // A hidden Site still identifies its desktop in the strip.
+    if (window.isOnActiveSpace && (hidden || (window.isVisible && !window.isMiniaturized))) flags |= 1;
+    if (!hidden && window.isKeyWindow && NSApp.isActive) flags |= 2;
     if (window.isMiniaturized) flags |= 4;
-    if (window.isVisible) flags |= 8;
+    if (!hidden && window.isVisible) flags |= 8;
     return flags;
 }
 
@@ -304,7 +342,7 @@ void devjay_all_windows_on_top(int enabled) {
     NSInteger level = enabled ? NSFloatingWindowLevel : NSNormalWindowLevel;
     NSUInteger updated = 0;
     for (NSWindow *window in NSApp.windows) {
-        if (![window.identifier isEqual:@"control-panel"] && ![window.identifier isEqual:@"settings"] && ![window.identifier isEqual:@"git-viewer"] && ![window.identifier isEqual:@"suggested-actions"] && ![window.identifier hasPrefix:@"site-"]) continue;
+        if (![window.identifier isEqual:@"strip"] && ![window.identifier isEqual:@"settings"] && ![window.identifier isEqual:@"git-viewer"] && ![window.identifier isEqual:@"suggested-actions"] && ![window.identifier hasPrefix:@"site-"]) continue;
         if ([window isKindOfClass:NSPanel.class]) [(NSPanel *)window setFloatingPanel:enabled];
         window.level = level;
         if (window.level == level) updated++;
@@ -372,7 +410,7 @@ static BOOL devjay_make_strip_mouse_only(NSPanel *panel) {
     return YES;
 }
 
-int devjay_prepare_panel(void *pointer) {
+int devjay_prepare_strip(void *pointer) {
     devjay_start_focus_trace();
     NSPanel *window = (NSPanel *)pointer;
     if (window == nil) return 0;
@@ -386,7 +424,7 @@ int devjay_prepare_panel(void *pointer) {
     return 1;
 }
 
-unsigned int devjay_panel_preferences(void *pointer) {
+unsigned int devjay_strip_preferences(void *pointer) {
     NSWindow *window = (NSWindow *)pointer;
     unsigned int flags = 0;
     if (window.collectionBehavior & NSWindowCollectionBehaviorCanJoinAllSpaces) flags |= 1;
@@ -398,8 +436,17 @@ void devjay_focus_site(void *pointer) {
     NSWindow *window = (NSWindow *)pointer;
     if (!window) return;
     devjay_trace_focus(@"explicit-focus-request", window);
+    BOOL hidden = devjay_site_window_hidden(window);
+    id navigation = nil;
+    NSWindowAnimationBehavior animation = window.animationBehavior;
+    if (hidden) {
+        navigation = [[[NSObject alloc] init] autorelease];
+        objc_setAssociatedObject(window, &siteNavigationKey, navigation, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        if (window.isMiniaturized) objc_setAssociatedObject(window, &siteNavigationMinimizedKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        window.animationBehavior = NSWindowAnimationBehaviorNone;
+    }
     if (window.isMiniaturized) [window deminiaturize:nil];
-    if ([window.identifier isEqual:@"control-panel"]) {
+    if ([window.identifier isEqual:@"strip"]) {
         // Showing the strip must not activate the app's remembered Site.
         [window orderFrontRegardless];
         return;
@@ -408,6 +455,16 @@ void devjay_focus_site(void *pointer) {
     [window makeKeyAndOrderFront:nil];
     if (window.canBecomeMainWindow) [window makeMainWindow];
     [NSApp activateIgnoringOtherApps:YES];
+    window.animationBehavior = animation;
+    if (hidden) {
+        // The zero-alpha, non-interactive target lets AppKit switch Spaces
+        // without revealing a card. Keep it long enough for the bounded app
+        // handoff (two seconds), then order it out. A newer request/Show cancels
+        // this cleanup, so an old timer cannot hide a restored window.
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            if ([NSApp.windows containsObject:window]) devjay_finish_hidden_navigation(window, navigation);
+        });
+    }
 }
 
 void devjay_show_popup(void *pointer, void *parentPointer) {
@@ -447,7 +504,7 @@ void devjay_show_settings(void *pointer, void *parentPointer) {
 }
 static void devjay_show_context_window(NSWindow *window, NSWindow *parent, double x, double y, double width, double height, BOOL viewer) {
     NSRect anchor = parent.frame;
-    BOOL cardParent = [parent.identifier isEqual:@"control-panel"];
+    BOOL cardParent = [parent.identifier isEqual:@"strip"];
     BOOL controlAnchor = NO;
     WKWebView *view = parent ? devjay_webview(parent.contentView) : nil;
     if (view && isfinite(x) && isfinite(y) && isfinite(width) && isfinite(height) && width > 0 && height > 0) {
@@ -489,6 +546,10 @@ static void devjay_show_context_window(NSWindow *window, NSWindow *parent, doubl
     [window makeKeyAndOrderFront:nil];
     if (window.canBecomeMainWindow) [window makeMainWindow];
     [NSApp activateIgnoringOtherApps:YES];
+}
+
+void devjay_show_context_dialog(void *pointer, void *parentPointer) {
+    devjay_show_context_window((NSWindow *)pointer, (NSWindow *)parentPointer, 0, 0, 0, 0, YES);
 }
 
 void devjay_show_suggestions(void *pointer, void *parentPointer, double x, double y, double width, double height) {
@@ -547,4 +608,10 @@ void devjay_show_message(void *parentPointer, double x, double y, double width, 
     DevJayMessageDialog *dialog = [[DevJayMessageDialog alloc]
         initWithTitle:[NSString stringWithUTF8String:title] message:[NSString stringWithUTF8String:message]];
     devjay_show_context_window(dialog.window, (NSWindow *)parentPointer, x, y, width, height, YES);
+}
+
+// Restore visibility without selecting a Site or switching to its desktop.
+void devjay_show_site_without_focus(void *pointer) {
+    NSWindow *window = (NSWindow *)pointer;
+    if ([window.identifier hasPrefix:@"site-"] && !devjay_site_window_hidden(window) && !window.isMiniaturized) [window orderBack:nil];
 }

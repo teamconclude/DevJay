@@ -53,6 +53,8 @@ const (
 	cardMenuGitAction
 	cardMenuMinimize
 	cardMenuHide
+	cardMenuHideSites
+	cardMenuShowSites
 )
 
 func normalizeCardMenuRequest(req cardMenuRequest) (cardMenuRequest, bool) {

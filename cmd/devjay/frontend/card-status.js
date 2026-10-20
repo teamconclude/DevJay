@@ -44,7 +44,9 @@ export function cardStatus(git) {
     const prefix = `PR #${review.number}`;
     const index = labels.findIndex(label => label.startsWith(prefix + ' ·'));
     if (index < 0) continue;
-    const title = `${labels[index]}\n${review.detail}`;
+    const stale = !!review.earlier;
+    const note = stale ? (review.changeNote || 'Changes since review') : review.freshnessUnavailable ? 'Review freshness unavailable' : '';
+    const title = [labels[index], stale ? 'Stale review' : '', note, review.detail].filter(Boolean).join('\n');
     const approved = labels[index] === `${prefix} · Approved`;
     if (review.unavailable) {
       labels[index] = `${prefix} · ${approved ? 'Approved · ' : ''}Review unavailable`;
@@ -53,16 +55,16 @@ export function cardStatus(git) {
     }
     const values = [];
     const freshnessUnknown = review.freshnessUnavailable;
-    if (review.blockers > 0) values.push(metric('⊗', review.blockers, review.blockers === 1 ? 'blocker' : 'blockers', 'error', title));
-    if (review.warnings > 0) values.push(metric('⚠︎', review.warnings, review.warnings === 1 ? 'warning' : 'warnings', 'warning', title));
+    if (review.blockers > 0) values.push(metric('⊗', review.blockers, review.blockers === 1 ? 'blocker' : 'blockers', stale ? 'muted' : 'error', title));
+    if (review.warnings > 0) values.push(metric('⚠︎', review.warnings, review.warnings === 1 ? 'warning' : 'warnings', stale ? 'muted' : 'warning', title));
     const hasFindings = values.length > 0;
     if (!hasFindings) {
-      if (approved) values.push(metric('✓', '', 'Approved', 'good', title));
+      if (approved && !stale) values.push(metric('✓', '', 'Approved', 'good', title));
       else values.push(metric(review.earlier || freshnessUnknown ? '' : '✓', '', review.earlier || freshnessUnknown ? 'No findings reported' : 'No findings', review.earlier || freshnessUnknown ? 'muted' : 'good', title));
     }
-    result.reviews.push({label: prefix, values, title, note: review.earlier ? (review.changeNote || 'Changes since review') : freshnessUnknown ? 'Review freshness unavailable' : ''});
+    result.reviews.push({label: prefix, values, title, note, stale});
     // Keep approval above any reported findings; a clean report cannot hide it.
-    if (!approved || !hasFindings) labels.splice(index, 1);
+    if (!approved || (!hasFindings && !stale)) labels.splice(index, 1);
   }
   result.pr = labels.join('; ');
   result.prTitle = [git.github, ...(git.reviews || []).map(review => review.detail)].filter(Boolean).join('\n');

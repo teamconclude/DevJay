@@ -78,8 +78,8 @@ func (m *siteManager) emitPROpenResult(req prOpenRequest, sender, message string
 	if err != nil {
 		// Keep navigation failures outside the card layout. A native dialog
 		// stays readable until dismissed and cannot be cleared by a fit event.
-		parent := m.panel
-		if sender != "control-panel" {
+		parent := m.strip
+		if sender != "strip" {
 			if site := m.runtime[req.SiteID]; site != nil {
 				parent = site.Window
 			}

@@ -1,6 +1,6 @@
 # DevJay
 
-**A macOS control panel for parallel development with agents.**
+**A macOS strip for parallel development with agents.**
 
 Created by the [Conclude](https://conclude.io) team, DevJay brings your development folders into one compact overview. See branch status, local changes, incoming commits, and GitHub reviews, then jump to the desktop where the work is happening. Use any editor or coding agent; GitHub integration is optional.
 
@@ -8,7 +8,7 @@ DevJay was initially developed with GPT-6 Astra. The agent wrote all the code, w
 
 ## What is a Site?
 
-A **Site** is a local folder—usually a Git clone or worktree—with a small DevJay window that you place on its macOS desktop. Click its card in the control panel to switch to that desktop.
+A **Site** is a local folder—usually a Git clone or worktree—with a small DevJay window that you place on its macOS desktop. Click its card in the strip to switch to that desktop.
 
 A Site follows its folder: checking out another branch updates the card. Switching Sites activates a window without changing branches or files. Any local folder can be a Site.
 
@@ -35,11 +35,11 @@ This builds and opens `bin/DevJay.app`. Development builds use separate Sites an
 1. Open **Settings** with **⌘,**, or right-click a card and choose **DevJay settings…**.
 2. Click **Add**, or drop a folder into the Sites list.
 3. Use Mission Control to place its Site window on the desktop where you work.
-4. Repeat for your other folders, then click control-panel cards to move between them.
+4. Repeat for your other folders, then click strip cards to move between them.
 
 In Settings, choose a horizontal, vertical, or custom layout, adjust window appearance, and select your preferred editor. Drag cards by their headings while Settings is open to rearrange them. Removing a Site unregisters it after confirmation and leaves its folder untouched.
 
-Settings has sidebar pages for **Sites**, **Profiles**, **Windows & Cards**, **Editors & Apps**, and **Keyboard Shortcuts**. Profiles remember arrangements for monitor combinations such as Office, Home, and Laptop, and can switch automatically when displays change. Use **Apply changes to** to edit one or several Profiles. See the [Profile guide](docs/USER_GUIDE.md#profiles-and-settings-pages) for setup and placement recovery.
+Settings has sidebar pages for **Sites**, **Profiles**, **IDEs & editors**, **Windows and layout**, and **Keyboard shortcuts**. Profiles remember arrangements for monitor combinations such as Office, Home, and Laptop, and can switch automatically when displays change. Use **Apply changes to** to edit one or several Profiles. See the [Profile guide](docs/USER_GUIDE.md#profiles-and-settings-pages) for setup and placement recovery. Keyboard shortcuts lists the global bindings and lets you record custom combinations or restore defaults.
 
 ## Check your work
 
@@ -51,14 +51,16 @@ Right-click an incoming count for **Fetch and update <branch>…**, or an outgoi
 
 Approved and merged PR tags are green; failing CI takes priority in red. Click the colored PR tag in a card’s upper-right corner to open its pull request. DevJay can reuse tabs in Safari, Chrome, Edge, and Brave with macOS Automation permission; right-click the tag to open a new tab alongside existing PRs.
 
+When a PR is authored by someone else, their GitHub avatar appears at the card’s bottom-right. Hover for their username; click to open the PR. Your own PRs have no avatar.
+
 Background monitoring fetches remote information without changing your local branches or working files. Offline or failed checks show cached/unavailable status. GitHub support currently covers GitHub.com; fork PRs targeting another repository and GitHub Enterprise are not yet resolved.
 
 ## Useful controls
 
-- Right-click the strip and choose **Minimize strip** for a shallow row of clickable Site names, or **Hide strip** for a tiny restore button at its bottom-left corner. **⌃⌥⌘M** toggles the compact row globally; **⌃⌥⌘0** restores the full strip.
+- Right-click the strip and choose **Minimize strip** for a shallow row of clickable Site names, or **Hide strip** to hide it completely. **⌃⌥⌘D** hides/shows the strip; **⌃⌥⌘S** hides/shows Site windows. Their hidden state survives restarts and desktop navigation. **⌃⌥⌘M** toggles the compact row globally; **⌃⌥⌘0** restores the full strip.
 - **⌃⌥⌘1–9** visits Site desktops in card order from any app (Control–Option–Command plus a number). Hold the modifiers first to see numbered hints; a hidden strip briefly shows its row until you release them.
 - **⌘1–9** selects Sites in card order; **⌘0** shows DevJay. These shortcuts work while the app is active.
-- **⌘Q** quits and saves the layout. Activate a Site or Settings first if the control panel has left keyboard focus in another app.
+- **⌘Q** quits and saves the layout. Activate a Site or Settings first if the strip has left keyboard focus in another app.
 - If desktop switching does not work, enable **System Settings → Desktop & Dock → Mission Control → When switching to an application, switch to a Space with open windows for the application**, and keep DevJay’s Dock assignment at **None**.
 - If a window stays blank after wake, choose **View → Reload windows**.
 

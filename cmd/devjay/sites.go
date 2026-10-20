@@ -29,6 +29,8 @@ type CardPlacement struct {
 	Z int `json:"z"`
 }
 type SiteConfig struct {
+	SiteWindowsHidden bool                       `json:"siteWindowsHidden,omitempty"`
+	Shortcuts         map[string]ShortcutBinding `json:"shortcuts,omitempty"`
 	Profiles          []Profile                  `json:"profiles,omitempty"`
 	ActiveProfile     string                     `json:"activeProfile,omitempty"`
 	AutomaticProfiles *bool                      `json:"automaticProfiles,omitempty"`
@@ -144,6 +146,9 @@ func loadSites(path string) (SiteConfig, error) {
 	}
 	if c.Sites == nil {
 		c.Sites = []Site{}
+	}
+	if err := validateShortcuts(c.Shortcuts); err != nil {
+		return c, err
 	}
 	if err := validateProfiles(c); err != nil {
 		return c, err

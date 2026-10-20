@@ -45,6 +45,10 @@ check:
 	trap 'rm -f "$$settings_bin"' EXIT; \
 	clang -Wall -Wextra -Werror -fblocks -framework AppKit -framework WebKit tests/settings_layout_test.m -o "$$settings_bin"; \
 	"$$settings_bin"
+	@set -e; author_bin=$$(mktemp "$${TMPDIR:-/tmp}/devjay-pr-author.XXXXXX"); \
+	trap 'rm -f "$$author_bin"' EXIT; \
+	clang -Wall -Wextra -Werror -fblocks -framework AppKit -framework WebKit tests/pr_author_layout_test.m -o "$$author_bin"; \
+	"$$author_bin"
 	@set -e; menu_bin=$$(mktemp "$${TMPDIR:-/tmp}/devjay-card-menu.XXXXXX"); \
 	trap 'rm -f "$$menu_bin"' EXIT; \
 	clang -Wall -Wextra -Werror -fblocks -framework AppKit -framework WebKit tests/card_menu_test.m -o "$$menu_bin"; \

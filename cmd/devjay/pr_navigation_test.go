@@ -62,12 +62,12 @@ func TestPROpenRequiresCurrentPRAndMatchingSender(t *testing.T) {
 			t.Errorf("accepted unknown PR %d", number)
 		}
 	}
-	for _, sender := range []string{"settings", "site-other", "git-viewer-1", "", "control-panel-other"} {
+	for _, sender := range []string{"settings", "site-other", "git-viewer-1", "", "strip-other"} {
 		if validPRSender(sender, "test") {
 			t.Errorf("accepted sender %q", sender)
 		}
 	}
-	if !validPRSender("control-panel", "test") || !validPRSender("site-test", "test") || validPRSender("control-panel", "") {
+	if !validPRSender("strip", "test") || !validPRSender("site-test", "test") || validPRSender("strip", "") {
 		t.Fatal("sender matching is incorrect")
 	}
 }

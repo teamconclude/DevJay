@@ -16,13 +16,13 @@ int main(void) {
     assert(dp_nearest_screen((DPRect){1450,100,100,100}, screens,3) == 1); // gap
     assert(dp_nearest_screen((DPRect){4000,100,300,245}, screens,3) == 2); // unplugged far right
     assert(dp_nearest_screen((DPRect){1400,100,400,245}, screens,3) == 2); // most overlap
-    check(dp_panel_size(0, 5, 2000, 1200, 0, 0, 0), (DPRect){0,0,1130,174});
-    check(dp_panel_size(1, 5, 2000, 1200, 0, 0, 0), (DPRect){0,0,234,809});
-    check(dp_panel_size(2, 5, 2000, 1200, 0, 0, 0), (DPRect){0,0,682,329});
-    check(dp_panel_size(2, 8, 500, 1200, 22, 0, 0), (DPRect){0,0,458,671});
-    check(dp_panel_size(2, 5, 2000, 1200, 0, 800, 450), (DPRect){0,0,818,467});
-    check(dp_panel_size(1, 20, 1000, 700, 0, 0, 0), (DPRect){0,0,234,700});
-    check(dp_panel_size(0, 0, 2000, 1200, 0, 0, 0), (DPRect){0,0,234,174});
+    check(dp_strip_size(0, 5, 2000, 1200, 0, 0, 0), (DPRect){0,0,1130,174});
+    check(dp_strip_size(1, 5, 2000, 1200, 0, 0, 0), (DPRect){0,0,234,809});
+    check(dp_strip_size(2, 5, 2000, 1200, 0, 0, 0), (DPRect){0,0,682,329});
+    check(dp_strip_size(2, 8, 500, 1200, 22, 0, 0), (DPRect){0,0,458,671});
+    check(dp_strip_size(2, 5, 2000, 1200, 0, 800, 450), (DPRect){0,0,818,467});
+    check(dp_strip_size(1, 20, 1000, 700, 0, 0, 0), (DPRect){0,0,234,700});
+    check(dp_strip_size(0, 0, 2000, 1200, 0, 0, 0), (DPRect){0,0,234,174});
     DPRect old = {0,0,1440,900}, larger = {0,0,1920,1080};
     check(dp_reanchor((DPRect){1120,30,300,200}, old, larger), (DPRect){1600,30,300,200});
     check(dp_reanchor((DPRect){1120,670,300,200}, old, larger), (DPRect){1600,850,300,200});

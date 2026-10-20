@@ -3,7 +3,7 @@ package main
 /*
 #cgo LDFLAGS: -framework AppKit -framework WebKit
 #include <stdlib.h>
-int devjay_card_menu(void *window, double x, double y, const char *first, const char *second, const char *settings, const char *quit, const char *action, const char *disabledReason, const char *hint, int strip);
+int devjay_card_menu(void *window, double x, double y, const char *first, const char *second, const char *settings, const char *quit, const char *action, const char *disabledReason, const char *hint, int strip, int siteWindowsHidden);
 */
 import "C"
 
@@ -16,7 +16,7 @@ import (
 
 // Run off the manager queue: AppKit tracks the menu synchronously until it is
 // dismissed. A per-popup result avoids mutable context-menu callback targets.
-func showCardMenu(window *application.WebviewWindow, req cardMenuRequest, option *cardGitOption, strip bool) cardMenuAction {
+func showCardMenu(window *application.WebviewWindow, req cardMenuRequest, option *cardGitOption, strip, siteWindowsHidden bool) cardMenuAction {
 	labels := cardMenuLabels(req)
 	actionTitle, actionReason, hintText := "", "", ""
 	if option != nil {
@@ -36,9 +36,13 @@ func showCardMenu(window *application.WebviewWindow, req cardMenuRequest, option
 	if strip {
 		stripMenu = 1
 	}
+	var sitesHidden C.int
+	if siteWindowsHidden {
+		sitesHidden = 1
+	}
 	var selected C.int
 	application.InvokeSync(func() {
-		selected = C.devjay_card_menu(window.NativeWindow(), C.double(req.X), C.double(req.Y), first, second, settings, quit, actionLabel, disabled, hint, stripMenu)
+		selected = C.devjay_card_menu(window.NativeWindow(), C.double(req.X), C.double(req.Y), first, second, settings, quit, actionLabel, disabled, hint, stripMenu, sitesHidden)
 	})
 	return cardMenuAction(selected)
 }
@@ -47,8 +51,8 @@ func showCardMenu(window *application.WebviewWindow, req cardMenuRequest, option
 // the caller can reject a selection if either was replaced while the menu ran.
 func (m *siteManager) cardMenuSource(req cardMenuRequest, sender string) (*application.WebviewWindow, *siteRuntime) {
 	if req.Kind == "strip" {
-		if sender == "control-panel" && m.panelReady {
-			return m.panel, nil
+		if sender == "strip" && m.stripReady {
+			return m.strip, nil
 		}
 		return nil, nil
 	}
@@ -56,8 +60,8 @@ func (m *siteManager) cardMenuSource(req cardMenuRequest, sender string) (*appli
 	if site == nil || !site.Ready {
 		return nil, nil
 	}
-	if sender == "control-panel" && m.panelReady && m.panel != nil {
-		return m.panel, site
+	if sender == "strip" && m.stripReady && m.strip != nil {
+		return m.strip, site
 	}
 	if sender == "site-"+req.SiteID && site.Window != nil {
 		return site.Window, site
@@ -87,10 +91,11 @@ func (m *siteManager) registerCardMenuEvents() {
 			if parent == nil {
 				return
 			}
+			siteWindowsHidden := m.config.SiteWindowsHidden // Capture on the manager queue before the popup goroutine.
 			if req.Kind == "strip" {
 				menuOpen = true
 				go func() {
-					selected := showCardMenu(parent, req, nil, true)
+					selected := showCardMenu(parent, req, nil, true, siteWindowsHidden)
 					m.send(func() {
 						menuOpen = false
 						if current, _ := m.cardMenuSource(req, sender); current != parent {
@@ -101,6 +106,8 @@ func (m *siteManager) registerCardMenuEvents() {
 							m.setStripMode(stripCompact)
 						case cardMenuHide:
 							m.setStripMode(stripHidden)
+						case cardMenuHideSites, cardMenuShowSites:
+							m.setSiteWindowsHidden(selected == cardMenuHideSites)
 						case cardMenuSettings:
 							m.openSettings()
 						case cardMenuQuit:
@@ -128,19 +135,23 @@ func (m *siteManager) registerCardMenuEvents() {
 			}
 			menuOpen = true
 			go func() {
-				selected := showCardMenu(parent, req, option, sender == "control-panel")
+				selected := showCardMenu(parent, req, option, sender == "strip", siteWindowsHidden)
 				m.send(func() {
 					menuOpen = false
 					currentParent, currentSite := m.cardMenuSource(req, sender)
 					if currentParent != parent || currentSite != site {
 						return
 					}
-					if (selected == cardMenuMinimize || selected == cardMenuHide) && sender == "control-panel" {
+					if (selected == cardMenuMinimize || selected == cardMenuHide) && sender == "strip" {
 						mode := stripCompact
 						if selected == cardMenuHide {
 							mode = stripHidden
 						}
 						m.setStripMode(mode)
+						return
+					}
+					if (selected == cardMenuHideSites || selected == cardMenuShowSites) && sender == "strip" {
+						m.setSiteWindowsHidden(selected == cardMenuHideSites)
 						return
 					}
 					if selected == cardMenuGitAction {

@@ -10,7 +10,8 @@ import {nextNotice} from '../cmd/devjay/frontend/notice.js';
 import {rebasedPublishWarning} from '../cmd/devjay/frontend/suggested-actions.js';
 const navigationSource=(await readFile(new URL('../cmd/devjay/frontend/settings-navigation.js',import.meta.url),'utf8')).replace(/export /g,'');
 const profilesSource=(await readFile(new URL('../cmd/devjay/frontend/profile-settings.js',import.meta.url),'utf8')).replace(/export /g,'');
-const source=navigationSource+'\n'+profilesSource+'\n'+(await readFile(new URL('../cmd/devjay/frontend/app.js',import.meta.url),'utf8')).replace(/^import .*;\n/gm,'');
+const shortcutsSource=(await readFile(new URL('../cmd/devjay/frontend/shortcut-settings.js',import.meta.url),'utf8')).replace(/export /g,'');
+const source=shortcutsSource+'\n'+navigationSource+'\n'+profilesSource+'\n'+(await readFile(new URL('../cmd/devjay/frontend/app.js',import.meta.url),'utf8')).replace(/^import .*;\n/gm,'');
 
 // Exercise the real snapshot renderer with a small DOM and the Wails boundary.
 function app(search='', actionResult=true) {
@@ -51,7 +52,7 @@ function app(search='', actionResult=true) {
   uiReady:()=>()=>readyCount++,installCardSizing:()=>noop,installPathLabels:()=>noop,mountEditorSettings:()=>({renderEditor:noop}),
   mountGitViewer:()=>noop,cardStatus,rebasedPublishWarning,cardBounds,
   mountSuggestedActions:()=>noop,mountViewerSuggestions:()=>noop,
-  installPanelDrag:(_list,options)=>{drag=options;},installCardActivation,installDragOriginGuard:noop,installCardHover:noop,installCardMenu:noop,
+  installStripDrag:(_list,options)=>{drag=options;},installCardActivation,installDragOriginGuard:noop,installCardHover:noop,installCardMenu:noop,
  };
  vm.runInNewContext(source,context);
  return {document,root,calls,get readyCount(){return readyCount;},advance:ms=>{clock+=ms;},reportBridge:(text,error)=>bridgeReport(text,error),event:(name,data)=>events[name]?.({data}),get drag(){return drag;},snapshot:s=>events['devjay:snapshot']({data:s}),click:target=>{
@@ -68,7 +69,7 @@ test('Settings sidebar switches pages without rebuilding their controls',()=>{
  const pages=view.root.querySelectorAll('.settings-page'),buttons=view.root.querySelectorAll('.settings-nav-item');
  assert.equal(pages.length,5);assert.equal(pages.filter(p=>!p.hidden).length,1);
  const row=view.root.querySelector('.site-row');
- buttons.find(b=>b.textContent==='Windows & Cards').onclick();
+ buttons.find(b=>b.textContent==='Windows and layout').onclick();
  assert.equal(pages.filter(p=>!p.hidden)[0].id,'settings-page-windows');
  buttons.find(b=>b.textContent==='Sites').onclick();
  assert.equal(view.root.querySelector('.site-row'),row);
@@ -175,7 +176,7 @@ test('shortcut release while invisible clears stale hints when the full strip re
  assert.equal(view.root.querySelector('.card').dataset.shortcut,'');
 });
 
-test('desktop Site and panel branch labels do not open the branch chooser',async()=>{
+test('desktop Site and strip branch labels do not open the branch chooser',async()=>{
  const item=site('a','feature/topic');item.git.head='current-head';
  for(const search of ['?site=a','']) {
   const view=app(search);view.snapshot(state([item]));
@@ -311,7 +312,7 @@ test('Site publish button shows blockers and recovers from failed request delive
  assert.match(view.root.querySelector('.notice').textContent,/Delivery failed/);
 });
 
-test('ending a panel drag renders the latest snapshot even after cancellation',()=>{
+test('ending a strip drag renders the latest snapshot even after cancellation',()=>{
  const view=app();
  view.snapshot(state([site('a','old')]));
  view.drag.busy(true);
@@ -494,11 +495,11 @@ test('edit and commit badges retain their category for click and context menus',
 
 
 test('PR navigation information appears only in the requesting card window',()=>{
- const panel=app(),siteView=app('?site=a');
- const result={siteID:'a',number:1234,sender:'control-panel',message:'Opened in your default browser.'};
- panel.event('devjay:pr-open-result',result);siteView.event('devjay:pr-open-result',result);
- assert.equal(panel.root.querySelector('.notice').textContent,result.message);
- assert.equal(panel.root.querySelector('.notice').classList.contains('error'),false);
+ const strip=app(),siteView=app('?site=a');
+ const result={siteID:'a',number:1234,sender:'strip',message:'Opened in your default browser.'};
+ strip.event('devjay:pr-open-result',result);siteView.event('devjay:pr-open-result',result);
+ assert.equal(strip.root.querySelector('.notice').textContent,result.message);
+ assert.equal(strip.root.querySelector('.notice').classList.contains('error'),false);
  assert.equal(siteView.root.querySelector('.notice').textContent,'');
 });
 
@@ -1094,7 +1095,7 @@ test('the radiating glow is one decorative card child and clears with waiting or
  }
 });
 
-test('tooltip refresh includes card placement and order, and defers until the final panel-drag render',()=>{
+test('tooltip refresh includes card placement and order, and defers until the final strip-drag render',()=>{
  const view=app(), a={...site('a'),developmentAppsKnown:true,developmentApps:[{name:'GoLand'}]}, b=site('b');
  const count=()=>view.calls.filter(([name])=>name==='devjay:app-tooltip-refresh').length;
  view.snapshot(state([a,b]));assert.equal(count(),1);
@@ -1159,10 +1160,115 @@ test('Settings describes global shortcuts and clears registration errors after r
  const view=app('?settings');
  view.snapshot({...state([]),shortcutError:'Global shortcuts unavailable: ⌃⌥⌘M.'});
  const error=view.root.querySelectorAll('.help').find(n=>n.classList.contains('error'));
- assert.ok(view.root.textContent.includes('⌃⌥⌘1–9'));
+ assert.ok(view.root.textContent.includes('Click Record'));
  assert.equal(error.textContent,'Global shortcuts unavailable: ⌃⌥⌘M.');
  assert.equal(error.hidden,false);
  view.snapshot(state([]));
  assert.equal(error.hidden,true);
  assert.equal(error.textContent,'');
+});
+
+
+test('custom shortcut list retains row focus and records, cancels and resets the selected action',async()=>{
+ const view=app('?settings');
+ const items=[{id:'toggle-strip',title:'Hide/show strip',label:'⌃⌥⌘D',default:'⌃⌥⌘D',custom:false},{id:'site-1',title:'Go to Site 1',label:'⌃⌘F1',default:'⌃⌥⌘1',custom:true,unavailable:true}];
+ const snapshot=extra=>view.snapshot({...state([]),shortcutSettings:{items,...extra}});
+ snapshot();
+ const rows=view.root.querySelectorAll('.shortcut-row');assert.equal(rows.length,2);
+ const [record,reset]=rows[0].querySelectorAll('button');assert.equal(reset.disabled,true);
+ record.focus();await record.onclick();assert.deepEqual(JSON.parse(JSON.stringify(view.calls.at(-1))),['devjay:shortcut',{operation:'record',id:'toggle-strip'}]);
+ snapshot({recording:'toggle-strip'});assert.equal(view.document.activeElement,record);assert.equal(record.disabled,true);
+ assert.equal(rows[1].querySelector('button').disabled,true);assert.match(rows[0].textContent,/Listening/);
+ const cancel=view.root.querySelector('.shortcut-cancel');assert.equal(cancel.hidden,false);
+ snapshot();await cancel.onclick();assert.equal(view.calls.at(-1)[1].operation,'cancel'); // A native mouse cancellation can arrive before the click.
+ snapshot({message:'That shortcut is already in use.'});assert.match(view.root.querySelector('.shortcut-message').textContent,/already in use/);
+ await rows[1].querySelectorAll('button')[1].onclick();assert.equal(view.calls.at(-1)[1].operation,'reset');assert.equal(view.calls.at(-1)[1].id,'site-1');
+ snapshot();assert.equal(view.root.querySelector('.shortcut-message').hidden,true);
+});
+
+test('custom Site hints show the assigned key instead of its ordinal',()=>{
+ const view=app();view.snapshot({...state([site('a')]),shortcutHints:1,shortcutLabels:['F1']});
+ assert.equal(view.root.querySelector('.card').dataset.shortcut,'F1');
+});
+
+
+test('stale review counts use gray without a label, open their PR, and regain color after a fresh review',async()=>{
+ for(const search of ['', '?site=a']) {
+  const view=app(search),item=site('a','feature');
+  const report={number:2865,blockers:1,warnings:4,earlier:true,changeNote:'Commits changed since review',detail:'Review is for an earlier commit'};
+  item.git={...item.git,github:'PR #2865 · Review required',pullRequests:[{number:2865}],reviews:[report]};
+  view.snapshot(state([item]));
+  const row=view.root.querySelector('.review-row');
+  assert.deepEqual(row.querySelectorAll('.metric').map(node=>node.textContent),['⊗1blocker','⚠︎4warnings']);
+  assert.ok(row.querySelectorAll('.metric').every(node=>node.classList.contains('muted')));
+  assert.match(row.attrs['aria-label'],/Stale review/);
+  assert.match(row.title,/Commits changed since review/);
+  assert.equal(view.root.querySelectorAll('.freshness').length,0,'stale detail does not add another card row');
+  for(const badge of row.querySelectorAll('.metric')) {
+   assert.equal(cardMenuTarget(badge).number,2865);
+   await badge.onclick(); view.click(badge);
+  }
+  assert.equal(view.calls.filter(([name])=>name==='devjay:pr-open').length,2);
+  assert.equal(view.calls.some(([name])=>name==='devjay:activate'),false);
+  item.git.reviews=[{...report,earlier:false,changeNote:'',blockers:0,warnings:0,detail:'Current clean report'}];
+  view.snapshot(state([item]));
+  const current=view.root.querySelector('.review-row');
+  assert.equal(current.querySelectorAll('.metric').length,1);
+  assert.equal(current.querySelector('.metric').textContent,'✓No findings');
+  assert.ok(current.querySelector('.metric').classList.contains('good'));
+  assert.doesNotMatch(current.attrs['aria-label'],/Stale review/);
+ }
+});
+
+test('other PR authors occupy the card footer with accessible PR actions and stable image fallback',async()=>{
+ for(const search of ['', '?site=a']) {
+  const view=app(search),item=site('a','feature');
+  item.developmentAppsKnown=true;
+  item.developmentApps=[{name:'GoLand',bundleID:'goland',agents:['Codex']}];
+  item.git.pullRequests=[{number:12,state:'Approved',ciState:'success',otherAuthor:{login:'someone-else',avatarURL:'https://avatars.githubusercontent.com/u/123?s=48'}},{number:13,state:'Open'}];
+  view.snapshot(state([item]));
+  const footer=view.root.querySelector('.card-footer'),avatar=footer.querySelector('.pr-author');
+  assert.equal(footer.querySelectorAll('.pr-author').length,1);
+  assert.ok(footer.querySelector('.development-app'));
+  assert.equal(avatar.dataset.appTooltip,'PR #12 by @someone-else');
+  assert.equal(avatar.attrs['aria-label'],'Open PR #12 by @someone-else in browser');
+  assert.equal(cardMenuTarget(avatar).number,12);
+  assert.ok(view.root.querySelector('.pr-tag').classList.contains('pr-approved'));
+  const image=avatar.querySelector('img'),fallback=avatar.querySelector('.development-app-initials');
+  assert.equal(image.referrerPolicy,'no-referrer');assert.equal(image.width,22);assert.equal(image.height,22);
+  assert.equal(image.hidden,true);assert.equal(fallback.textContent,'SE');
+  image.onload();assert.equal(fallback.hidden,true);assert.equal(image.hidden,false);
+  image.onerror();assert.equal(fallback.hidden,false);assert.equal(avatar.querySelector('img'),null);
+  await avatar.onclick();view.click(avatar);
+  assert.deepEqual(JSON.parse(JSON.stringify(view.calls.filter(([name])=>name==='devjay:pr-open'))),[['devjay:pr-open',{siteID:'a',number:12,anchor:{x:10,y:20,width:270,height:140}}]]);
+  assert.equal(view.calls.some(([name])=>name==='devjay:activate'),false);
+  const refreshes=view.calls.filter(([name])=>name==='devjay:app-tooltip-refresh').length;
+  item.git.pullRequests[0].otherAuthor={login:'changed-author'};
+  view.snapshot(state([item]));
+  assert.equal(view.calls.filter(([name])=>name==='devjay:app-tooltip-refresh').length,refreshes+1);
+  assert.match(view.root.querySelector('.pr-author').dataset.appTooltip,/@changed-author/);
+  view.snapshot({...state([item]),preferences:{showIDEStatus:false}});
+  assert.equal(view.root.querySelector('.development-app'),null);
+  assert.ok(view.root.querySelector('.pr-author'));
+  delete item.git.pullRequests[0].otherAuthor;
+  view.snapshot({...state([item]),preferences:{showIDEStatus:false}});
+  assert.equal(view.root.querySelector('.pr-author'),null);
+  assert.equal(view.root.querySelector('.card-footer'),null);
+ }
+});
+
+test('each avatar opens its matching PR even when one author has multiple PRs',async()=>{
+ const view=app(),item=site('a');
+ item.git.pullRequests=[12,14].map(number=>({number,otherAuthor:{login:'someone'}}));
+ view.snapshot(state([item]));
+ const avatars=view.root.querySelectorAll('.pr-author');
+ assert.equal(avatars.length,2);
+ for(const [i,avatar] of avatars.entries()) {
+  assert.equal(cardMenuTarget(avatar.querySelector('.development-app-initials')).number,[12,14][i]);
+  await avatar.onclick();
+ }
+ assert.deepEqual(view.calls.filter(([name])=>name==='devjay:pr-open').map(([,data])=>data.number),[12,14]);
+ item.git.pullRequests=[];
+ view.snapshot(state([item]));
+ assert.equal(view.root.querySelector('.pr-authors'),null);
 });

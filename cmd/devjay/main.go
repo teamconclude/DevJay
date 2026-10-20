@@ -42,29 +42,33 @@ func main() {
 	var manager *siteManager
 	app := application.New(application.Options{
 		Name: "DevJay", Description: "Your parallel development workspace",
-		Icon:       bundledIcon(),
-		Assets:     application.AssetOptions{Handler: application.BundledAssetFileServer(assets)},
-		Mac:        application.MacOptions{ApplicationShouldTerminateAfterLastWindowClosed: true},
+		Icon:   bundledIcon(),
+		Assets: application.AssetOptions{Handler: application.BundledAssetFileServer(assets)},
+		// Hiding the last ordinary Site window can trigger AppKit termination
+		// even while the nonactivating strip panel remains visible. Keep global
+		// shortcuts alive when every window is hidden; explicit Quit and the
+		// strip close hook below still handle intentional shutdown.
+		Mac:        application.MacOptions{ApplicationShouldTerminateAfterLastWindowClosed: false},
 		ShouldQuit: func() bool { return manager == nil || manager.shouldQuit() },
 		SingleInstance: &application.SingleInstanceOptions{
 			UniqueID: instanceID(),
 			OnSecondInstanceLaunch: func(application.SecondInstanceData) {
 				if manager != nil {
-					go manager.send(manager.showControlPanel)
+					go manager.send(manager.showStrip)
 				}
 			},
 		},
 	})
 	config, err := loadSites(siteConfigPath())
 	manager = newSiteManager(app, config, err)
-	panel := app.Window.NewWithOptions(application.WebviewWindowOptions{
-		Name: "control-panel", Title: "DevJay", URL: "/", Width: 900, Height: 174, MinWidth: 234, MinHeight: 120, Frameless: manager.config.decoration() != "normal",
+	strip := app.Window.NewWithOptions(application.WebviewWindowOptions{
+		Name: "strip", Title: "DevJay", URL: "/", Width: 900, Height: 174, MinWidth: 234, MinHeight: 120, Frameless: manager.config.decoration() != "normal",
 		X: 120, Y: 80, InitialPosition: application.WindowXY, CloseButtonState: application.ButtonEnabled, MaximiseButtonState: application.ButtonDisabled,
 		BackgroundColour: application.NewRGB(20, 24, 32),
 		Mac:              application.MacWindow{CornerType: application.MacWindowCornerTypeRounded, WindowClass: application.MacWindowClassPanel, PanelPreferences: application.MacPanelPreferences{NonActivating: true, FloatingPanel: true}, CollectionBehavior: application.MacWindowCollectionBehaviorCanJoinAllSpaces | application.MacWindowCollectionBehaviorStationary | application.MacWindowCollectionBehaviorIgnoresCycle | application.MacWindowCollectionBehaviorFullScreenNone, TabbingMode: application.MacWindowTabbingModeDisallowed},
 	})
-	manager.panel = panel
-	manager.watchView("control-panel", panel)
+	manager.strip = strip
+	manager.watchView("strip", strip)
 	settings := app.Window.NewWithOptions(application.WebviewWindowOptions{Name: "settings", EnableFileDrop: true, Title: "DevJay Settings", URL: "/?settings", Width: 880, Height: 620, MinWidth: 760, MinHeight: 440, Hidden: true, MaximiseButtonState: application.ButtonDisabled, BackgroundColour: application.NewRGB(20, 24, 32), Mac: application.MacWindow{CornerType: application.MacWindowCornerTypeRounded, CollectionBehavior: application.MacWindowCollectionBehaviorMoveToActiveSpace | application.MacWindowCollectionBehaviorFullScreenNone, TabbingMode: application.MacWindowTabbingModeDisallowed}})
 	manager.settings = settings
 	manager.watchView("settings", settings)
@@ -81,7 +85,7 @@ func main() {
 		})
 	})
 	var quit sync.Once
-	panel.RegisterHook(events.Common.WindowClosing, func(e *application.WindowEvent) {
+	strip.RegisterHook(events.Common.WindowClosing, func(e *application.WindowEvent) {
 		if app.Context().Err() != nil {
 			return
 		}
@@ -96,14 +100,14 @@ func main() {
 		settings.Hide()
 		manager.send(func() { manager.profiles.targets = nil; manager.broadcast() })
 	})
-	panel.OnWindowEvent(events.Common.WindowRuntimeReady, func(*application.WindowEvent) {
+	strip.OnWindowEvent(events.Common.WindowRuntimeReady, func(*application.WindowEvent) {
 		manager.send(func() {
-			if !manager.panelReady {
-				restoreWindowLayout(panel, "control-panel")
-				if !prepareControlPanel(panel) {
-					log.Print("Control Panel click handling unavailable")
+			if !manager.stripReady {
+				restoreWindowLayout(strip, "strip")
+				if !prepareStrip(strip) {
+					log.Print("Strip click handling unavailable")
 				}
-				manager.panelReady = true
+				manager.stripReady = true
 				manager.applyProfileViewSettings()
 			}
 			if manager.openSettingsPending {
@@ -142,16 +146,13 @@ func main() {
 			}
 		})
 	})
-	manager.hiddenItem = view.AddCheckbox("Hide strip", false).OnClick(func(ctx *application.Context) {
-		manager.send(func() {
-			if ctx.IsChecked() {
-				manager.setStripMode(stripHidden)
-			} else {
-				manager.setStripMode(stripFull)
-			}
-		})
+	manager.hiddenItem = view.Add("Hide strip").OnClick(func(*application.Context) {
+		manager.send(manager.toggleStripVisibility)
 	})
-	manager.allDesktopsItem = view.AddCheckbox("Control panel always visible", true).OnClick(func(ctx *application.Context) {
+	manager.siteWindowsItem = view.Add("Hide Site windows").OnClick(func(*application.Context) {
+		manager.send(func() { manager.setSiteWindowsHidden(!manager.config.SiteWindowsHidden) })
+	})
+	manager.allDesktopsItem = view.AddCheckbox("Strip on all desktops", true).OnClick(func(ctx *application.Context) {
 		manager.send(func() { manager.setViewPreference("allDesktops", ctx.IsChecked()) })
 	})
 	manager.onTopItem = view.AddCheckbox("Show all windows on top", true).OnClick(func(ctx *application.Context) {
@@ -163,7 +164,7 @@ func main() {
 	})
 	sites := menu.AddSubmenu("Sites")
 	sites.Add("Show DevJay").SetAccelerator("CmdOrCtrl+0").OnClick(func(*application.Context) {
-		manager.send(manager.showControlPanel)
+		manager.send(manager.showStrip)
 	})
 	// Shortcuts follow the current visible card order, including manual overrides.
 	for i := 0; i < 9; i++ {
@@ -179,7 +180,7 @@ func main() {
 	}
 	app.Event.OnApplicationEvent(events.Common.ApplicationStarted, func(*application.ApplicationEvent) { go manager.run() })
 	app.Event.OnApplicationEvent(events.Mac.ApplicationShouldHandleReopen, func(*application.ApplicationEvent) {
-		manager.send(manager.showControlPanel)
+		manager.send(manager.showStrip)
 	})
 	app.OnShutdown(manager.shutdown)
 	if err := app.Run(); err != nil {

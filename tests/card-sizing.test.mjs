@@ -47,14 +47,14 @@ function sizingHarness(workspace=false) {
   settle:()=>{measure();advance(3000);}};
 }
 
-test('panel follows its content height with extra room and refits after decoration changes',()=>{
+test('strip follows its content height with extra room and refits after decoration changes',()=>{
  const view=sizingHarness();view.settle();
  assert.equal(view.requests[0].height,191); // 140 content + 39 chrome + 12 breathing room.
  assert.equal(view.requests[0].refit,true);
  assert.equal(view.requests[0].decoration,'minimal');
  assert.deepEqual(view.list.style,{flex:'',height:''}); // Measuring never leaves the row stretched differently.
  view.resize(191);view.settle();
- assert.equal(view.requests.length,1); // A fitted panel settles without another request.
+ assert.equal(view.requests.length,1); // A fitted strip settles without another request.
  view.resize(400);view.settle();
  assert.equal(view.requests[1].height,191); // Height stays automatic; width is untouched.
  view.body.dataset.decoration='none';view.list.clientHeight=383;view.settle();
@@ -70,7 +70,7 @@ test('panel follows its content height with extra room and refits after decorati
  assert.equal(view.requests.length,5); // Same fitted height needs no native work.
 });
 
-test('panel waits for initial cards before refitting, and Sites remain grow-only',()=>{
+test('strip waits for initial cards before refitting, and Sites remain grow-only',()=>{
  const view=sizingHarness();view.list.children=[];view.settle();
  assert.equal(view.requests.length,0);
  view.list.children=[{}];view.list.natural=10;view.settle();
@@ -82,7 +82,7 @@ test('panel waits for initial cards before refitting, and Sites remain grow-only
  assert.equal(site.requests[0].refit,false);
 });
 
-test('status and app rows grow the panel, then disappearing rows shrink it without changing decoration',()=>{
+test('status and app rows grow the strip, then disappearing rows shrink it without changing decoration',()=>{
  const view=sizingHarness();
  view.list.natural=86;view.settle();
  assert.equal(view.requests[0].height,137);
@@ -116,7 +116,7 @@ test('content fitting waits for card dragging to finish and retries after a stal
  assert.equal(view.requests.length,count+2);
 });
 
-function fittedPanel() {
+function fittedStrip() {
  const view=sizingHarness();view.measure();
  view.resize(view.requests.at(-1).height);view.measure();
  view.requests.length=0;
@@ -124,7 +124,7 @@ function fittedPanel() {
 }
 
 test('a fleeting status row causes no native resize, including after its timer expires',()=>{
- const view=fittedPanel();
+ const view=fittedStrip();
  view.list.natural=180;view.measure();
  view.advance(150);assert.equal(view.requests.length,0);
  view.list.natural=140;view.measure();view.advance(2000);
@@ -133,7 +133,7 @@ test('a fleeting status row causes no native resize, including after its timer e
 });
 
 test('persistent growth waits 300 ms without restarting on same-height updates',()=>{
- const view=fittedPanel();
+ const view=fittedStrip();
  view.list.natural=180;view.measure();
  for(let i=0;i<2;i++){view.advance(100);view.measure();}
  view.advance(99);assert.equal(view.requests.length,0);
@@ -145,7 +145,7 @@ test('persistent growth waits 300 ms without restarting on same-height updates',
 });
 
 test('shrinking waits three full seconds and cancels if the rows come back',()=>{
- const view=fittedPanel();
+ const view=fittedStrip();
  view.list.natural=100;view.measure();view.advance(2700);
  view.list.natural=140;view.measure();view.advance(3000);
  assert.equal(view.requests.length,0);
@@ -157,7 +157,7 @@ test('shrinking waits three full seconds and cancels if the rows come back',()=>
 });
 
 test('a changed target restarts the wait, and expiry remeasures current content',()=>{
- const view=fittedPanel();
+ const view=fittedStrip();
  view.list.natural=180;view.measure();view.advance(200);
  view.list.natural=200;view.measure();view.advance(299);
  assert.equal(view.requests.length,0);
@@ -168,7 +168,7 @@ test('a changed target restarts the wait, and expiry remeasures current content'
 });
 
 test('layout changes cancel pending fits and use the current viewport immediately',()=>{
- const view=fittedPanel();
+ const view=fittedStrip();
  view.list.natural=180;view.measure();view.advance(100);
  view.body.dataset.layout='vertical';view.list.natural=300;view.measure();
  assert.equal(view.requests[0].height,351);
@@ -184,7 +184,7 @@ test('layout changes cancel pending fits and use the current viewport immediatel
 
 test('pending fitting is discarded during dragging or when the last card disappears',()=>{
  for(const empty of [false,true]){
-  const view=fittedPanel();
+  const view=fittedStrip();
   view.list.natural=180;view.measure();
   if(empty)view.list.children=[];else view.setBusy(true);
   view.advance(300);assert.equal(view.requests.length,0);
@@ -197,7 +197,7 @@ test('pending fitting is discarded during dragging or when the last card disappe
 
 
 test('the native growth response does not bypass shrink delay if a row just disappeared',()=>{
- const view=fittedPanel();
+ const view=fittedStrip();
  view.list.natural=180;view.measure();view.advance(300);
  assert.equal(view.requests[0].height,231);
  // The bridge applies the growth after newer content has arrived.

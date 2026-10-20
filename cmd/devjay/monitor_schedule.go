@@ -33,14 +33,14 @@ func earlierDeadline(a, b time.Time) time.Time {
 
 func (m *siteManager) ensureWindowSnapshot(items map[string]siteRuntime) {
 	if !m.monitor.windowsValid {
-		var panel, settings *application.WebviewWindow
-		if m.panelReady {
-			panel = m.panel
+		var strip, settings *application.WebviewWindow
+		if m.stripReady {
+			strip = m.strip
 		}
 		if m.settingsReady {
 			settings = m.settings
 		}
-		m.monitor.positions, m.monitor.states, m.monitor.preferences, m.monitor.settingsOpen, m.monitor.windowNumbers = readWindowSnapshot(items, panel, settings)
+		m.monitor.positions, m.monitor.states, m.monitor.preferences, m.monitor.settingsOpen, m.monitor.windowNumbers = readWindowSnapshot(items, strip, settings)
 		m.monitor.windowsValid = true
 		m.monitor.visibilityDirty = true
 		m.monitor.nativeDue = time.Now().Add(nativeMonitorFallback)
@@ -189,8 +189,10 @@ func snapshotForWindow(snapshot appSnapshot, id, viewerSite string) appSnapshot 
 	snapshot.Catalog = nil
 	if id != "settings" {
 		snapshot.Profiles = ProfilesView{}
+		snapshot.ShortcutSettings = nil
 	}
-	if id != "control-panel" {
+	if id != "strip" {
+		snapshot.ShortcutLabels = nil
 		snapshot.ShortcutHints = 0 // Only the full strip renders modifier hints.
 	}
 	site := viewerSite

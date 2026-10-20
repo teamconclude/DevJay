@@ -61,22 +61,27 @@ test('review findings replace the generic PR label with separate severity badges
  assert.deepEqual(s.reviews[0].values.map(x=>[x.symbol,x.value,x.label,x.tone]),[['⊗',1,'blocker','error'],['⚠︎',7,'warnings','warning']]);
  assert.match(s.reviews[0].title,/Review required/);
 });
-test('earlier reviews retain counts with an explicit changes-since-review note', () => {
+test('stale reviews retain muted historical counts and their reason', () => {
  const s = cardStatus({...clean,github:'PR #2812 · Review required',reviews:[{number:2812,blockers:0,warnings:3,earlier:true,detail:'Latest report on an earlier commit'}]});
  assert.equal(s.pr,'');
- assert.deepEqual(s.reviews[0].values.map(x=>[x.value,x.label,x.tone]),[[3,'warnings','warning']]);
+ assert.deepEqual(s.reviews[0].values.map(x=>[x.value,x.label,x.tone]),[[3,'warnings','muted']]);
  assert.equal(s.reviews[0].note,'Changes since review');
  const blocker = cardStatus({...clean,github:'PR #2 · Approved',reviews:[{number:2,blockers:1,warnings:7,earlier:true}]});
  assert.deepEqual(blocker.reviews[0].values.map(x=>x.value),[1,7]);
  const noFindings = cardStatus({...clean,github:'PR #2 · Approved',reviews:[{number:2,blockers:0,warnings:0,earlier:true}]});
  assert.equal(noFindings.reviews[0].note,'Changes since review');
- assert.equal(noFindings.reviews[0].values[0].label,'Approved');
- assert.equal(noFindings.reviews[0].values[0].tone,'good');
+ assert.equal(noFindings.pr,'PR #2 · Approved');
+ assert.equal(noFindings.reviews[0].values[0].label,'No findings reported');
+ assert.equal(noFindings.reviews[0].values[0].tone,'muted');
+ assert.equal(noFindings.reviews[0].stale,true);
+ assert.match(noFindings.reviews[0].title,/Stale review/);
+ assert.deepEqual(blocker.reviews[0].values.map(x=>x.tone),['muted','muted']);
 });
 test('unavailable review freshness preserves findings without claiming a current clean review', () => {
  const review={number:2,blockers:0,warnings:0,freshnessUnavailable:true,detail:'PR changes could not be checked'};
  const s=cardStatus({...clean,github:'PR #2 · Review required',reviews:[review]});
  assert.equal(s.reviews[0].note,'Review freshness unavailable');
+ assert.equal(s.reviews[0].stale,false);
  assert.equal(s.reviews[0].values[0].label,'No findings reported');
  assert.equal(s.reviews[0].values[0].symbol,'');
  const findings=cardStatus({...clean,github:'PR #2 · Review required',reviews:[{...review,blockers:1,warnings:3}]});
@@ -95,6 +100,8 @@ test('review change notes distinguish PR edits from pushed commits', () => {
  ]) {
   const s = cardStatus({...clean,github:'PR #2822 · Open',reviews:[{...report,changeNote}]});
   assert.equal(s.reviews[0].note,changeNote);
+  assert.equal(s.reviews[0].stale,true);
+  assert.ok(s.reviews[0].title.includes(changeNote));
   assert.equal(s.reviews[0].values[0].label,'No findings reported');
   assert.equal(s.reviews[0].values[0].symbol,'');
  }

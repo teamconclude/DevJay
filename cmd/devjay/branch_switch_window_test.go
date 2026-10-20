@@ -11,7 +11,7 @@ func TestBranchPickerAndPreparationRequireBoundSite(t *testing.T) {
 		!branchSwitchPreparationAllowed("suggested-actions", "one", "one", action) {
 		t.Fatal("bound chooser cannot select a branch")
 	}
-	for _, sender := range []string{"control-panel", "settings", "site-one", "site-two", "viewer-1", ""} {
+	for _, sender := range []string{"strip", "settings", "site-one", "site-two", "viewer-1", ""} {
 		if branchPickerSenderAllowed(sender, "one", "one", "", action) || branchSwitchPreparationAllowed(sender, "one", "one", action) {
 			t.Fatalf("unrelated sender %q was accepted", sender)
 		}

@@ -22,7 +22,7 @@ static WKWebView *card_menu_webview(NSView *view) {
 
 // Invoked on AppKit's main thread. The target and menu belong to this single
 // tracking loop; no registrations or callbacks survive its return.
-int devjay_card_menu(void *pointer, double x, double y, const char *first, const char *second, const char *settings, const char *quit, const char *action, const char *actionDisabled, const char *hint, int strip) {
+int devjay_card_menu(void *pointer, double x, double y, const char *first, const char *second, const char *settings, const char *quit, const char *action, const char *actionDisabled, const char *hint, int strip, int siteWindowsHidden) {
     if (![NSThread isMainThread] || !pointer || !isfinite(x) || !isfinite(y)) return 0;
     @autoreleasepool {
         NSWindow *window = (NSWindow *)pointer;
@@ -41,16 +41,17 @@ int devjay_card_menu(void *pointer, double x, double y, const char *first, const
         DevJayCardMenuSelection *selection = [[[DevJayCardMenuSelection alloc] init] autorelease];
         NSMenu *menu = [[[NSMenu alloc] initWithTitle:@""] autorelease];
         menu.autoenablesItems = NO;
-        NSArray<NSString *> *titles = @[firstTitle, secondTitle, actionTitle, strip ? @"Minimize strip" : @"", strip ? @"Hide strip" : @"", settingsTitle, quitTitle];
-        const NSInteger tags[] = {1, 2, 5, 6, 7, 3, 4};
+        NSArray<NSString *> *titles = @[firstTitle, secondTitle, actionTitle, strip ? @"Minimize strip" : @"", strip ? @"Hide strip" : @"", strip ? (siteWindowsHidden ? @"Show site windows" : @"Hide site windows") : @"", settingsTitle, quitTitle];
+        const NSInteger tags[] = {1, 2, 5, 6, 7, siteWindowsHidden ? 9 : 8, 3, 4};
         for (NSUInteger index = 0; index < titles.count; index++) {
             if (!titles[index].length) continue;
-            if ((index == 3 || (index == 5 && !strip)) && menu.numberOfItems) [menu addItem:[NSMenuItem separatorItem]];
+            if ((index == 3 || (index == 6 && !strip)) && menu.numberOfItems) [menu addItem:[NSMenuItem separatorItem]];
             NSMenuItem *item = [[[NSMenuItem alloc] initWithTitle:titles[index] action:@selector(selectItem:) keyEquivalent:@""] autorelease];
             item.target = selection;
             item.tag = tags[index];
-            if (index == 3) item.toolTip = @"Show a single row of Site names · ⌃⌥⌘M";
-            if (index == 4) item.toolTip = @"Hide the strip with a tiny restore button at its bottom-left corner";
+            if (index == 3) item.toolTip = @"Show a single row of Site names";
+            if (index == 4) item.toolTip = @"Hide the strip completely";
+            if (index == 5) item.toolTip = @"Hide or restore independent Site windows without changing the strip";
             if (index == 2) {
                 item.enabled = !disabledReason.length;
                 item.toolTip = disabledReason.length ? disabledReason : hintText;

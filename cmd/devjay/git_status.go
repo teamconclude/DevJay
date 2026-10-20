@@ -464,6 +464,7 @@ func describeGit(s GitStatus, m gitMeta, c remoteCache) GitStatus {
 		s.GitHub = fmt.Sprintf("PR #%d · Merged", merged.Number)
 		s.Reviews = nil
 		if link, ok := pullRequestLink(m.GitHubRepo, merged.Number, "Merged", false); ok {
+			link.OtherAuthor = merged.OtherAuthor
 			s.PullRequests = []PullRequestLink{link}
 		}
 	}
@@ -527,8 +528,16 @@ func refreshRemote(ctx context.Context, m gitMeta, c *remoteCache) {
 				if err != nil {
 					c.GitHub = "GitHub unavailable"
 				}
+				if mergedPRMatchesBranch(c.MergedPR, m) {
+					if link, ok := pullRequestLink(m.GitHubRepo, c.MergedPR.Number, "Merged", false); ok {
+						links := []PullRequestLink{link}
+						refreshPullRequestAuthors(ctx, m.GitHubRepo, links)
+						c.MergedPR.OtherAuthor = links[0].OtherAuthor
+					}
+				}
 				return
 			}
+			refreshPullRequestAuthors(ctx, m.GitHubRepo, c.PullRequests)
 			reviewCtx, cancel := context.WithTimeout(ctx, 25*time.Second)
 			defer cancel()
 			var prs []pullRequest

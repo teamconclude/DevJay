@@ -63,3 +63,12 @@ test('Profile dialogs wait for persistence and report rejected changes',async()=
   assert.equal(await pending,false);
  }
 });
+
+
+test('shortcut changes wait for native registration and persistence acknowledgement',async()=>{
+ let sent,finished=false;
+ const bridge=createBridge(async(name,data)=>{sent=[name,data];},()=>{},100);
+ const pending=bridge.emit('shortcut',{operation:'reset',id:'toggle-strip'}).then(ok=>{finished=true;return ok;});
+ await Promise.resolve();await Promise.resolve();assert.equal(finished,false);assert.ok(sent[1].requestID);
+ bridge.reply({requestID:sent[1].requestID,error:'Shortcut unavailable'});assert.equal(await pending,false);
+});

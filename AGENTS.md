@@ -1,6 +1,6 @@
 # Agent quick start
 
-DevJay is a macOS control panel for parallel development. A **Site** is a local folder plus an app-owned window on a macOS desktop. Sites follow folders, not branches. Navigation activates windows; Git changes are separate, explicitly confirmed actions.
+DevJay is a macOS strip for parallel development. A **Site** is a local folder plus an app-owned window on a macOS desktop. Sites follow folders, not branches. Navigation activates windows; Git changes are separate, explicitly confirmed actions.
 
 ## Read first
 

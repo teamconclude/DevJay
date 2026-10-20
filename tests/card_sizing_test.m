@@ -112,7 +112,7 @@ int main(void) {
         assert([evaluate(view, @"requests.length === 0") boolValue]);
         evaluate(view, @"advance(1)");
         assert([evaluate(view, @"requests.length === 1 && requests[0].refit") boolValue]);
-        assert([evaluate(view, @"requests[0].height === Math.max(120, fittedPanelHeight(list)) + 12") boolValue]);
+        assert([evaluate(view, @"requests[0].height === Math.max(120, fittedStripHeight(list)) + 12") boolValue]);
         CGFloat fullHeight = [evaluate(view, @"requests[0].height") doubleValue];
         assert(fullHeight > initialHeight);
         assertReadable(view, NO); // While growing, contents stay in the outer scroll area.

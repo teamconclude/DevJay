@@ -36,28 +36,35 @@ type SiteView struct {
 	DevelopmentAppsKnown bool             `json:"developmentAppsKnown"`
 }
 type appSnapshot struct {
-	Profiles      ProfilesView             `json:"profiles"`
-	Catalog       []SiteView               `json:"catalog,omitempty"`
-	StripMode     stripMode                `json:"stripMode"`
-	ShortcutError string                   `json:"shortcutError,omitempty"`
-	ShortcutHints uint32                   `json:"shortcutHints"`
-	Action        *CheckoutAction          `json:"action,omitempty"`
-	QuitMessage   string                   `json:"quitMessage,omitempty"`
-	SuggestedSite string                   `json:"suggestedSite,omitempty"`
-	Layout        string                   `json:"layout"`
-	Placements    map[string]CardPlacement `json:"placements"`
-	SettingsOpen  bool                     `json:"settingsOpen"`
-	Decoration    string                   `json:"decoration"`
-	Sites         []SiteView               `json:"sites"`
-	Manual        bool                     `json:"manual"`
-	Preferences   map[string]bool          `json:"preferences"`
-	Error         string                   `json:"error"`
+	ShortcutSettings *ShortcutSettingsView    `json:"shortcutSettings,omitempty"`
+	ShortcutLabels   []string                 `json:"shortcutLabels,omitempty"`
+	Profiles         ProfilesView             `json:"profiles"`
+	Catalog          []SiteView               `json:"catalog,omitempty"`
+	StripMode        stripMode                `json:"stripMode"`
+	ShortcutError    string                   `json:"shortcutError,omitempty"`
+	ShortcutHints    uint32                   `json:"shortcutHints"`
+	Action           *CheckoutAction          `json:"action,omitempty"`
+	QuitMessage      string                   `json:"quitMessage,omitempty"`
+	SuggestedSite    string                   `json:"suggestedSite,omitempty"`
+	Layout           string                   `json:"layout"`
+	Placements       map[string]CardPlacement `json:"placements"`
+	SettingsOpen     bool                     `json:"settingsOpen"`
+	Decoration       string                   `json:"decoration"`
+	Sites            []SiteView               `json:"sites"`
+	Manual           bool                     `json:"manual"`
+	Preferences      map[string]bool          `json:"preferences"`
+	Error            string                   `json:"error"`
 }
 type siteManager struct {
+	shortcutFailed                                           uint32
+	shortcutRecording, shortcutMessage                       string
+	shortcutRecordingToken                                   uint64
 	settingsPage                                             string
 	addAfterID                                               string
 	profiles                                                 profileMonitor
 	folders                                                  folderMonitor
+	stripRestoreMode                                         stripMode
+	siteWindowsItem                                          *application.MenuItem
 	stripMode                                                stripMode
 	compactSignature                                         string
 	shortcutError                                            string
@@ -84,8 +91,8 @@ type siteManager struct {
 	actionCancel                                             context.CancelFunc
 	actionGeneration                                         uint64
 	app                                                      *application.App
-	panel, settings                                          *application.WebviewWindow
-	panelReady, settingsReady, openSettingsPending, browsing bool
+	strip, settings                                          *application.WebviewWindow
+	stripReady, settingsReady, openSettingsPending, browsing bool
 	allDesktopsItem, onTopItem                               *application.MenuItem
 	mu                                                       sync.Mutex // Protect runtime membership against the shutdown callback.
 	config                                                   SiteConfig
@@ -111,10 +118,11 @@ func (m *siteManager) send(fn func()) {
 func (m *siteManager) run() {
 	// Install the existing power observer before the wake bridge. Native
 	// callbacks only wake this queue; none wait on it from the AppKit thread.
+	m.applySiteWindowsVisibility()
 	m.initProfiles()
 	m.recoverViews()
 	startNativeMonitoring()
-	m.shortcutError = startGlobalShortcuts()
+	m.updateShortcutStatus(configureGlobalShortcuts(resolvedShortcuts(m.config.Shortcuts)))
 	m.broadcast()
 	timer := time.NewTimer(0)
 	defer timer.Stop()
@@ -128,6 +136,14 @@ func (m *siteManager) run() {
 			}
 		case action := <-stripControlEvents:
 			m.handleStripControl(action)
+		case <-profilePromptEvents:
+			if signature := pendingProfilePrompt.Swap(nil); signature != nil {
+				m.handleProfilePrompt(*signature)
+			}
+		case <-shortcutCaptureEvents:
+			if capture := pendingShortcutCapture.Swap(nil); capture != nil {
+				m.finishShortcutCapture(*capture)
+			}
 		case <-shortcutHintEvents:
 			m.shortcutHints = pendingShortcutHints.Load()
 			m.publishSnapshot(false)
@@ -144,23 +160,23 @@ func (m *siteManager) run() {
 	}
 }
 func (m *siteManager) syncSettings() {
-	if !m.panelReady {
+	if !m.stripReady {
 		return
 	}
 	refreshMinimalStrip()
-	p := panelPreferences(m.panel)
+	p := stripPreferences(m.strip)
 	m.allDesktopsItem.SetChecked(p["allDesktops"])
 	m.onTopItem.SetChecked(p["onTop"])
 	m.broadcast()
 }
 func (m *siteManager) openSettings() {
-	if !m.settingsReady || !m.panelReady {
+	if !m.settingsReady || !m.stripReady {
 		m.openSettingsPending = true
 		return
 	}
 	m.openSettingsPending = false
 	m.setStripMode(stripFull)
-	showSettingsWindow(m.settings, m.panel)
+	showSettingsWindow(m.settings, m.strip)
 	m.refreshSettingsEditor()
 	m.broadcast()
 	if m.settingsPage != "" {
@@ -169,7 +185,7 @@ func (m *siteManager) openSettings() {
 	}
 }
 func (m *siteManager) createWindow(site Site) {
-	window := m.app.Window.NewWithOptions(application.WebviewWindowOptions{Name: "site-" + site.ID, Title: "DevJay Site · " + filepath.Base(site.Path), URL: "/?site=" + site.ID, Width: 290, Height: 174, Frameless: m.config.decoration() != "normal", X: 160, Y: 260, InitialPosition: application.WindowXY, DisableResize: true, CloseButtonState: application.ButtonDisabled, MaximiseButtonState: application.ButtonDisabled, BackgroundColour: application.NewRGB(20, 24, 32), Mac: application.MacWindow{CornerType: application.MacWindowCornerTypeRounded, CollectionBehavior: application.MacWindowCollectionBehaviorManaged | application.MacWindowCollectionBehaviorFullScreenNone, TabbingMode: application.MacWindowTabbingModeDisallowed}})
+	window := m.app.Window.NewWithOptions(application.WebviewWindowOptions{Name: "site-" + site.ID, Title: "DevJay Site · " + filepath.Base(site.Path), URL: "/?site=" + site.ID, Hidden: m.config.SiteWindowsHidden, Width: 290, Height: 174, Frameless: m.config.decoration() != "normal", X: 160, Y: 260, InitialPosition: application.WindowXY, DisableResize: true, CloseButtonState: application.ButtonDisabled, MaximiseButtonState: application.ButtonDisabled, BackgroundColour: application.NewRGB(20, 24, 32), Mac: application.MacWindow{CornerType: application.MacWindowCornerTypeRounded, CollectionBehavior: application.MacWindowCollectionBehaviorManaged | application.MacWindowCollectionBehaviorFullScreenNone, TabbingMode: application.MacWindowTabbingModeDisallowed}})
 	m.watchView("site-"+site.ID, window)
 	m.mu.Lock()
 	m.runtime[site.ID] = &siteRuntime{Site: site, Window: window, Git: GitStatus{Summary: "Checking repository…", Tone: "muted"}}
@@ -185,6 +201,7 @@ func (m *siteManager) createWindow(site Site) {
 			m.prepareSitePlacement(site.ID)
 			restoreWindowLayout(window, "site-"+site.ID)
 			applyTopPreference()
+			setSiteWindowVisibility(window, m.config.SiteWindowsHidden)
 			m.mu.Lock()
 			r.Ready = true
 			m.mu.Unlock()
@@ -206,7 +223,7 @@ func (m *siteManager) snapshot() appSnapshot {
 	preferences["showIDEStatus"] = m.config.showIDEStatus()
 	m.observeDevelopmentApps(m.monitor.windowNumbers, positions)
 	settingsOpen := m.monitor.settingsOpen
-	result := appSnapshot{Profiles: m.profilesView(), StripMode: m.stripMode, ShortcutError: m.shortcutError, ShortcutHints: m.shortcutHints, Action: m.action, QuitMessage: m.quitMessage, SuggestedSite: m.suggestedSite, Layout: m.config.layout(), Placements: m.config.Placements, SettingsOpen: settingsOpen, Decoration: m.config.decoration(), Sites: []SiteView{}, Manual: m.config.Manual, Preferences: preferences}
+	result := appSnapshot{ShortcutSettings: m.shortcutSettingsView(), ShortcutLabels: m.shortcutLabels(), Profiles: m.profilesView(), StripMode: m.stripMode, ShortcutError: m.shortcutError, ShortcutHints: m.shortcutHints, Action: m.action, QuitMessage: m.quitMessage, SuggestedSite: m.suggestedSite, Layout: m.config.layout(), Placements: m.config.Placements, SettingsOpen: settingsOpen, Decoration: m.config.decoration(), Sites: []SiteView{}, Manual: m.config.Manual, Preferences: preferences}
 	if m.configError != nil {
 		result.Error = "Cannot read saved Sites. Configuration has not been overwritten: " + m.configError.Error()
 	}
@@ -240,7 +257,7 @@ func (m *siteManager) broadcast() {
 	m.publishSnapshot(true)
 }
 func (m *siteManager) publishSnapshot(force bool) {
-	if !m.panelReady || m.recovery.paused {
+	if !m.stripReady || m.recovery.paused {
 		return
 	}
 	snapshot := m.snapshot()
@@ -433,6 +450,7 @@ func (m *siteManager) browse(after string) {
 	}()
 }
 func (m *siteManager) registerEvents() {
+	m.registerShortcutEvents()
 	m.registerFolderEvents()
 	m.registerProfileEvents()
 	m.app.Event.On("devjay:add-after", func(e *application.CustomEvent) {
@@ -446,8 +464,8 @@ func (m *siteManager) registerEvents() {
 	m.registerEditorSettingsEvents()
 	m.app.Event.On("devjay:app-tooltip-refresh", func(e *application.CustomEvent) {
 		m.send(func() {
-			if e.Sender == "control-panel" && m.panelReady {
-				refreshAppTooltip(m.panel)
+			if e.Sender == "strip" && m.stripReady {
+				refreshAppTooltip(m.strip)
 				return
 			}
 			for id, r := range m.runtime {
@@ -493,8 +511,8 @@ func (m *siteManager) registerEvents() {
 			if size.Decoration != m.config.decoration() {
 				return // A delayed measurement from the previous decoration.
 			}
-			if e.Sender == "control-panel" && m.panelReady {
-				fitCardWindow(m.panel, size.Height, size.ViewportWidth, size.ViewportHeight, size.Refit)
+			if e.Sender == "strip" && m.stripReady {
+				fitCardWindow(m.strip, size.Height, size.ViewportWidth, size.ViewportHeight, size.Refit)
 				return
 			}
 			for id, r := range m.runtime {
@@ -537,12 +555,12 @@ func (m *siteManager) registerEvents() {
 				m.broadcast()
 				return
 			}
-			fitControlPanel(m.panel, c)
+			fitStrip(m.strip, c)
 			m.broadcast()
 		})
 	})
 	m.app.Event.On("devjay:placements", func(e *application.CustomEvent) {
-		if e.Sender != "control-panel" {
+		if e.Sender != "strip" {
 			return
 		}
 		data, err := json.Marshal(e.Data)
@@ -587,8 +605,8 @@ func (m *siteManager) registerEvents() {
 				m.broadcast()
 				return
 			}
-			m.panel.SetFrameless(value != "normal")
-			m.panel.SetTitle("DevJay")
+			m.strip.SetFrameless(value != "normal")
+			m.strip.SetTitle("DevJay")
 			for _, r := range m.runtime {
 				r.Window.SetFrameless(value != "normal")
 				r.Window.SetTitle("DevJay Site · " + filepath.Base(r.Site.Path))
@@ -611,7 +629,7 @@ func (m *siteManager) registerEvents() {
 	})
 	m.app.Event.On("devjay:settings-open", func(e *application.CustomEvent) {
 		m.send(func() {
-			if e.Sender == "control-panel" {
+			if e.Sender == "strip" {
 				m.openSettings()
 				return
 			}
@@ -630,7 +648,7 @@ func (m *siteManager) registerEvents() {
 		}
 	})
 	m.app.Event.On("devjay:activate", func(e *application.CustomEvent) {
-		if e.Sender != "control-panel" && e.Sender != "settings" {
+		if e.Sender != "strip" && e.Sender != "settings" {
 			return
 		}
 		if id, ok := e.Data.(string); ok {
@@ -670,7 +688,7 @@ func (m *siteManager) registerEvents() {
 		})
 	}
 	m.app.Event.On("devjay:order", func(e *application.CustomEvent) {
-		if e.Sender != "settings" && e.Sender != "control-panel" {
+		if e.Sender != "settings" && e.Sender != "strip" {
 			return
 		}
 		data, err := json.Marshal(e.Data)
@@ -682,7 +700,7 @@ func (m *siteManager) registerEvents() {
 			return
 		}
 		m.send(func() {
-			if e.Sender == "control-panel" && !m.settings.IsVisible() {
+			if e.Sender == "strip" && !m.settings.IsVisible() {
 				m.broadcast()
 				return
 			}
@@ -731,7 +749,7 @@ func (m *siteManager) shutdown() {
 		items = append(items, *r)
 	}
 	m.mu.Unlock()
-	saveWindowLayout(m.panel)
+	saveWindowLayout(m.strip)
 	stopStripControls()
 	for _, r := range items {
 		if r.Cancel != nil {

@@ -1,5 +1,5 @@
 // Heading buttons handle their own keyboard/click activation. The rest of a
-// panel card activates on a plain click, without stealing controls or selection.
+// strip card activates on a plain click, without stealing controls or selection.
 export function installCardActivation(list, activate) {
   list.addEventListener('click', event => {
     if (event.defaultPrevented || event.button !== 0) return;

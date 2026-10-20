@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-func TestStripMenuRequiresPanelSenderAndNoSitePayload(t *testing.T) {
+func TestStripMenuRequiresStripSenderAndNoSitePayload(t *testing.T) {
 	req := cardMenuRequest{Kind: "strip", X: 12, Y: 5}
 	if _, ok := normalizeCardMenuRequest(req); !ok {
 		t.Fatal("valid strip menu rejected")
@@ -31,17 +31,17 @@ func TestStripMenuRequiresPanelSenderAndNoSitePayload(t *testing.T) {
 			t.Fatalf("accepted %+v", invalid)
 		}
 	}
-	panel := &application.WebviewWindow{}
-	m := &siteManager{panel: panel, panelReady: true}
-	for _, sender := range []string{"control-panel", "settings", "site-other", "git-viewer"} {
+	strip := &application.WebviewWindow{}
+	m := &siteManager{strip: strip, stripReady: true}
+	for _, sender := range []string{"strip", "settings", "site-other", "git-viewer"} {
 		window, site := m.cardMenuSource(req, sender)
-		if (window == panel) != (sender == "control-panel") || site != nil {
+		if (window == strip) != (sender == "strip") || site != nil {
 			t.Fatalf("wrong source %q", sender)
 		}
 	}
-	m.panelReady = false
-	if window, _ := m.cardMenuSource(req, "control-panel"); window != nil {
-		t.Fatal("unready panel accepted")
+	m.stripReady = false
+	if window, _ := m.cardMenuSource(req, "strip"); window != nil {
+		t.Fatal("unready strip accepted")
 	}
 }
 
@@ -49,8 +49,8 @@ func TestShortcutFailureMessageIdentifiesOnlyUnavailableKeys(t *testing.T) {
 	if shortcutFailureMessage(0) != "" {
 		t.Fatal("success should be quiet")
 	}
-	message := shortcutFailureMessage(1 | 1<<4 | 1<<10)
-	for _, key := range []string{"⌃⌥⌘M", "⌃⌥⌘4", "⌃⌥⌘0"} {
+	message := shortcutFailureMessage(1 | 1<<4 | 1<<10 | 1<<11 | 1<<12)
+	for _, key := range []string{"⌃⌥⌘M", "⌃⌥⌘4", "⌃⌥⌘0", "⌃⌥⌘D", "⌃⌥⌘S"} {
 		if !strings.Contains(message, key) {
 			t.Fatalf("missing %s in %s", key, message)
 		}
@@ -104,5 +104,14 @@ func TestShortcutHintsCoalesceWithoutLosingRelease(t *testing.T) {
 	before := snapshotSignature(appSnapshot{})
 	if snapshotSignature(appSnapshot{ShortcutHints: 1}) == before {
 		t.Fatal("modifier changes must reach the full strip")
+	}
+}
+
+func TestStripVisibilityRestoresPreviousMode(t *testing.T) {
+	if restoredStripMode(stripCompact) != stripCompact || restoredStripMode(stripFull) != stripFull || restoredStripMode(stripHidden) != stripFull {
+		t.Fatal("invalid restore mode")
+	}
+	if stripVisibilityLabel(stripHidden) != "Show strip" || stripVisibilityLabel(stripCompact) != "Hide strip" {
+		t.Fatal("wrong visibility label")
 	}
 }

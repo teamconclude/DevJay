@@ -193,9 +193,9 @@ h2 {
 .strip .card.visible.pointer-hover { background: #2c3e58; }
 .strip .card[data-shortcut]:not([data-shortcut=""])::after {
   content: attr(data-shortcut); position: absolute; right: 8px; bottom: 8px; z-index: 2;
-  display: grid; place-items: center; width: 30px; height: 30px; border-radius: 6px;
+  display: grid; place-items: center; min-width: 30px; padding: 0 5px; height: 30px; border-radius: 6px;
   background: #c9ddff; border: 1px solid #edf4ff; color: #142038;
-  font: 700 18px/1 ui-monospace, monospace; box-shadow: 0 2px 8px #0008;
+  font: 700 15px/1 ui-monospace, monospace; box-shadow: 0 2px 8px #0008;
   pointer-events: none;
 }
 .strip .path, .workspace .path { font-size: 16px; }
@@ -282,8 +282,8 @@ html:not([data-local-drag-press]) .strip *, html:not([data-local-drag-press]) .w
 .strip[data-free-placement="true"] .card { position: absolute; width: 216px; height: auto; min-height: fit-content; }
 .strip[data-card-drag="true"] .card { --wails-draggable: no-drag; touch-action: none; }
 .strip .cards, .strip #app { --wails-draggable: drag; }
-.strip .panel-dragging { opacity: .3; border-style: dashed; }
-.strip .panel-drag-preview { position: fixed; z-index: 100000; margin: 0; pointer-events: none; opacity: .95; box-shadow: 0 8px 24px #0008; }
+.strip .strip-dragging { opacity: .3; border-style: dashed; }
+.strip .strip-drag-preview { position: fixed; z-index: 100000; margin: 0; pointer-events: none; opacity: .95; box-shadow: 0 8px 24px #0008; }
 .reset-card-positions { align-self: flex-start; margin-top: 10px; }
 .card-heading { position: relative; display: flex; align-items: flex-start; gap: 8px; }
 .card-title { display: block; flex: 1; min-width: 0; padding: 0; border: 0; border-radius: 3px; background: transparent; text-align: left; color: inherit; --wails-draggable: drag; cursor: grab; }
@@ -304,6 +304,13 @@ html:not([data-local-drag-press]) .strip *, html:not([data-local-drag-press]) .w
 .development-app { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-height: 28px; margin-top: auto; padding-top: 10px; color: #97a6bb; font-size: 11px; line-height: 14px; min-width: 0; flex-shrink: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; --wails-draggable: no-drag; }
 .strip .card-status { padding-top: 5px; gap: 3px; }
 .strip .development-app { padding-top: 6px; }
+.card-footer { display: flex; align-items: flex-end; gap: 8px; min-width: 0; flex-shrink: 0; margin-top: auto; padding-top: 10px; }
+.strip .card-footer { padding-top: 6px; }
+.card-footer > .development-app { flex: 1; margin-top: 0; padding-top: 0; }
+.pr-authors { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px; max-width: 50%; margin-left: auto; padding-bottom: 2px; flex-shrink: 0; }
+.pr-author { display: inline-flex; width: 24px; height: 24px; padding: 0; flex: 0 0 24px; border-radius: 50%; border: 1px solid #ffffff30; background: #252d3b; --wails-draggable: no-drag; }
+.pr-author:hover { border-color: #a9b8cd; }
+.pr-author .development-app-icon, .pr-author .development-app-initials { border-radius: 50%; overflow: hidden; }
 .development-app-group { display: inline-flex; align-items: center; flex: 0 0 auto; gap: 5px; padding: 0; border: 1px solid transparent; background: transparent; }
 .development-app-group:hover { background: #ffffff14; }
 .development-app-group.has-agents { min-height: 28px; padding: 1px 5px 1px 2px; border: 1px solid #ffffff24; border-radius: 7px; background: #ffffff08; }
@@ -631,3 +638,23 @@ button.status-line.status-link { padding: 2px 0; margin: -2px 0; width: 100%; fl
 .site-row-actions { display:flex; flex-direction:column; gap:4px; }
 .site-row-actions .keep-placement { font-size:10px; padding:3px 5px; color:#eed2a4; }
 .settings-page > .profile-field { margin:14px 0; max-width:280px; }
+
+/* Persistent global shortcut assignments. Rows retain focus during snapshots. */
+.shortcut-list { list-style:none; padding:0; margin:18px 0; border:1px solid #354155; border-radius:8px; overflow:hidden; }
+.shortcut-row { display:grid; grid-template-columns:minmax(120px,1fr) auto auto; align-items:center; gap:12px; padding:12px; border-bottom:1px solid #354155; }
+.shortcut-row:last-child { border-bottom:0; }
+.shortcut-row.recording { background:#263b56; }
+.shortcut-description { display:flex; flex-direction:column; gap:5px; font-size:13px; }
+.shortcut-description small { font-size:11px; color:#96a5ba; }
+.shortcut-row kbd,.shortcut-menu-list kbd { font:12px ui-monospace,monospace; white-space:nowrap; color:#d5e5fa; }
+.shortcut-buttons,.shortcut-actions { display:flex; gap:6px; }
+.shortcut-buttons button { padding:5px 8px; font-size:11px; }
+.shortcut-actions { flex-wrap:wrap; }
+.shortcut-message { padding:10px; border:1px solid #52769c; border-radius:6px; }
+.shortcut-cancel[hidden],.shortcut-message[hidden],.shortcut-description small[hidden] { display:none; }
+.shortcut-menu-list { list-style:none; padding:0; max-width:400px; }
+.shortcut-menu-list li { display:flex; justify-content:space-between; gap:16px; padding:6px 0; font-size:13px; }
+@media(max-width:800px) {
+  .shortcut-row { gap:8px; grid-template-columns:minmax(120px,1fr) auto; }
+  .shortcut-buttons { grid-column:1/-1; justify-content:flex-end; }
+}

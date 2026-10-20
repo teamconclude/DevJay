@@ -29,7 +29,7 @@ func TestPendingChecksRefreshUsesOneQueryAndPreservesRemoteAndReviews(t *testing
 	}
 	checked := time.Unix(100, 0)
 	cache := remoteCache{Key: "branch-identity", Checked: checked, Attempted: checked, BaseChecked: checked,
-		CheckHeads: map[int]string{12: "head"}, PullRequests: []PullRequestLink{{Number: 12, CIState: "pending"}},
+		CheckHeads: map[int]string{12: "head"}, PullRequests: []PullRequestLink{{Number: 12, URL: "https://github.com/team/project/pull/12", CIState: "pending", OtherAuthor: &PullRequestAuthor{Login: "someone-else"}}},
 		Reviews: []ReviewFindings{{Number: 12, Blockers: 1, Detail: "existing review"}}}
 	reviews := append([]ReviewFindings(nil), cache.Reviews...)
 	m := gitMeta{GitHubRepo: "team/project", Branch: "feature"}
@@ -40,7 +40,7 @@ func TestPendingChecksRefreshUsesOneQueryAndPreservesRemoteAndReviews(t *testing
 	if cache.Key != "branch-identity" || cache.Checked != checked || cache.Attempted != checked || cache.BaseChecked != checked || !reflect.DeepEqual(cache.Reviews, reviews) {
 		t.Fatalf("CI query overwrote remote/review cache: %+v", cache)
 	}
-	if len(cache.PullRequests) != 1 || cache.PullRequests[0].CIState != "success" || cache.ChecksAttempted.IsZero() {
+	if len(cache.PullRequests) != 1 || cache.PullRequests[0].CIState != "success" || cache.ChecksAttempted.IsZero() || cache.PullRequests[0].OtherAuthor == nil || cache.PullRequests[0].OtherAuthor.Login != "someone-else" {
 		t.Fatalf("check result missing: %+v", cache)
 	}
 	data, err := os.ReadFile(calls)
@@ -54,6 +54,14 @@ func TestPendingChecksRefreshUsesOneQueryAndPreservesRemoteAndReviews(t *testing
 	if !refreshPullRequestChecks(context.Background(), m, &cache) || len(cache.Reviews) != 0 || cache.PullRequests[0].CIState != "failure" {
 		t.Fatalf("changed pushed head retained stale review findings: %+v", cache)
 	}
+	// A new PR must not inherit another PR's author, even on the same branch.
+	previous := cache.PullRequests
+	cache.PullRequests = []PullRequestLink{{Number: 99, URL: "https://github.com/team/project/pull/99", OtherAuthor: &PullRequestAuthor{Login: "unrelated"}}}
+	refreshPullRequestChecks(context.Background(), m, &cache)
+	if cache.PullRequests[0].OtherAuthor != nil {
+		t.Fatal("new PR inherited another author's avatar")
+	}
+	cache.PullRequests = previous
 	// A transient failure cannot leave the previous known CI result current.
 	if err := os.WriteFile(filepath.Join(root, "gh"), []byte("#!/bin/sh\nexit 1\n"), 0700); err != nil {
 		t.Fatal(err)

@@ -8,12 +8,13 @@ import (
 
 // Matching the current branch is separate from finding historical PRs by name.
 type MergedPullRequest struct {
-	Number   int       `json:"number"`
-	Base     string    `json:"base"`
-	Head     string    `json:"head"`
-	MergedAt time.Time `json:"mergedAt"`
-	URL      string    `json:"url"`
-	SameHead bool      `json:"sameHead"`
+	Number      int                `json:"number"`
+	Base        string             `json:"base"`
+	Head        string             `json:"head"`
+	MergedAt    time.Time          `json:"mergedAt"`
+	URL         string             `json:"url"`
+	SameHead    bool               `json:"sameHead"`
+	OtherAuthor *PullRequestAuthor `json:"otherAuthor,omitempty"`
 }
 
 func latestMergedPR(data []byte, repo, branch string) (*MergedPullRequest, error) {

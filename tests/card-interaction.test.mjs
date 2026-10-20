@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 const source=await readFile(new URL('../cmd/devjay/frontend/card-interaction.js',import.meta.url),'utf8');
 const {installCardActivation}=await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
-test('panel body clicks activate once, while controls, drags, and text selection do not', () => {
+test('strip body clicks activate once, while controls, drags, and text selection do not', () => {
  let click, selected=false;
  const activations=[];
  globalThis.window={getSelection:()=>({isCollapsed:!selected})};

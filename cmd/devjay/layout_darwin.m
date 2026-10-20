@@ -8,8 +8,21 @@
 static NSString *layoutKey = @"DevJay.WindowLayout.v1";
 static NSString *profileDisplaySignature;
 static BOOL profileLayoutPaused;
+static BOOL recoveringWindows;
 static NSString *display_signature(void);
 static const char layoutObserverKey;
+// Compatibility only: retain older saved records while adopting the strip name.
+static NSString *legacyStripLayoutIdentifier = @"control-panel";
+static void migrate_strip_layout(NSString *key) {
+    NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+    NSDictionary *stored = [defaults dictionaryForKey:key];
+    if (!stored[@"strip"] && [stored[legacyStripLayoutIdentifier] isKindOfClass:NSDictionary.class]) {
+        NSMutableDictionary *updated = [[stored mutableCopy] autorelease];
+        updated[@"strip"] = stored[legacyStripLayoutIdentifier];
+        [defaults setObject:updated forKey:key];
+    }
+}
+
 @class DevJayLayoutObserver;
 
 // Most placement changes already have AppKit/Workspace notifications. Keep a
@@ -27,6 +40,10 @@ static const char layoutObserverKey;
 - (void)remove:(DevJayLayoutObserver *)observer;
 - (void)checkLayouts;
 - (void)updateTimer;
+- (void)screensChanged:(NSNotification *)notification;
+- (void)recoverWindows;
+- (void)recoverWindowsOnScreens:(NSArray<NSScreen *> *)screens;
+- (void)windowExposed:(NSNotification *)notification;
 @end
 
 static DevJayLayoutMonitor *layoutMonitor;
@@ -47,8 +64,7 @@ static NSString *screen_identifier(NSScreen *screen) {
     return [(NSString *)string autorelease];
 }
 
-static NSScreen *nearest_screen(NSRect frame) {
-    NSArray<NSScreen *> *screens = NSScreen.screens;
+static NSScreen *nearest_screen_in(NSRect frame, NSArray<NSScreen *> *screens) {
     if (screens.count == 0) return nil;
     DPRect *rects = calloc(screens.count, sizeof(DPRect));
     if (rects == NULL) return screens.firstObject;
@@ -58,6 +74,38 @@ static NSScreen *nearest_screen(NSRect frame) {
     return screens[index];
 }
 
+static NSScreen *nearest_screen(NSRect frame) { return nearest_screen_in(frame, NSScreen.screens); }
+
+
+static BOOL recoverable_window(NSWindow *window) {
+    if (!window || !window.isVisible || window.isMiniaturized || window.alphaValue <= 0 ||
+        (window.styleMask & NSWindowStyleMaskFullScreen)) return NO;
+    NSString *name = window.identifier;
+    return window.canBecomeKeyWindow || window.isSheet || [name isEqual:@"strip"] ||
+        [name hasPrefix:@"site-"] || [name isEqual:@"compact-strip"] ||
+        [name isEqual:@"settings"] || [name isEqual:@"git-viewer"] ||
+        [name isEqual:@"suggested-actions"] || [name isEqual:@"message-dialog"] ||
+        [name isEqual:@"profile-prompt"];
+}
+
+static NSRect recovery_bounds(NSWindow *window, NSScreen *screen) {
+    // Floating cards can overlap the Dock; dialogs and editors must clear it.
+    NSString *name = window.identifier;
+    return [name isEqual:@"strip"] || [name hasPrefix:@"site-"] || [name isEqual:@"compact-strip"]
+        ? placement_bounds(screen) : screen.visibleFrame;
+}
+
+static void recover_window(NSWindow *window, NSArray<NSScreen *> *screens) {
+    if (!recoverable_window(window)) return;
+    NSRect frame = window.frame;
+    for (NSScreen *screen in screens) {
+        if (NSContainsRect(recovery_bounds(window, screen), frame)) return;
+    }
+    NSScreen *screen = nearest_screen_in(frame, screens);
+    if (!screen) return; // Display enumeration can be empty during a transition.
+    NSRect fitted = ns_rect(dp_clamp(dp_rect(frame), dp_rect(recovery_bounds(window, screen))));
+    if (!NSEqualRects(frame, fitted)) [window setFrame:fitted display:YES];
+}
 
 @interface DevJayLayoutObserver : NSObject {
 @public
@@ -86,6 +134,12 @@ static NSScreen *nearest_screen(NSRect frame) {
     if (self) {
         observers = [[NSHashTable weakObjectsHashTable] retain];
         powerObservers = [NSMutableArray new];
+        NSNotificationCenter *windows = NSNotificationCenter.defaultCenter;
+        [windows addObserver:self selector:@selector(screensChanged:) name:NSApplicationDidChangeScreenParametersNotification object:nil];
+        for (NSNotificationName name in @[NSWindowDidBecomeKeyNotification, NSWindowDidDeminiaturizeNotification,
+            NSWindowDidChangeOcclusionStateNotification]) {
+            [windows addObserver:self selector:@selector(windowExposed:) name:name object:nil];
+        }
         NSNotificationCenter *center = NSWorkspace.sharedWorkspace.notificationCenter;
         NSArray *sleepNames = @[NSWorkspaceWillSleepNotification,
             NSWorkspaceScreensDidSleepNotification, NSWorkspaceSessionDidResignActiveNotification];
@@ -105,12 +159,39 @@ static NSScreen *nearest_screen(NSRect frame) {
                     (void)note;
                     monitor->sleepReasons &= ~reason;
                     [monitor updateTimer];
+                    [monitor screensChanged:nil];
                 }];
             [powerObservers addObject:asleep];
             [powerObservers addObject:awake];
         }
     }
     return self;
+}
+- (void)recoverWindows { [self recoverWindowsOnScreens:NSScreen.screens]; }
+- (void)recoverWindowsOnScreens:(NSArray<NSScreen *> *)screens {
+    if (sleepReasons || recoveringWindows) return;
+    recoveringWindows = YES;
+    // Move parents before sheets, whose positions AppKit may recompute.
+    for (NSWindow *window in NSApp.windows) if (!window.isSheet) recover_window(window, screens);
+    for (NSWindow *window in NSApp.windows) if (window.isSheet) recover_window(window, screens);
+    recoveringWindows = NO;
+}
+- (void)screensChanged:(NSNotification *)notification {
+    (void)notification;
+    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(recoverWindows) object:nil];
+    [self recoverWindows];
+    // AppKit and Profile restoration can move windows after the notification.
+    // Two bounded passes cover settling, including while a sheet is open.
+    for (NSNumber *delay in @[@0.25, @2.5]) {
+        [self performSelector:@selector(recoverWindows) withObject:nil afterDelay:delay.doubleValue
+            inModes:@[NSRunLoopCommonModes, NSModalPanelRunLoopMode]];
+    }
+}
+- (void)windowExposed:(NSNotification *)notification {
+    if (sleepReasons || recoveringWindows || ![notification.object isKindOfClass:NSWindow.class]) return;
+    recoveringWindows = YES;
+    recover_window(notification.object, NSScreen.screens);
+    recoveringWindows = NO;
 }
 - (void)add:(DevJayLayoutObserver *)observer {
     [observers addObject:observer];
@@ -135,6 +216,8 @@ static NSScreen *nearest_screen(NSRect frame) {
     [self updateTimer];
 }
 - (void)dealloc {
+    [NSObject cancelPreviousPerformRequestsWithTarget:self];
+    [NSNotificationCenter.defaultCenter removeObserver:self];
     [timer invalidate];
     for (id observer in powerObservers) [NSWorkspace.sharedWorkspace.notificationCenter removeObserver:observer];
     [powerObservers release];
@@ -145,7 +228,7 @@ static NSScreen *nearest_screen(NSRect frame) {
 
 @implementation DevJayLayoutObserver
 - (void)save {
-    if (adjusting || window == nil || profileLayoutPaused ||
+    if (adjusting || recoveringWindows || window == nil || profileLayoutPaused ||
         (profileDisplaySignature && ![profileDisplaySignature isEqual:display_signature()])) return;
     // AppKit can move windows before sending the display-change notification.
     // Do not overwrite their old edge distances with that automatic position.
@@ -275,9 +358,11 @@ void devjay_restore_layout(void *pointer, const char *identifier) {
     if (window == nil) return;
     NSString *key = identifier ? [NSString stringWithUTF8String:identifier] : nil;
     if (!key.length) return;
+    if (!layoutMonitor) layoutMonitor = [DevJayLayoutMonitor new];
     DevJayLayoutObserver *previous = objc_getAssociatedObject(window, &layoutObserverKey);
     [previous stopObserving];
     window.identifier = key;
+    migrate_strip_layout(layoutKey);
     NSDictionary *all = [NSUserDefaults.standardUserDefaults dictionaryForKey:layoutKey];
     id state = all[window.identifier];
     NSScreen *screen = nil;
@@ -287,7 +372,7 @@ void devjay_restore_layout(void *pointer, const char *identifier) {
             NSRect saved = NSRectFromString(state[@"frame"]);
             if (isfinite(saved.origin.x) && isfinite(saved.origin.y) && saved.size.width > 0 && saved.size.height > 0) {
                 frame.origin = saved.origin;
-                if ([window.identifier isEqual:@"control-panel"] &&
+                if ([window.identifier isEqual:@"strip"] &&
                     isfinite(saved.size.width) && isfinite(saved.size.height)) {
                     frame.size = NSMakeSize(fmax(saved.size.width, window.minSize.width),
                                             fmax(saved.size.height, window.minSize.height));
@@ -344,13 +429,13 @@ void devjay_save_layout(void *pointer) {
 }
 
 // Resize around the top-left corner, keeping the result on the same display.
-void devjay_fit_panel(void *pointer, int mode, int count, int header, double extentWidth, double extentHeight) {
+void devjay_fit_strip(void *pointer, int mode, int count, int header, double extentWidth, double extentHeight) {
     NSWindow *window = (NSWindow *)pointer;
     NSScreen *screen = window.screen ?: nearest_screen(window.frame);
     if (!window || !screen) return;
     NSRect available = placement_bounds(screen);
     NSRect chrome = [window frameRectForContentRect:NSMakeRect(0, 0, 0, 0)];
-    DPRect size = dp_panel_size(mode, count, available.size.width - 16 - chrome.size.width,
+    DPRect size = dp_strip_size(mode, count, available.size.width - 16 - chrome.size.width,
                                available.size.height - 16 - chrome.size.height, header, extentWidth, extentHeight);
     NSRect frame = [window frameRectForContentRect:NSMakeRect(0, 0, size.width, size.height)];
     frame.origin = NSMakePoint(window.frame.origin.x, NSMaxY(window.frame) - frame.size.height);
@@ -366,11 +451,11 @@ void devjay_fit_card_window(void *pointer, double height, double viewportWidth, 
     // Ignore measurements from before a user resize or decoration change.
     NSRect content = [window contentRectForFrameRect:window.frame];
     if (fabs(content.size.width - viewportWidth) > 2 || fabs(content.size.height - viewportHeight) > 2) return;
-    BOOL fitPanel = refit && [window.identifier isEqual:@"control-panel"];
-    if (fitPanel) height = MAX(132, height);
+    BOOL fitStrip = refit && [window.identifier isEqual:@"strip"];
+    if (fitStrip) height = MAX(132, height);
     NSRect wanted = [window frameRectForContentRect:NSMakeRect(0, 0, content.size.width, height)];
     DPRect available = dp_rect(placement_bounds(screen));
-    NSRect frame = ns_rect(fitPanel ? dp_fit_height(dp_rect(window.frame), available, wanted.size.height)
+    NSRect frame = ns_rect(fitStrip ? dp_fit_height(dp_rect(window.frame), available, wanted.size.height)
         : dp_grow_height(dp_rect(window.frame), available, wanted.size.height));
     if (!NSEqualRects(frame, window.frame)) [window setFrame:frame display:YES];
 }
@@ -409,7 +494,7 @@ int devjay_profile_seed_site(const char *identifier, const char *after, int desk
     NSDictionary *saved = [NSUserDefaults.standardUserDefaults dictionaryForKey:layoutKey] ?: @{};
     if (saved[key]) return 0; // Never displace an already saved Site.
     NSString *neighbor = [@"site-" stringByAppendingString:[NSString stringWithUTF8String:after]];
-    NSDictionary *anchor = saved[neighbor] ?: saved[@"control-panel"];
+    NSDictionary *anchor = saved[neighbor] ?: saved[@"strip"];
     if (![anchor isKindOfClass:NSDictionary.class] || ![anchor[@"screen"] isKindOfClass:NSString.class]) return 0;
     NSString *space = dp_space_for_index(anchor[@"screen"],desktop);
     if (!space.length) return 0;
@@ -440,6 +525,7 @@ void devjay_profile_activate(const char *identifier, const char *signature, int 
     }
     if (![layoutKey isEqual:@"DevJay.WindowLayout.v1"]) [layoutKey release];
     layoutKey = [key copy];
+    migrate_strip_layout(layoutKey);
     [profileDisplaySignature release]; profileDisplaySignature = [[NSString stringWithUTF8String:signature] copy];
     profileLayoutPaused = NO;
 }

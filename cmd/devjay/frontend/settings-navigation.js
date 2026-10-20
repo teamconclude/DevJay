@@ -1,9 +1,9 @@
 const pages = [
   ['sites','Sites','M3 7V4h6l2 3h10v13H3z'],
   ['profiles','Profiles','M3 4h18v12H3z M8 21h8 M12 16v5'],
-  ['windows','Windows & Cards','M3 4h15v12H3z M7 16v4h14V8h-3 M3 8h15'],
-  ['editors','Editors & Apps','m8 6-6 6 6 6 m8-12 6 6-6 6 m-3-14-2 16'],
-  ['shortcuts','Keyboard Shortcuts','M2 6h20v12H2z M5 9h1 m3 0h1 m3 0h1 m3 0h1 M5 12h1 m3 0h1 m3 0h1 m3 0h1 M7 15h10'],
+  ['editors','IDEs & editors','m8 6-6 6 6 6 m8-12 6 6-6 6 m-3-14-2 16'],
+  ['windows','Windows and layout','M3 4h15v12H3z M7 16v4h14V8h-3 M3 8h15'],
+  ['shortcuts','Keyboard shortcuts','M2 6h20v12H2z M5 9h1 m3 0h1 m3 0h1 m3 0h1 M5 12h1 m3 0h1 m3 0h1 m3 0h1 M7 15h10'],
 ];
 
 export function mountSettingsNavigation(root) {

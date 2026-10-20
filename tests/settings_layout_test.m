@@ -37,7 +37,7 @@ int main(void) {
         NSString *css = [NSString stringWithContentsOfFile:@"cmd/devjay/frontend/style.css" encoding:NSUTF8StringEncoding error:nil];
         NSMutableString *js = [NSMutableString stringWithString:@"const callbacks={};const Events={On:(n,f)=>callbacks[n]=f,Emit:()=>Promise.resolve()},Window={};const installCardHover=()=>{},installDragOriginGuard=()=>{},uiReady=()=>()=>{};"];
         NSRegularExpression *imports=[NSRegularExpression regularExpressionWithPattern:@"^import .*;\\n" options:NSRegularExpressionAnchorsMatchLines error:nil];
-        for (NSString *name in @[@"notice",@"bridge",@"path-label",@"settings-navigation",@"profile-settings",@"editor-settings",@"app"]) {
+        for (NSString *name in @[@"notice",@"bridge",@"path-label",@"settings-navigation",@"profile-settings",@"editor-settings",@"shortcut-settings",@"app"]) {
             NSString *path=[NSString stringWithFormat:@"cmd/devjay/frontend/%@.js",name];
             NSString *code=[NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];assert(code);
             code=[imports stringByReplacingMatchesInString:code options:0 range:NSMakeRange(0,code.length) withTemplate:@""];
@@ -52,6 +52,7 @@ int main(void) {
         SettingsLayoutDelegate *delegate=[[[SettingsLayoutDelegate alloc] init] autorelease];view.navigationDelegate=delegate;window.contentView=view;
         [view loadHTMLString:html baseURL:nil];spin(&loaded);
         evaluate(view,@"render({sites:['DevJay','Conclude','c0','c1','c2','c3','Conclude-webdoc','Conclude-webdoc2'].map((name,i)=>({id:String(i),name,path:'~/'+name,prefix:'~/',enabled:i!==7,folderMissing:i===4,needsPlacement:i===5,git:{branch:'hanord/feature-layout'},position:{label:'Desktop '+(i+1)},window:{}})),profiles:{current:'home',profiles:[{id:'home',name:'Home'},{id:'cabin',name:'Cabin'},{id:'laptop',name:'Laptop'}],targets:['home'],automatic:true,displays:[{name:'LG UltraFine',X:-100},{name:'Studio Display',X:0},{name:'ASUS PA27JCV',X:100}]},preferences:{onTop:true,allDesktops:true,showIDEStatus:true},layout:'horizontal',settingsOpen:true});editorSettings.renderEditor({editor:{apps:[],choice:'',useProject:true}})");
+        evaluate(view,@"shortcutSettings.render({items:Array.from({length:13},(_,i)=>({id:'shortcut-'+i,title:i<2?'Hide/show Site windows':'Go to Site '+(i+1),label:i===0?'⌃⌥⇧⌘Space':'⌃⌥⌘'+(i%10),default:'⌃⌥⌘D',custom:i===0}))})");
         for (NSNumber *width in @[@880,@760]) {
             [window setContentSize:NSMakeSize(width.doubleValue,width.intValue==760?440:620)];
             for (NSString *page in @[@"profiles",@"sites",@"windows",@"editors",@"shortcuts"]) {
@@ -90,7 +91,7 @@ int main(void) {
         // Optional image for visual inspection; this fixture never shows a window.
         NSString *output=NSProcessInfo.processInfo.environment[@"DEVJAY_SETTINGS_SNAPSHOT"];
         if(output) {
-            [window setContentSize:NSMakeSize(880,620)];evaluate(view,@"settingsNavigation.show('profiles')");
+            [window setContentSize:NSMakeSize(880,620)];evaluate(view,@"settingsNavigation.show('shortcuts')");
             __block BOOL done=NO;
             [view takeSnapshotWithConfiguration:nil completionHandler:^(NSImage *image,NSError *error){
                 assert(image&&!error);NSBitmapImageRep *bitmap=[NSBitmapImageRep imageRepWithData:image.TIFFRepresentation];

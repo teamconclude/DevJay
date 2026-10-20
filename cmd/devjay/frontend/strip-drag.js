@@ -11,7 +11,7 @@ export function insertionIndex(rects, x, y, vertical) {
   return rects.filter(r => y > r.bottom).length;
 }
 
-export function installPanelDrag(list, options) {
+export function installStripDrag(list, options) {
   let cancelDrag = null, suppressClick = false;
   list.addEventListener('click', e => {
     if (suppressClick) { e.preventDefault(); e.stopImmediatePropagation(); suppressClick = false; }
@@ -38,7 +38,7 @@ export function installPanelDrag(list, options) {
     const origin = {...positions[card.dataset.id]};
     const scrollX = list.scrollLeft, scrollY = list.scrollTop;
     const preview = card.cloneNode(true);
-    preview.classList.add('panel-drag-preview'); preview.inert = true;
+    preview.classList.add('strip-drag-preview'); preview.inert = true;
     preview.setAttribute('aria-hidden', 'true');
     Object.assign(preview.style, {width: `${rect.width}px`, height: `${rect.height}px`, left: `${rect.left}px`, top: `${rect.top}px`});
     let moved = false, x = e.clientX, y = e.clientY, frame;
@@ -79,13 +79,13 @@ export function installPanelDrag(list, options) {
       x = event.clientX; y = event.clientY;
       if (!moved && Math.hypot(x - e.clientX, y - e.clientY) > 4) {
         moved = true; suppressClick = true;
-        document.body.append(preview); card.classList.add('panel-dragging');
+        document.body.append(preview); card.classList.add('strip-dragging');
       }
       position();
     }
     function finish(commit) {
       cancelDrag = null;
-      cancelAnimationFrame(frame); preview.remove(); card.classList.remove('panel-dragging');
+      cancelAnimationFrame(frame); preview.remove(); card.classList.remove('strip-dragging');
       dragTarget.removeEventListener('pointermove', move); dragTarget.removeEventListener('pointerup', up);
       dragTarget.removeEventListener('pointercancel', cancel); dragTarget.removeEventListener('lostpointercapture', cancel);
       window.removeEventListener('blur', cancel); document.removeEventListener('keydown', key, true);

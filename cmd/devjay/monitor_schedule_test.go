@@ -19,11 +19,11 @@ func TestSnapshotForWindowKeepsOnlyItsSiteWithoutChangingSharedState(t *testing.
 	if got := snapshotForWindow(all, "site-removed", ""); len(got.Sites) != 0 {
 		t.Fatal("removed Site received unrelated data")
 	}
-	for _, id := range []string{"control-panel", "settings", "suggestions"} {
+	for _, id := range []string{"strip", "settings", "suggestions"} {
 		if got := snapshotForWindow(all, id, ""); len(got.Sites) != 2 {
 			t.Fatal("overview was filtered")
 		}
-		if got := snapshotForWindow(all, id, ""); (got.ShortcutHints == 3) != (id == "control-panel") {
+		if got := snapshotForWindow(all, id, ""); (got.ShortcutHints == 3) != (id == "strip") {
 			t.Fatal("wrong shortcut hint target", id)
 		}
 	}
@@ -60,7 +60,7 @@ func TestMonitorSleepsUntilActualDeadline(t *testing.T) {
 
 func TestSettingsReceivesHiddenSitesButStripDoesNot(t *testing.T) {
 	all := appSnapshot{Profiles: ProfilesView{Current: "home"}, Sites: []SiteView{{Site: Site{ID: "a"}, Enabled: true}}, Catalog: []SiteView{{Site: Site{ID: "a"}, Enabled: true}, {Site: Site{ID: "b"}}}}
-	settings, strip := snapshotForWindow(all, "settings", ""), snapshotForWindow(all, "control-panel", "")
+	settings, strip := snapshotForWindow(all, "settings", ""), snapshotForWindow(all, "strip", "")
 	if len(settings.Sites) != 2 || settings.Profiles.Current != "home" || settings.Catalog != nil {
 		t.Fatal("Settings lost catalog")
 	}

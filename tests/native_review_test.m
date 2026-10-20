@@ -6,6 +6,12 @@
 #include "../cmd/devjay/spaces_darwin.m"
 #include "../cmd/devjay/layout_darwin.m"
 #include "../cmd/devjay/editors_darwin.m"
+#include "../cmd/devjay/profile_prompt_darwin.m"
+
+static NSString *chosenProfileSignature;
+void devjay_profile_prompt_chosen(const char *value) {
+    [chosenProfileSignature release]; chosenProfileSignature = [[NSString stringWithUTF8String:value] copy];
+}
 
 static BOOL gotPathError;
 void devjay_editor_opened(unsigned long long token, const char *error) {
@@ -64,7 +70,7 @@ static void test_strip_focus_isolation(void) {
         initWithContentRect:NSMakeRect(0, 0, 300, 100)
         styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskNonactivatingPanel
         backing:NSBackingStoreBuffered defer:NO] autorelease];
-    strip.identifier = @"control-panel";
+    strip.identifier = @"strip";
     strip.collectionBehavior = NSWindowCollectionBehaviorCanJoinAllSpaces |
         NSWindowCollectionBehaviorManaged | NSWindowCollectionBehaviorParticipatesInCycle;
     Class nativeClass = object_getClass(strip);
@@ -102,7 +108,7 @@ static void test_confirmation_card_anchor(void) {
     if (area.size.width < 1000 || area.size.height < 550) return;
     NSWindow *strip = [[[NSWindow alloc] initWithContentRect:NSMakeRect(area.origin.x+30,area.origin.y+10,900,174)
         styleMask:NSWindowStyleMaskBorderless backing:NSBackingStoreBuffered defer:NO] autorelease];
-    strip.identifier = @"control-panel";
+    strip.identifier = @"strip";
     WKWebView *view = [[[WKWebView alloc] initWithFrame:NSMakeRect(0,0,900,174)] autorelease];
     strip.contentView = view;
     DevJaySiteTestWindow *popup = [[[DevJaySiteTestWindow alloc] initWithContentRect:NSMakeRect(0,0,460,330)
@@ -127,7 +133,7 @@ static void test_message_dialog_card_anchor(void) {
     if (area.size.width < 1000 || area.size.height < 550) return;
     NSWindow *strip = [[[NSWindow alloc] initWithContentRect:NSMakeRect(area.origin.x+30,area.origin.y+10,900,174)
         styleMask:NSWindowStyleMaskBorderless backing:NSBackingStoreBuffered defer:NO] autorelease];
-    strip.identifier = @"control-panel";
+    strip.identifier = @"strip";
     strip.contentView = [[[WKWebView alloc] initWithFrame:NSMakeRect(0,0,900,174)] autorelease];
     NSRect before = strip.frame;
     Method activation = class_getInstanceMethod(NSApplication.class, @selector(activateIgnoringOtherApps:));
@@ -199,7 +205,7 @@ static void test_viewer_placement(void) {
     if (area.size.width < 1000 || area.size.height < 550) return;
     NSWindow *parent = [[[NSWindow alloc] initWithContentRect:NSMakeRect(area.origin.x+30,area.origin.y+10,900,174)
         styleMask:NSWindowStyleMaskBorderless backing:NSBackingStoreBuffered defer:NO] autorelease];
-    parent.identifier = @"control-panel";
+    parent.identifier = @"strip";
     parent.contentView = [[[WKWebView alloc] initWithFrame:NSMakeRect(0,0,900,174)] autorelease];
     DevJayPlacementTestWindow *other = [[[DevJayPlacementTestWindow alloc] initWithContentRect:NSMakeRect(area.origin.x+300,area.origin.y+184,460,330)
         styleMask:NSWindowStyleMaskBorderless backing:NSBackingStoreBuffered defer:NO] autorelease];
@@ -249,7 +255,7 @@ static void test_card_height_refit(void) {
     NSRect area = NSScreen.mainScreen.visibleFrame;
     NSWindow *panel = [[[NSWindow alloc] initWithContentRect:NSMakeRect(area.origin.x+20, area.origin.y+10, 500, 300)
         styleMask:NSWindowStyleMaskBorderless backing:NSBackingStoreBuffered defer:NO] autorelease];
-    panel.identifier = @"control-panel";
+    panel.identifier = @"strip";
     NSRect original = panel.frame;
     devjay_fit_card_window(panel, 160, 500, 300, 0); // Grow-only requests cannot shrink.
     assert(NSEqualRects(panel.frame, original));
@@ -267,7 +273,7 @@ static void test_card_height_refit(void) {
     assert(NSHeight(panel.frame) == 132);
     devjay_fit_card_window(panel, 220, 500, 132, 0);
     assert(NSHeight(panel.frame) == 220 && NSMinY(panel.frame) == NSMinY(original));
-    panel.identifier = @"control-panel";
+    panel.identifier = @"strip";
     panel.styleMask = NSWindowStyleMaskTitled;
     [panel setContentSize:NSMakeSize(500, 300)];
     devjay_fit_card_window(panel, 160, 500, 300, 1);
@@ -275,10 +281,105 @@ static void test_card_height_refit(void) {
     assert(NSHeight(panel.frame) > 160); // Native chrome is added once.
 }
 
+static void test_strip_layout_name_migration(void) {
+    NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+    NSString *key = @"DevJay.WindowLayout.Profile.test-strip-name";
+    NSDictionary *oldRecord = @{@"frame":@"{{30, 40}, {700, 180}}", @"spaceUUID":@"saved-space"};
+    [defaults setObject:@{legacyStripLayoutIdentifier:oldRecord} forKey:key];
+    migrate_strip_layout(key);
+    assert([[[defaults dictionaryForKey:key] objectForKey:@"strip"] isEqual:oldRecord]);
+    assert([[[defaults dictionaryForKey:key] objectForKey:legacyStripLayoutIdentifier] isEqual:oldRecord]);
+    NSDictionary *newRecord = @{@"frame":@"{{50, 60}, {800, 200}}"};
+    [defaults setObject:@{legacyStripLayoutIdentifier:oldRecord, @"strip":newRecord} forKey:key];
+    migrate_strip_layout(key);
+    assert([[[defaults dictionaryForKey:key] objectForKey:@"strip"] isEqual:newRecord]);
+    [defaults removeObjectForKey:key];
+}
+
+static NSUInteger siteBackOrders;
+static void recordSiteBack(id window, SEL selector, id sender) { siteBackOrders++; }
+static void test_site_visibility_restore_does_not_focus(void) {
+    DevJaySiteTestWindow *site = [[[DevJaySiteTestWindow alloc] initWithContentRect:NSMakeRect(30,40,290,174)
+        styleMask:NSWindowStyleMaskBorderless backing:NSBackingStoreBuffered defer:NO] autorelease];
+    site.identifier = @"site-visibility";
+    NSRect frame = site.frame;
+    NSWindowCollectionBehavior behavior = site.collectionBehavior;
+    Method back = class_getInstanceMethod(NSWindow.class, @selector(orderBack:));
+    IMP originalBack = method_setImplementation(back, (IMP)recordSiteBack);
+    Method activation = class_getInstanceMethod(NSApplication.class, @selector(activateIgnoringOtherApps:));
+    IMP originalActivation = method_setImplementation(activation, (IMP)recordActivation);
+    NSUInteger previousActivations = activationRequests;
+    devjay_show_site_without_focus(site);
+    assert(siteBackOrders == 1 && site->keyOrders == 0 && site->mainRequests == 0);
+    assert(activationRequests == previousActivations && NSEqualRects(frame,site.frame) && behavior == site.collectionBehavior);
+    site.identifier = @"strip";
+    devjay_show_site_without_focus(site);
+    assert(siteBackOrders == 1); // The Site toggle cannot show the strip.
+    method_setImplementation(back, originalBack);
+    method_setImplementation(activation, originalActivation);
+}
+
+// Drive native visibility and delayed cleanup without showing real windows.
+@interface DevJayHiddenSiteTestWindow : DevJaySiteTestWindow {
+@public
+    BOOL shown, mini, active;
+    NSUInteger outs;
+}
+@end
+@implementation DevJayHiddenSiteTestWindow
+- (BOOL)isVisible { return shown; }
+- (BOOL)isMiniaturized { return mini; }
+- (BOOL)isOnActiveSpace { return active; }
+- (void)makeKeyAndOrderFront:(id)sender { (void)sender; keyOrders++; shown=YES; }
+- (void)orderOut:(id)sender { (void)sender; shown=NO; outs++; }
+- (void)deminiaturize:(id)sender { (void)sender; mini=NO; }
+- (void)miniaturize:(id)sender { (void)sender; mini=YES; }
+@end
+static void test_hidden_site_navigation_retains_visibility(void) {
+    DevJayHiddenSiteTestWindow *site=[[[DevJayHiddenSiteTestWindow alloc] initWithContentRect:NSMakeRect(30,40,290,174)
+        styleMask:NSWindowStyleMaskTitled backing:NSBackingStoreBuffered defer:NO] autorelease];
+    site.identifier=@"site-hidden";
+    NSRect frame=site.frame;
+    NSWindowCollectionBehavior behavior=site.collectionBehavior;
+    Method activation=class_getInstanceMethod(NSApplication.class,@selector(activateIgnoringOtherApps:));
+    IMP original=method_setImplementation(activation,(IMP)recordActivation);
+    devjay_set_site_window_hidden(site,1);
+    assert(!site->shown && site.alphaValue==0 && site.ignoresMouseEvents);
+    site->mini=YES;
+    devjay_focus_site(site);
+    id first=objc_getAssociatedObject(site,&siteNavigationKey);
+    assert(first && site->shown && !site->mini && site.alphaValue==0 && site.ignoresMouseEvents);
+    assert(site->keyOrders==1 && site->mainRequests==1);
+    assert(!(devjay_window_state(site)&8));
+    site->active=YES; // A desktop notification must not turn visibility back on.
+    assert((devjay_window_state(site)&1) && !(devjay_window_state(site)&8));
+    assert(devjay_site_window_hidden(site) && site.alphaValue==0);
+    devjay_focus_site(site);
+    id second=objc_getAssociatedObject(site,&siteNavigationKey);
+    assert(second!=first);
+    NSUInteger outs=site->outs;
+    devjay_finish_hidden_navigation(site,first);
+    assert(site->outs==outs && site->shown);
+    devjay_finish_hidden_navigation(site,second);
+    assert(!site->shown && site->mini && site.alphaValue==0);
+    devjay_focus_site(site);
+    id third=objc_getAssociatedObject(site,&siteNavigationKey);
+    devjay_set_site_window_hidden(site,0);
+    assert(site->mini && site.alphaValue==1 && !site.ignoresMouseEvents && !devjay_site_window_hidden(site));
+    outs=site->outs;
+    devjay_finish_hidden_navigation(site,third);
+    assert(site->outs==outs && site.alphaValue==1); // Old timer cannot undo Show.
+    assert(NSEqualRects(frame,site.frame) && behavior==site.collectionBehavior);
+    site.identifier=@"strip";
+    devjay_set_site_window_hidden(site,1);
+    assert(site.alphaValue==1); // The group setting cannot hide other window kinds.
+    method_setImplementation(activation,original);
+}
+
 static void test_profile_layout_isolation(void) {
     NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
     NSDictionary *legacy = [[defaults dictionaryForKey:@"DevJay.WindowLayout.v1"] retain];
-    NSDictionary *initial = @{@"control-panel": @{@"frame": @"{{20, 20}, {500, 180}}"}};
+    NSDictionary *initial = @{@"strip": @{@"frame": @"{{20, 20}, {500, 180}}"}};
     [defaults setObject:initial forKey:@"DevJay.WindowLayout.v1"];
     NSString *signature = display_signature();
     assert(signature.length);
@@ -328,6 +429,118 @@ static void test_profile_layout_isolation(void) {
     assert(!space_at_index(displays,@"left",2));assert(!space_at_index(displays,@"missing",0));
 }
 
+
+@interface RecoveryTestScreen : NSScreen {
+@public
+    NSRect rectangle, usable;
+}
+@end
+@implementation RecoveryTestScreen
+- (NSRect)frame { return rectangle; }
+- (NSRect)visibleFrame { return usable; }
+- (NSDictionary *)deviceDescription { return @{@"NSScreenNumber":@(CGMainDisplayID())}; }
+@end
+static NSArray *recoveryTestScreens;
+
+static void test_disconnected_window_recovery(void) {
+    RecoveryTestScreen *left = [[[RecoveryTestScreen alloc] init] autorelease];
+    left->rectangle = NSMakeRect(-1200,-400,1200,900); left->usable = NSMakeRect(-1200,-350,1200,820);
+    RecoveryTestScreen *right = [[[RecoveryTestScreen alloc] init] autorelease];
+    right->rectangle = NSMakeRect(0,0,1200,900); right->usable = NSMakeRect(0,50,1200,820);
+    recoveryTestScreens = @[left,right];
+    DevJayLayoutMonitor *monitor = [DevJayLayoutMonitor new];
+    DevJayPlacementTestWindow *window = [[[DevJayPlacementTestWindow alloc]
+        initWithContentRect:NSMakeRect(-1100,-200,500,330) styleMask:NSWindowStyleMaskBorderless
+        backing:NSBackingStoreBuffered defer:NO] autorelease];
+    window.identifier = @"settings"; window->visibleForPlacement = YES;
+    NSRect original = window.frame;
+    [monitor recoverWindowsOnScreens:recoveryTestScreens]; assert(NSEqualRects(window.frame,original)); // Valid negative coordinates.
+    // Disconnect the left display while writes to the active Profile are paused.
+    NSString *oldKey = layoutKey;
+    layoutKey = @"DevJay.WindowLayout.RecoveryTest";
+    NSDictionary *saved = @{@"settings":@{@"frame":NSStringFromRect(original)}};
+    [NSUserDefaults.standardUserDefaults setObject:saved forKey:layoutKey];
+    DevJayLayoutObserver *observer = [DevJayLayoutObserver new]; observer->window = window;
+    [NSNotificationCenter.defaultCenter addObserver:observer selector:@selector(windowMoved:) name:NSWindowDidMoveNotification object:window];
+    BOOL oldPaused = profileLayoutPaused; profileLayoutPaused = YES;
+    recoveryTestScreens = @[right];
+    NSUInteger beforeActivations = activationRequests;
+    [monitor recoverWindowsOnScreens:recoveryTestScreens];
+    assert(NSContainsRect(right.visibleFrame,window.frame));
+    assert([[NSUserDefaults.standardUserDefaults dictionaryForKey:layoutKey] isEqual:saved]);
+    assert(activationRequests == beforeActivations && window->keyOrders == 0);
+    // A reconnected screen can have a new origin. Existing good positions stay put.
+    NSRect recovered = window.frame;
+    recoveryTestScreens = @[left,right];
+    [monitor recoverWindowsOnScreens:recoveryTestScreens]; assert(NSEqualRects(window.frame,recovered));
+    // A large window is resized; even an excessive minimum size cannot strand buttons.
+    window.minSize = NSMakeSize(1800,1200);
+    [window setFrame:NSMakeRect(1000,800,1800,1200) display:NO];
+    [monitor recoverWindowsOnScreens:recoveryTestScreens]; assert(NSContainsRect(right.visibleFrame,window.frame));
+    window.minSize = NSMakeSize(0,0);
+    // Recovery never reveals hidden/transparent or minimized Sites.
+    window.identifier = @"site-hidden-recovery";
+    NSRect outside = NSMakeRect(2400,-1500,290,174);
+    window->visibleForPlacement = NO; [window setFrame:outside display:NO];
+    [monitor recoverWindowsOnScreens:recoveryTestScreens]; assert(NSEqualRects(window.frame,outside));
+    window->visibleForPlacement = YES; window.alphaValue = 0;
+    [monitor recoverWindowsOnScreens:recoveryTestScreens]; assert(NSEqualRects(window.frame,outside));
+    window.alphaValue = 1; window->minimizedForPlacement = YES;
+    [monitor recoverWindowsOnScreens:recoveryTestScreens]; assert(NSEqualRects(window.frame,outside));
+    window->minimizedForPlacement = NO;
+    // Exposing a previously hidden window also recovers it, without changing saved layouts.
+    [monitor windowExposed:[NSNotification notificationWithName:NSWindowDidBecomeKeyNotification object:window]];
+    assert(NSContainsRect(placement_bounds(nearest_screen(window.frame)),window.frame));
+    assert([[NSUserDefaults.standardUserDefaults dictionaryForKey:layoutKey] isEqual:saved]);
+    // Actual notification delivery and a later AppKit move are both recovered.
+    [window setFrame:outside display:NO];
+    [NSNotificationCenter.defaultCenter postNotificationName:NSApplicationDidChangeScreenParametersNotification object:nil];
+    assert(NSContainsRect(placement_bounds(nearest_screen(window.frame)),window.frame));
+    [window setFrame:outside display:NO];
+    [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.35]];
+    assert(NSContainsRect(placement_bounds(nearest_screen(window.frame)),window.frame));
+    assert([[NSUserDefaults.standardUserDefaults dictionaryForKey:layoutKey] isEqual:saved]);
+    // Test persistence suppression even after the Profile is known again.
+    [window setFrame:outside display:NO];
+    profileLayoutPaused = NO;
+    [monitor recoverWindowsOnScreens:recoveryTestScreens];
+    assert([[NSUserDefaults.standardUserDefaults dictionaryForKey:layoutKey] isEqual:saved]);
+    profileLayoutPaused = oldPaused;
+    [observer stopObserving]; [observer release];
+    [NSUserDefaults.standardUserDefaults removeObjectForKey:layoutKey]; layoutKey = oldKey;
+    [monitor release];
+    recoveryTestScreens = nil;
+}
+
+static void test_profile_prompt_recovery(void) {
+    NSRect area = NSScreen.mainScreen.visibleFrame;
+    NSWindow *strip = [[[NSWindow alloc] initWithContentRect:NSMakeRect(NSMinX(area),NSMinY(area),area.size.width,100)
+        styleMask:NSWindowStyleMaskBorderless backing:NSBackingStoreBuffered defer:NO] autorelease];
+    strip.identifier = @"strip";
+    NSRect original = strip.frame;
+    NSString *signature = display_signature();
+    Method activation = class_getInstanceMethod(NSApplication.class,@selector(activateIgnoringOtherApps:));
+    IMP originalActivation = method_setImplementation(activation,(IMP)recordActivation);
+    devjay_show_profile_prompt(strip,signature.UTF8String);
+    DevJayProfilePrompt *prompt = profilePrompt;
+    assert(prompt && prompt->alert.window.isVisible && !prompt->alert.window.isSheet && !NSApp.modalWindow);
+    assert(NSContainsRect(area,prompt->alert.window.frame));
+    assert(NSEqualRects(strip.frame,original));
+    devjay_show_profile_prompt(strip,signature.UTF8String); assert(profilePrompt == prompt);
+    devjay_sync_profile_prompt(signature.UTF8String); assert(profilePrompt == prompt);
+    [prompt->alert.buttons[1] performClick:nil];
+    assert(!profilePrompt && [chosenProfileSignature isEqual:signature]);
+    [chosenProfileSignature release]; chosenProfileSignature = nil;
+    devjay_show_profile_prompt(strip,"disconnected-combination");
+    [NSNotificationCenter.defaultCenter postNotificationName:NSApplicationDidChangeScreenParametersNotification object:nil];
+    assert(!profilePrompt && !chosenProfileSignature); // Reconnect closes obsolete choices.
+    devjay_show_profile_prompt(strip,signature.UTF8String);
+    [profilePrompt cancelOperation:nil]; assert(!profilePrompt && !chosenProfileSignature);
+    devjay_show_profile_prompt(strip,signature.UTF8String);
+    devjay_sync_profile_prompt(""); assert(!profilePrompt && !chosenProfileSignature);
+    method_setImplementation(activation,originalActivation);
+}
+
 int main(void) {
     @autoreleasepool {
         [NSApplication sharedApplication];
@@ -340,6 +553,11 @@ int main(void) {
         test_switch_placement();
         test_card_height_refit();
         test_profile_layout_isolation();
+        test_strip_layout_name_migration();
+        test_disconnected_window_recovery();
+        test_profile_prompt_recovery();
+        test_site_visibility_restore_does_not_focus();
+        test_hidden_site_navigation_retains_visibility();
         NSView *panel = [[[NSView alloc] init] autorelease];
         NSView *confirmation = [[[NSView alloc] init] autorelease];
         IMP original = class_getMethodImplementation(NSView.class, @selector(acceptsFirstMouse:));
@@ -378,7 +596,7 @@ int main(void) {
             assert(webPanel.frame.size.width == width.doubleValue);
         }
 
-        // The single-instance reopen callback focuses the control panel.
+        // The single-instance reopen callback focuses the strip.
         // NSPanel refuses main-window status and raises if forced into it.
         NSPanel *strip = [[[NSPanel alloc] initWithContentRect:NSMakeRect(0, 0, 900, 174)
             styleMask:NSWindowStyleMaskBorderless | NSWindowStyleMaskNonactivatingPanel

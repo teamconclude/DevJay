@@ -1,3 +1,4 @@
+import { mountShortcutSettings } from './shortcut-settings.js';
 import { prCheckIndicator, prTagTone } from './pr-status.js';
 import { Events, Window } from '/wails/runtime.js';
 import { createBridge } from './bridge.js';
@@ -11,7 +12,7 @@ import { mountEditorSettings } from './editor-settings.js';
 import { mountGitViewer } from './git-viewer.js';
 import { cardStatus } from './card-status.js';
 import { mountSuggestedActions, mountViewerSuggestions, rebasedPublishWarning } from './suggested-actions.js';
-import { installPanelDrag } from './panel-drag.js';
+import { installStripDrag } from './strip-drag.js';
 import { installCardActivation } from './card-interaction.js';
 import { installDragOriginGuard } from './drag-origin.js';
 import { installCardHover } from './card-hover.js';
@@ -27,7 +28,7 @@ const viewer = params.has('viewer');
 let renderSuggestedActions, renderViewerSnapshot, editorSettings, settingsNavigation, profileSettings;
 const root = document.querySelector('#app');
 if (!viewer && !actions) installPathLabels(document.body);
-let snapshot = {sites: []}, dragging = null, panelDragging = false;
+let snapshot = {sites: []}, dragging = null, stripDragging = false;
 let sitePublishPending = null;
 let nativeVisible = true, renderedSnapshot = false, deferredSnapshot = null;
 function updateMonitoringVisibility() {
@@ -59,7 +60,7 @@ function report(source, value) {
 const bridge = createBridge((name, data) => Events.Emit(name, data), (text, error) => report('bridge', {text, error}));
 const emit = bridge.emit;
 Events.On('devjay:request-result', event => bridge.reply(event.data));
-const senderName = siteID ? `site-${siteID}` : 'control-panel';
+const senderName = siteID ? `site-${siteID}` : 'strip';
 for (const name of ['pr-open-result','app-activate-result']) Events.On(`devjay:${name}`, event => {
   if (!settings && !viewer && !actions && event.data.sender === senderName) {
     report('bridge', {text:event.data.error || event.data.message || '', error:!!event.data.error});
@@ -114,7 +115,7 @@ function developmentAppIcon(name, source, size) {
   icon.append(fallback);
   if (source) {
     const image = el('img'); image.alt = ''; image.width = size; image.height = size; image.draggable = false; image.hidden = true;
-    image.setAttribute('aria-hidden', 'true');
+    image.setAttribute('aria-hidden', 'true'); image.referrerPolicy = 'no-referrer';
     image.onload = () => { fallback.hidden = true; image.hidden = false; };
     image.onerror = () => { image.remove(); fallback.hidden = false; };
     icon.append(image); image.src = source;
@@ -206,7 +207,7 @@ function details(site, parent, showIDEStatus) {
   title.dataset.viewKind = 'auto';
   const branch = el('div', 'branch', site.git.branch || 'Folder');
   title.append(pathLabel(site), branch);
-  title.title = siteID ? 'Drag to move this Site' : 'Go to this Site · Drag to move the panel';
+  title.title = siteID ? 'Drag to move this Site' : 'Go to this Site · Drag to move the strip';
   if (!siteID) title.setAttribute('aria-label', `Activate ${site.path}, ${site.git.branch || 'folder'}`);
   heading.append(title);
   const pullRequests = site.git.pullRequests || [];
@@ -300,7 +301,7 @@ function details(site, parent, showIDEStatus) {
     const number = Number(/^PR #(\d+)/.exec(review.label)?.[1]);
     const prNumber = pullRequests.some(pr => pr.number === number) ? number : null;
     metrics(singlePR ? 'Review' : review.label, review.values, review.title, prNumber);
-    if (review.note) line(review.note, 'freshness warning', '◷', review.title, 'edits', prNumber);
+    if (review.note && !review.stale) line(review.note, 'freshness warning', '◷', review.title, 'edits', prNumber);
   }
   if (status.freshness) line(status.freshness, 'freshness muted', '◷', [site.git.remoteNote, site.git.remoteChecked ? `Last checked ${new Date(site.git.remoteChecked).toLocaleString()}` : ''].filter(Boolean).join('\n'), 'branch');
   parent.append(body);
@@ -322,10 +323,28 @@ function details(site, parent, showIDEStatus) {
     push.dataset.viewKind = 'branch'; push.dataset.publishRebased = 'true'; push.dataset.publishButton = 'true';
     parent.append(push);
   }
-  if (showIDEStatus) parent.append(developmentAppIndicator(site));
+  const otherPRs = pullRequests.filter(pr => pr.otherAuthor?.login);
+  if (showIDEStatus || otherPRs.length) {
+    const footer = el('div', 'card-footer');
+    if (showIDEStatus) footer.append(developmentAppIndicator(site));
+    if (otherPRs.length) {
+      const authors = el('div', 'pr-authors');
+      for (const pr of otherPRs) {
+        const author = pr.otherAuthor;
+        const avatar = button('', () => openPR(pr.number), 'pr-author');
+        avatar.dataset.prNumber = String(pr.number);
+        avatar.dataset.appTooltip = `PR #${pr.number} by @${author.login}`;
+        avatar.setAttribute('aria-label', `Open PR #${pr.number} by @${author.login} in browser`);
+        avatar.append(developmentAppIcon(author.login, author.avatarURL, 22));
+        authors.append(avatar);
+      }
+      footer.append(authors);
+    }
+    parent.append(footer);
+  }
 }
 
-let list, decoration, layout, siteError, siteErrorTimer, shortcutError, addAfter;
+let list, decoration, layout, siteError, siteErrorTimer, shortcutError, shortcutSettings, addAfter;
 if (viewer) {
   document.body.className = 'git-viewer';
   let currentView = null, currentSnapshot = {sites:[]};
@@ -364,27 +383,26 @@ if (viewer) {
   }
   section.append(sorting);
   section=pages.editors;
-  section.append(el('h2','','Editors & Apps'));
+  section.append(el('h2','','IDEs & editors'));
   editorSettings = mountEditorSettings(section, data => emit('editor-settings-request', data));
   Events.On('devjay:editor-settings-state', event => editorSettings.renderEditor(event.data));
   section=pages.shortcuts;
-  section.append(el('h2', '', 'Keyboard Shortcuts'));
-  section.append(el('p', 'help', '⌃⌥⌘M toggles a single row of Site names. Right-click → Hide strip leaves a tiny restore button. ⌃⌥⌘1–9 visits a Site’s desktop in card order. Hold Control–Option–Command first to see the numbers on the cards. When hidden, the row appears only while those modifiers are held. ⌃⌥⌘0 restores the full strip. These work while other apps are active.'));
+  shortcutSettings = mountShortcutSettings(section, data => emit('shortcut', data));
   shortcutError = el('p', 'help error'); shortcutError.hidden = true; shortcutError.setAttribute('role', 'status'); section.append(shortcutError);
   section=pages.windows;
-  section.append(el('h2', '', 'Windows & Cards'));
-  for (const [key, title] of [['allDesktops', 'Control panel always visible'], ['onTop', 'Show all windows on top']]) {
+  section.append(el('h2', '', 'Windows and layout'));
+  for (const [key, title] of [['allDesktops', 'Strip on all desktops'], ['onTop', 'Show all windows on top']]) {
     const label = el('label', 'preference'); const box = el('input'); box.type = 'checkbox'; box.dataset.pref = key; box.onchange = () => emit(key, box.checked);
     label.append(box, document.createTextNode(title)); section.append(label);
   }
-  const appLabel=el('label','preference'),appStatus=el('input');appStatus.type='checkbox';appStatus.dataset.pref='showIDEStatus';appStatus.onchange=()=>emit('showIDEStatus',appStatus.checked);appLabel.append(appStatus,document.createTextNode('Show development app status'));pages.editors.append(el('h3','','App indicators'),appLabel,el('p','help','Show IDEs, terminals and AI apps on Site cards. Turning this off stops app detection.'));
-  const panelLayout = el('label', 'decoration-setting', 'Control panel layout');
-  layout = el('select'); layout.setAttribute('aria-label', 'Control panel layout');
+  const appLabel=el('label','preference'),appStatus=el('input');appStatus.type='checkbox';appStatus.dataset.pref='showIDEStatus';appStatus.onchange=()=>emit('showIDEStatus',appStatus.checked);appLabel.append(appStatus,document.createTextNode('Show development app status'));pages.editors.append(el('h3','','Development app status'),appLabel,el('p','help','Show IDEs, terminals and AI clients on Site cards, including detected agent activity. Turning this off stops app detection.'));
+  const stripLayout = el('label', 'decoration-setting', 'Strip layout');
+  layout = el('select'); layout.setAttribute('aria-label', 'Strip layout');
   for (const value of ['horizontal', 'vertical', 'custom']) {
     const option = el('option', '', value[0].toUpperCase() + value.slice(1)); option.value = value; layout.append(option);
   }
   layout.onchange = () => emit('layout', layout.value);
-  panelLayout.append(layout); section.append(panelLayout);
+  stripLayout.append(layout); section.append(stripLayout);
   const resetCards = button('Reset card positions', () => emit('reset-placements'), 'reset-card-positions'); section.append(resetCards);
   const appearance = el('label', 'decoration-setting', 'Window decoration');
   decoration = el('select'); decoration.setAttribute('aria-label', 'Window decoration');
@@ -411,10 +429,10 @@ if (viewer) {
   const grip = el('span', 'grip'); grip.title = 'DevJay · Drag to move';
   const close = button('×', () => Window.Close(), 'close-window'); close.setAttribute('aria-label', 'Quit DevJay'); close.title = 'Quit DevJay';
   header.append(grip, close); list = el('nav', 'cards'); list.setAttribute('aria-label', 'Sites'); root.append(header, list, notice);
-  installPanelDrag(list, {
+  installStripDrag(list, {
     enabled: () => snapshot.settingsOpen,
     layout: () => snapshot.layout || 'horizontal',
-    busy: value => { panelDragging = value; if (!value) { render(snapshot); fitCards(); } },
+    busy: value => { stripDragging = value; if (!value) { render(snapshot); fitCards(); } },
     commit: ids => emit('order', ids),
     placements: () => cardPlacements(snapshot),
     place: positions => emit('placements', positions),
@@ -436,7 +454,7 @@ if (viewer) {
 
 }
 if (viewer || actions) root.append(notice);
-const fitCards = !settings && !actions && !viewer ? installCardSizing(root, list, size => emit('fit-cards', size), () => panelDragging) : () => {};
+const fitCards = !settings && !actions && !viewer ? installCardSizing(root, list, size => emit('fit-cards', size), () => stripDragging) : () => {};
 
 function startSiteDrag(event, row, handle) {
   if (event.button !== 0 || dragging) return;
@@ -522,7 +540,7 @@ function refreshAppTooltip(state) {
     state.layout || 'horizontal', state.decoration || 'none',
     sites.map(site => [site.id, site.path, site.position?.label, state.placements?.[site.id], site.developmentAppsKnown,
       (site.developmentApps || []).map(app => [app.bundleID, app.name, app.agents, app.waitingAgents, app.workingAgents, app.windowCount]),
-      (site.git.pullRequests || []).map(pr => [pr.number, pr.state, pr.isDraft, pr.ciState])]),
+      (site.git.pullRequests || []).map(pr => [pr.number, pr.state, pr.isDraft, pr.ciState, pr.otherAuthor])]),
   ]);
   if (signature === appTooltipSignature) return;
   appTooltipSignature = signature;
@@ -535,7 +553,7 @@ function render(state) {
   const showIDEStatus = state.preferences?.showIDEStatus !== false;
   if (actions) { renderSuggestedActions(state); return; }
   updateWaitingAttention(state);
-  if (panelDragging) return;
+  if (stripDragging) return;
   document.body.dataset.layout = state.layout || 'horizontal';
   document.body.dataset.settingsOpen = String(!!state.settingsOpen);
   document.body.dataset.cardDrag = String(!!state.settingsOpen);
@@ -550,6 +568,7 @@ function render(state) {
     profileSettings.render(state.profiles);
     const afterKey=JSON.stringify(state.sites.map(s=>[s.id,s.name]));
     if(addAfter.dataset.signature!==afterKey){const selected=addAfter.value;addAfter.replaceChildren();const end=el('option','','Last Site');end.value='';addAfter.append(end);for(const site of state.sites){const option=el('option','',site.name);option.value=site.id;addAfter.append(option);}addAfter.value=state.sites.some(s=>s.id===selected)?selected:'';addAfter.dataset.signature=afterKey;}
+    shortcutSettings.render(state.shortcutSettings);
     shortcutError.textContent = state.shortcutError || '';
     shortcutError.hidden = !state.shortcutError;
     document.querySelectorAll('[data-pref]').forEach(n => { n.checked = n.dataset.pref === 'showIDEStatus' ? showIDEStatus : state.preferences[n.dataset.pref]; });
@@ -597,7 +616,7 @@ function render(state) {
       card.style.top = free ? `${position.y}px` : '';
       card.style.zIndex = free ? position.z : '';
       card.classList.toggle('visible', site.window.onDesktop);
-      card.dataset.shortcut = index < 9 && (state.shortcutHints & (1 << index)) ? String(index + 1) : '';
+      card.dataset.shortcut = index < 9 && (state.shortcutHints & (1 << index)) ? (state.shortcutLabels?.[index] || String(index + 1)) : '';
       card.setAttribute('aria-label', `Activate ${site.path}, ${site.git.branch || 'folder'}, ${site.git.localNote || site.git.summary}${site.window.onDesktop ? ', visible on current desktop' : ''}`);
       details(site, card, showIDEStatus);
       card.title = [site.window.onDesktop ? 'Visible on current desktop' : '', site.path, site.git.branch, site.git.summary, site.git.localNote, site.git.github, site.git.remoteNote, site.position.label, site.git.tracking ? `Tracking ${site.git.tracking}` : '', site.git.remoteChecked ? `Remote checked ${new Date(site.git.remoteChecked).toLocaleString()}` : ''].filter(Boolean).join('\n');

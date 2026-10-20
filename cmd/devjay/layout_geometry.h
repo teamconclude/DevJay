@@ -79,10 +79,10 @@ static inline DPRect dp_grow_height(DPRect frame, DPRect available, double heigh
     return dp_fit_height(frame, available, height);
 }
 
-// Initial panel estimate (216x152 cards, 8px gaps, and content padding).
+// Initial strip estimate (216x152 cards, 8px gaps, and content padding).
 // The frontend subsequently fits actual content height. Modes: row, column,
 // and wrapping tiles. Saved free placements retain their full extent.
-static inline DPRect dp_panel_size(int mode, size_t count, double maxWidth, double maxHeight,
+static inline DPRect dp_strip_size(int mode, size_t count, double maxWidth, double maxHeight,
                                    double header, double extentWidth, double extentHeight) {
     double n = fmax(1, (double)count), columns = n;
     if (mode == 1) columns = 1;

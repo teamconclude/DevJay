@@ -3,8 +3,8 @@ package main
 /*
 #cgo LDFLAGS: -framework AppKit -framework Carbon
 #include <stdlib.h>
-unsigned int devjay_start_shortcuts(void);
 void devjay_stop_strip_controls(void);
+void devjay_set_site_windows_hidden(int hidden);
 void devjay_refresh_minimal_strip(void);
 int devjay_set_strip_mode(void *window, int mode, const char *cards);
 void devjay_update_compact_strip(const char *cards);
@@ -13,8 +13,6 @@ import "C"
 
 import (
 	"encoding/json"
-	"fmt"
-	"strings"
 	"sync/atomic"
 	"unsafe"
 
@@ -88,55 +86,39 @@ func compactStripCards(sites []SiteView) string {
 	return string(data)
 }
 
-func startGlobalShortcuts() string {
-	var failed C.uint
-	application.InvokeSync(func() { failed = C.devjay_start_shortcuts() })
-	return shortcutFailureMessage(uint32(failed))
-}
-
-func shortcutFailureMessage(failed uint32) string {
-	var keys []string
-	for id := 0; id <= 10; id++ {
-		if failed&(1<<id) == 0 {
-			continue
-		}
-		key := fmt.Sprint(id)
-		if id == 0 {
-			key = "M"
-		} else if id == 10 {
-			key = "0"
-		}
-		keys = append(keys, "⌃⌥⌘"+key)
-	}
-	if len(keys) == 0 {
-		return ""
-	}
-	return "Global shortcuts unavailable: " + strings.Join(keys, ", ") + ". Another app or DevJay copy may be using them. Quit that copy or free those shortcuts, then restart DevJay."
-}
-
 func (m *siteManager) setStripMode(mode stripMode) {
-	if !m.panelReady || m.panel == nil || mode < stripFull || mode > stripHidden || m.stripMode == mode {
+	if !m.stripReady || m.strip == nil || mode < stripFull || mode > stripHidden || m.stripMode == mode {
 		return
 	}
 	cards := ""
-	if mode != stripFull {
+	if mode == stripCompact {
 		cards = compactStripCards(m.snapshot().Sites)
 	}
 	value := C.CString(cards)
 	defer C.free(unsafe.Pointer(value))
 	var applied C.int
-	application.InvokeSync(func() { applied = C.devjay_set_strip_mode(m.panel.NativeWindow(), C.int(mode), value) })
+	application.InvokeSync(func() { applied = C.devjay_set_strip_mode(m.strip.NativeWindow(), C.int(mode), value) })
 	if applied != 0 {
+		// Keep Wails' visibility state aligned so reloading a hidden WebView
+		// cannot automatically reveal the full strip.
+		if mode == stripFull {
+			m.strip.Show()
+		} else {
+			m.strip.Hide()
+		}
+		if mode == stripHidden {
+			m.stripRestoreMode = m.stripMode
+		}
 		m.stripMode = mode
 		m.compactSignature = cards
 		m.minimalItem.SetChecked(mode == stripCompact)
-		m.hiddenItem.SetChecked(mode == stripHidden)
+		m.hiddenItem.SetLabel(stripVisibilityLabel(mode))
 		m.broadcast()
 	}
 }
 
 func (m *siteManager) updateCompactStrip(sites []SiteView) {
-	if m.stripMode == stripFull {
+	if m.stripMode != stripCompact {
 		return
 	}
 	cards := compactStripCards(sites)
@@ -149,12 +131,12 @@ func (m *siteManager) updateCompactStrip(sites []SiteView) {
 	m.compactSignature = cards
 }
 
-func (m *siteManager) showControlPanel() {
-	if !m.panelReady {
+func (m *siteManager) showStrip() {
+	if !m.stripReady {
 		return
 	}
 	m.setStripMode(stripFull)
-	focusSite(m.panel)
+	focusSite(m.strip)
 	m.broadcast()
 }
 
@@ -177,7 +159,7 @@ func (m *siteManager) handleStripControl(event stripControlEvent) {
 	case action >= 1 && action <= 9:
 		m.activateSiteNumber(action - 1)
 	case action == 10:
-		m.showControlPanel()
+		m.showStrip()
 	case action == 11:
 		m.openSettings()
 	case action == 12:
@@ -186,7 +168,13 @@ func (m *siteManager) handleStripControl(event stripControlEvent) {
 		m.setStripMode(stripCompact)
 	case action == 14:
 		go m.app.Quit()
-	case action == 15 && m.stripMode != stripFull:
+	case action == 16:
+		m.toggleStripVisibility()
+	case action == 17:
+		m.setSiteWindowsHidden(!m.config.SiteWindowsHidden)
+	case action == 18 || action == 19:
+		m.setSiteWindowsHidden(action == 18)
+	case action == 15 && m.stripMode == stripCompact:
 		m.activate(event.siteID) // Revalidate live Site membership, never a stale index.
 	}
 }
@@ -197,4 +185,62 @@ func stopStripControls() {
 
 func refreshMinimalStrip() {
 	application.InvokeSync(func() { C.devjay_refresh_minimal_strip() })
+}
+
+func stripVisibilityLabel(mode stripMode) string {
+	if mode == stripHidden {
+		return "Show strip"
+	}
+	return "Hide strip"
+}
+func restoredStripMode(mode stripMode) stripMode {
+	if mode == stripCompact {
+		return stripCompact
+	}
+	return stripFull
+}
+func (m *siteManager) toggleStripVisibility() {
+	if m.stripMode == stripHidden {
+		m.setStripMode(restoredStripMode(m.stripRestoreMode))
+	} else {
+		m.setStripMode(stripHidden)
+	}
+}
+func (m *siteManager) setSiteWindowsHidden(hidden bool) {
+	if m.config.SiteWindowsHidden == hidden {
+		return
+	}
+	c := m.config
+	c.SiteWindowsHidden = hidden
+	if err := m.save(c); err != nil {
+		showMessageDialog(m.strip, nil, "Could not change Site window visibility", err.Error())
+		return
+	}
+	m.applySiteWindowsVisibility()
+	m.broadcast()
+}
+
+// Also run at launch, before ready callbacks, so menus and new windows agree
+// with the saved preference. Only explicit Show/Hide actions change it.
+func (m *siteManager) applySiteWindowsVisibility() {
+	hidden := m.config.SiteWindowsHidden
+	var nativeHidden C.int
+	if hidden {
+		nativeHidden = 1
+	}
+	application.InvokeSync(func() { C.devjay_set_site_windows_hidden(nativeHidden) })
+	for _, site := range m.runtime {
+		if site.Ready {
+			setSiteWindowVisibility(site.Window, hidden)
+		} else if hidden {
+			site.Window.Hide()
+		}
+	}
+	if m.siteWindowsItem != nil {
+		label := "Hide Site windows"
+		if hidden {
+			label = "Show Site windows"
+		}
+		m.siteWindowsItem.SetLabel(label)
+	}
 }

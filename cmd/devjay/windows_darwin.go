@@ -5,13 +5,15 @@ package main
 #include <stdlib.h>
 #include "site_apps_darwin.h"
 unsigned int devjay_window_state(void *window);
-int devjay_prepare_panel(void *window);
+int devjay_prepare_strip(void *window);
 void devjay_track_hover(void *window);
 void devjay_refresh_app_tooltip(void *window);
-unsigned int devjay_panel_preferences(void *window);
+unsigned int devjay_strip_preferences(void *window);
 void devjay_all_desktops(void *window, int enabled);
 void devjay_all_windows_on_top(int enabled);
 void devjay_focus_site(void *window);
+void devjay_show_site_without_focus(void *window);
+void devjay_set_site_window_hidden(void *window, int hidden);
 void devjay_restore_layout(void *window, const char *identifier);
 void devjay_save_layout(void *window);
 char *devjay_desktop_position(void *window);
@@ -21,7 +23,7 @@ void devjay_show_message(void *parent, double x, double y, double width, double 
 void devjay_show_viewer(void *window, void *parent, double x, double y, double width, double height);
 void devjay_apply_top_preference(void);
 void devjay_fit_card_window(void *window, double height, double viewportWidth, double viewportHeight, int refit);
-void devjay_fit_panel(void *window, int mode, int count, int header, double extentWidth, double extentHeight);
+void devjay_fit_strip(void *window, int mode, int count, int header, double extentWidth, double extentHeight);
 */
 import "C"
 
@@ -36,7 +38,7 @@ import (
 var windowNavigationGeneration atomic.Uint64
 
 // Collect native state in one main-thread visit instead of one per property.
-func readWindowSnapshot(items map[string]siteRuntime, panel, settings *application.WebviewWindow) (map[string]DesktopPosition, map[string]cardState, map[string]bool, bool, map[string]uint32) {
+func readWindowSnapshot(items map[string]siteRuntime, strip, settings *application.WebviewWindow) (map[string]DesktopPosition, map[string]cardState, map[string]bool, bool, map[string]uint32) {
 	positions := map[string]DesktopPosition{}
 	states := map[string]cardState{}
 	windowNumbers := map[string]uint32{}
@@ -59,8 +61,8 @@ func readWindowSnapshot(items map[string]siteRuntime, panel, settings *applicati
 				positions[id] = position
 			}
 		}
-		if panel != nil {
-			flags := C.devjay_panel_preferences(panel.NativeWindow())
+		if strip != nil {
+			flags := C.devjay_strip_preferences(strip.NativeWindow())
 			preferences["allDesktops"], preferences["onTop"] = flags&1 != 0, flags&2 != 0
 		}
 		if settings != nil {
@@ -70,19 +72,19 @@ func readWindowSnapshot(items map[string]siteRuntime, panel, settings *applicati
 	return positions, states, preferences, settingsOpen, windowNumbers
 }
 
-func prepareControlPanel(window *application.WebviewWindow) bool {
+func prepareStrip(window *application.WebviewWindow) bool {
 	var ready bool
-	application.InvokeSync(func() { ready = C.devjay_prepare_panel(window.NativeWindow()) != 0 })
+	application.InvokeSync(func() { ready = C.devjay_prepare_strip(window.NativeWindow()) != 0 })
 	return ready
 }
 
-func panelPreferences(window *application.WebviewWindow) map[string]bool {
+func stripPreferences(window *application.WebviewWindow) map[string]bool {
 	var flags C.uint
-	application.InvokeSync(func() { flags = C.devjay_panel_preferences(window.NativeWindow()) })
+	application.InvokeSync(func() { flags = C.devjay_strip_preferences(window.NativeWindow()) })
 	return map[string]bool{"allDesktops": flags&1 != 0, "onTop": flags&2 != 0}
 }
 
-func setPanelPreference(window *application.WebviewWindow, name string, enabled bool) {
+func setStripPreference(window *application.WebviewWindow, name string, enabled bool) {
 	var value C.int
 	if enabled {
 		value = 1
@@ -128,7 +130,7 @@ func refreshAppTooltip(window *application.WebviewWindow) {
 	application.InvokeSync(func() { C.devjay_refresh_app_tooltip(window.NativeWindow()) })
 }
 
-func fitControlPanel(window *application.WebviewWindow, config SiteConfig) {
+func fitStrip(window *application.WebviewWindow, config SiteConfig) {
 	sites := visibleSites(config)
 	mode := 0
 	if config.layout() == "vertical" {
@@ -153,7 +155,7 @@ func fitControlPanel(window *application.WebviewWindow, config SiteConfig) {
 		}
 	}
 	application.InvokeSync(func() {
-		C.devjay_fit_panel(window.NativeWindow(), C.int(mode), C.int(len(sites)), C.int(header), C.double(width), C.double(height))
+		C.devjay_fit_strip(window.NativeWindow(), C.int(mode), C.int(len(sites)), C.int(header), C.double(width), C.double(height))
 	})
 }
 
@@ -212,4 +214,21 @@ func showMessageDialog(parent *application.WebviewWindow, anchor *cardAnchor, ti
 		}
 		C.devjay_show_message(nativeParent, C.double(anchor.X), C.double(anchor.Y), C.double(anchor.Width), C.double(anchor.Height), nativeTitle, nativeMessage)
 	})
+}
+
+func setSiteWindowVisibility(window *application.WebviewWindow, hidden bool) {
+	var value C.int
+	if hidden {
+		value = 1
+	}
+	application.InvokeSync(func() { C.devjay_set_site_window_hidden(window.NativeWindow(), value) })
+	if hidden {
+		window.Hide() // Keep Wails reloads hidden as well.
+	} else {
+		showSiteWindowWithoutFocus(window)
+	}
+}
+
+func showSiteWindowWithoutFocus(window *application.WebviewWindow) {
+	application.InvokeSync(func() { C.devjay_show_site_without_focus(window.NativeWindow()) })
 }

@@ -230,7 +230,7 @@ func TestSitePublishSourceOnlyAuthorizesItsCurrentRebasedBranch(t *testing.T) {
 	if m.sitePublishSource(req, "site-a") != window {
 		t.Fatal("own publication button rejected")
 	}
-	for _, sender := range []string{"control-panel", "site-b", "suggested-actions", "settings", "git-viewer-1", ""} {
+	for _, sender := range []string{"strip", "site-b", "suggested-actions", "settings", "git-viewer-1", ""} {
 		if m.sitePublishSource(req, sender) != nil {
 			t.Fatalf("accepted sender %s", sender)
 		}
@@ -292,15 +292,15 @@ func TestHeadingMenuChoosesChangesOrHistoryWithoutChangingExplicitTargets(t *tes
 }
 
 func TestCardMenuSourceValidatesSenderAndSite(t *testing.T) {
-	panel, window := &application.WebviewWindow{}, &application.WebviewWindow{}
+	strip, window := &application.WebviewWindow{}, &application.WebviewWindow{}
 	site := &siteRuntime{Ready: true, Window: window, Git: GitStatus{PullRequests: []PullRequestLink{{Number: 123, URL: "https://github.com/owner/repo/pull/123"}}}}
-	m := &siteManager{panel: panel, panelReady: true, runtime: map[string]*siteRuntime{"alpha": site}}
+	m := &siteManager{strip: strip, stripReady: true, runtime: map[string]*siteRuntime{"alpha": site}}
 	req := cardMenuRequest{SiteID: "alpha", Kind: "edits"}
 	for _, test := range []struct {
 		sender string
 		window *application.WebviewWindow
 	}{
-		{"control-panel", panel}, {"site-alpha", window},
+		{"strip", strip}, {"site-alpha", window},
 		{"site-other", nil}, {"settings", nil}, {"git-viewer-1", nil}, {"", nil},
 	} {
 		got, source := m.cardMenuSource(req, test.sender)
@@ -308,9 +308,9 @@ func TestCardMenuSourceValidatesSenderAndSite(t *testing.T) {
 			t.Errorf("sender %q routed to %p, %p", test.sender, got, source)
 		}
 	}
-	m.panelReady = false
-	if got, _ := m.cardMenuSource(req, "control-panel"); got != nil {
-		t.Fatal("panel accepted before ready")
+	m.stripReady = false
+	if got, _ := m.cardMenuSource(req, "strip"); got != nil {
+		t.Fatal("strip accepted before ready")
 	}
 	site.Ready = false
 	if got, _ := m.cardMenuSource(req, "site-alpha"); got != nil {

@@ -9,7 +9,7 @@ static NSMutableArray *devjay_monitor_observers;
 static BOOL devjay_monitored_window(NSWindow *window) {
     if (![window isKindOfClass:NSWindow.class]) return NO;
     NSString *name = window.identifier;
-    return [name isEqual:@"control-panel"] || [name hasPrefix:@"site-"] ||
+    return [name isEqual:@"strip"] || [name hasPrefix:@"site-"] ||
         [name isEqual:@"settings"] || [name isEqual:@"git-viewer"] ||
         [name isEqual:@"suggested-actions"];
 }
@@ -66,6 +66,6 @@ void devjay_start_native_monitor(void) {
 
 int devjay_monitor_window_visible(void *pointer) {
     NSWindow *window = (NSWindow *)pointer;
-    return window && window.visible && !window.miniaturized && window.onActiveSpace &&
+    return window && window.alphaValue > 0 && window.visible && !window.miniaturized && window.onActiveSpace &&
         (window.occlusionState & NSWindowOcclusionStateVisible) != 0;
 }

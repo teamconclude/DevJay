@@ -78,7 +78,7 @@ func TestSiteOrder(t *testing.T) {
 	}
 }
 
-func TestPanelLayoutPersistence(t *testing.T) {
+func TestStripLayoutPersistence(t *testing.T) {
 	if (SiteConfig{}).layout() != "horizontal" {
 		t.Fatal("old configurations must default to Horizontal")
 	}
@@ -198,6 +198,37 @@ func TestLegacyAppStatusViewPreservesSitesAndStatusPreference(t *testing.T) {
 					t.Fatal("obsolete view preference persisted")
 				}
 			})
+		}
+	}
+}
+
+func TestSiteWindowVisibilityPersistsOutsideProfiles(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sites.json")
+	legacy := SiteConfig{Version: 1, Sites: []Site{}}
+	if err := saveSites(path, legacy); err != nil {
+		t.Fatal(err)
+	}
+	c, err := loadSites(path)
+	if err != nil || c.SiteWindowsHidden {
+		t.Fatal("existing settings should leave Site windows visible", err)
+	}
+	c.SiteWindowsHidden = true
+	for _, hidden := range []bool{true, false, true} {
+		c.SiteWindowsHidden = hidden
+		if err := saveSites(path, c); err != nil {
+			t.Fatal(err)
+		}
+		loaded, err := loadSites(path)
+		if err != nil || loaded.SiteWindowsHidden != hidden {
+			t.Fatal("visibility did not survive restart", err)
+		}
+		manager := newSiteManager(nil, loaded, nil)
+		if manager.config.SiteWindowsHidden != hidden {
+			t.Fatal("manager ignored saved visibility")
+		}
+		switched := applyProfileSettings(loaded, ProfileSettings{Layout: "vertical"})
+		if switched.SiteWindowsHidden != hidden || switched.layout() != "vertical" {
+			t.Fatal("profile switch changed group visibility")
 		}
 	}
 }

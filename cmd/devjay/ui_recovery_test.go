@@ -8,7 +8,7 @@ import (
 func TestUIRecoveryWakeReloadsEvenWhenJavaScriptResponds(t *testing.T) {
 	r := uiRecovery{}
 	now := time.Unix(1000, 0)
-	for _, id := range []string{"panel", "site", "hidden-settings", "viewer", "confirmation"} {
+	for _, id := range []string{"strip", "site", "hidden-settings", "viewer", "confirmation"} {
 		r.add(id)
 		r.ready(id, "original")
 	}
