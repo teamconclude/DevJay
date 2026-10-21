@@ -178,3 +178,32 @@ func TestClaudeWaitingRejectsUnsafeAndUnreadableFiles(t *testing.T) {
 		})
 	}
 }
+
+func TestClaudePermissionIgnoresIdleStateBeforeHookAndExpiresLaterIdle(t *testing.T) {
+	started := time.Date(2026, 10, 21, 10, 13, 57, 500000000, time.UTC)
+	hook := uint64(started.UnixMicro())
+	for _, status := range []string{"idle", "shell", "busy", "waiting", "unknown"} {
+		for _, delta := range []time.Duration{-time.Minute, 0, time.Millisecond, time.Minute} {
+			r := claudeWaitingRecord{Status: status, StatusUpdatedAt: started.Add(delta).UnixMilli()}
+			want := (status == "idle" || status == "shell") && delta > 0
+			if got := r.endedAfterClaudeHook(hook, started.Add(time.Hour)); got != want {
+				t.Fatalf("status %s offset %s: got ended=%v, want %v", status, delta, got, want)
+			}
+		}
+	}
+	r := claudeWaitingRecord{Status: "idle", StatusUpdatedAt: started.Add(time.Millisecond).UnixMilli()}
+	if r.endedAfterClaudeHook(hook, started.Add(time.Second)) {
+		t.Fatal("new hook lost its registry startup grace")
+	}
+	if !r.endedAfterClaudeHook(hook, started.Add(2*time.Second)) {
+		t.Fatal("quickly cancelled hook survived after startup grace")
+	}
+	if r.endedAfterClaudeHook(0, started.Add(time.Hour)) || r.endedAfterClaudeHook(^uint64(0), started.Add(time.Hour)) {
+		t.Fatal("untrusted helper start used as cancellation evidence")
+	}
+	// Reconnection uses the original helper start, while a genuinely new
+	// helper must not inherit the previous invocation's idle transition.
+	if !r.endedAfterClaudeHook(hook, started.Add(24*time.Hour)) || r.endedAfterClaudeHook(uint64(started.Add(time.Minute).UnixMicro()), started.Add(time.Hour)) {
+		t.Fatal("reconnection confused an old invocation with a new one")
+	}
+}

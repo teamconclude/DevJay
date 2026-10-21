@@ -23,6 +23,11 @@ func (m *siteManager) activateDevelopmentApp(req appActivateRequest, sender stri
 	if parent == nil || site.Window == nil {
 		return
 	}
+	m.activateDevelopmentAppForSite(req, sender, site)
+}
+
+// Shared by validated card events and the native Claude request token path.
+func (m *siteManager) activateDevelopmentAppForSite(req appActivateRequest, sender string, site *siteRuntime) {
 	m.appActivationGeneration++
 	generation := m.appActivationGeneration
 	app, ok := m.requestedDevelopmentApp(req.SiteID, req.BundleID)
@@ -80,6 +85,12 @@ func (m *siteManager) activateDevelopmentApp(req appActivateRequest, sender stri
 func (m *siteManager) finishDevelopmentAppActivation(req appActivateRequest, sender, message string) {
 	if message != "" {
 		m.developmentApps.markDiscoveryDirty()
+	}
+	if sender == "claude-permission" {
+		if message != "" {
+			showMessageDialog(m.strip, nil, "Could not go to Claude", message)
+		}
+		return
 	}
 	m.app.Event.Emit("devjay:app-activate-result", map[string]string{"siteID": req.SiteID, "sender": sender, "error": message})
 }

@@ -99,6 +99,7 @@ func (m *siteManager) observeDevelopmentApps(windows map[string]uint32, position
 			m.developmentApps.finish(request, generation, result, time.Now())
 			if discovery && generation == m.developmentApps.generation && !m.developmentApps.disabled {
 				m.developmentApps.startRegistryWatch(m.app.Context())
+				m.releaseUnmappedClaudePermissions()
 			}
 			m.publishSnapshot(false)
 		})

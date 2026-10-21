@@ -69,6 +69,10 @@ check:
 	trap 'rm -f "$$strip_bin"' EXIT; \
 	clang -Wall -Wextra -Werror -fblocks -framework AppKit -framework Carbon -framework QuartzCore tests/strip_controls_test.m -o "$$strip_bin"; \
 	"$$strip_bin"
+	@set -e; permission_bin=$$(mktemp "$${TMPDIR:-/tmp}/devjay-claude-permission.XXXXXX"); \
+	trap 'rm -f "$$permission_bin"' EXIT; \
+	clang -Wall -Wextra -Werror -fblocks -framework AppKit -framework QuartzCore -framework Carbon tests/claude_permission_panel_test.m -o "$$permission_bin"; \
+	"$$permission_bin"
 	go test -ldflags="$(GO_LINK_FLAGS)" ./...
 	go vet ./...
 	node --input-type=module --check < cmd/devjay/frontend/app.js

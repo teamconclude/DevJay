@@ -11,7 +11,8 @@ import {rebasedPublishWarning} from '../cmd/devjay/frontend/suggested-actions.js
 const navigationSource=(await readFile(new URL('../cmd/devjay/frontend/settings-navigation.js',import.meta.url),'utf8')).replace(/export /g,'');
 const profilesSource=(await readFile(new URL('../cmd/devjay/frontend/profile-settings.js',import.meta.url),'utf8')).replace(/export /g,'');
 const shortcutsSource=(await readFile(new URL('../cmd/devjay/frontend/shortcut-settings.js',import.meta.url),'utf8')).replace(/export /g,'');
-const source=shortcutsSource+'\n'+navigationSource+'\n'+profilesSource+'\n'+(await readFile(new URL('../cmd/devjay/frontend/app.js',import.meta.url),'utf8')).replace(/^import .*;\n/gm,'');
+const permissionsSource=(await readFile(new URL('../cmd/devjay/frontend/claude-permission-settings.js',import.meta.url),'utf8')).replace(/export /g,'');
+const source=permissionsSource+'\n'+shortcutsSource+'\n'+navigationSource+'\n'+profilesSource+'\n'+(await readFile(new URL('../cmd/devjay/frontend/app.js',import.meta.url),'utf8')).replace(/^import .*;\n/gm,'');
 
 // Exercise the real snapshot renderer with a small DOM and the Wails boundary.
 function app(search='', actionResult=true) {
@@ -1271,4 +1272,37 @@ test('each avatar opens its matching PR even when one author has multiple PRs',a
  item.git.pullRequests=[];
  view.snapshot(state([item]));
  assert.equal(view.root.querySelector('.pr-authors'),null);
+});
+
+test('Claude prompt checkbox sends explicit choices and restores reported state',async()=>{
+ const view=app('?settings');
+ const label=view.root.querySelectorAll('label').find(n=>n.textContent==='Enable Claude prompts');
+ const checkbox=label.querySelector('input');
+ assert.equal(checkbox.type,'checkbox');assert.equal(checkbox.checked,false);assert.ok(checkbox.disabled);
+ assert.ok(view.calls.some(([name,data])=>name==='devjay:claude-permission-settings'&&data.operation==='status'));
+ assert.ok(!view.calls.some(([name,data])=>name==='devjay:claude-permission-settings'&&data.operation==='enable'));
+ view.event('devjay:claude-permission-settings-state',{available:true,enabled:false});
+ assert.equal(checkbox.checked,false);assert.equal(checkbox.disabled,false);
+ checkbox.checked=true;checkbox.onchange();await Promise.resolve();
+ assert.equal(checkbox.disabled,true);
+ assert.ok(view.calls.some(([name,data])=>name==='devjay:claude-permission-settings'&&data.operation==='enable'));
+ view.event('devjay:claude-permission-settings-state',{available:true,enabled:true});
+ assert.equal(checkbox.checked,true);assert.equal(checkbox.disabled,false);
+ checkbox.checked=false;checkbox.onchange();await Promise.resolve();
+ assert.equal(checkbox.disabled,true);
+ assert.ok(view.calls.some(([name,data])=>name==='devjay:claude-permission-settings'&&data.operation==='disable'));
+ view.event('devjay:claude-permission-settings-state',{available:true,enabled:true,error:'Could not save settings'});
+ assert.equal(checkbox.checked,true);assert.equal(checkbox.disabled,false);assert.match(view.root.textContent,/Could not save settings/);
+ view.event('devjay:claude-permission-settings-state',{available:true,enabled:false});
+ assert.equal(checkbox.checked,false);assert.equal(checkbox.disabled,false);
+ view.event('devjay:claude-permission-settings-state',{available:false,enabled:true,error:'Connection unavailable'});
+ assert.equal(checkbox.checked,true);assert.equal(checkbox.disabled,true);assert.match(view.root.textContent,/Connection unavailable/);
+});
+
+test('only Claude waiting icons carry a permission popup identity',()=>{
+ const view=app();const s=site('a');s.developmentAppsKnown=true;
+ s.developmentApps=[{name:'GoLand',bundleID:'host',agents:['Claude Code'],waitingAgents:['Claude Code'],claudePermissions:1}];
+ view.snapshot(state([s]));let group=view.root.querySelector('.development-app-group');assert.equal(group.dataset.claudeSite,'a');
+ s.developmentApps[0].agents=['Codex'];s.developmentApps[0].waitingAgents=['Codex'];s.developmentApps[0].claudePermissions=0;
+ view.snapshot(state([s]));group=view.root.querySelector('.development-app-group');assert.equal(group.dataset.claudeSite,undefined);
 });

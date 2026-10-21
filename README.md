@@ -55,6 +55,14 @@ When a PR is authored by someone else, their GitHub avatar appears at the card�
 
 Background monitoring fetches remote information without changing your local branches or working files. Offline or failed checks show cached/unavailable status. GitHub support currently covers GitHub.com; fork PRs targeting another repository and GitHub Enterprise are not yet resolved.
 
+## Answer Claude permission prompts
+
+Enable **Settings → IDEs & editors → Claude permission prompts** once for all folders. New Claude Code command and file-edit approval requests can then appear when you hover the yellow IDE/Claude icon. If a question was already open or was not sent through the integration, the popup explains this and offers **Claude** and **Prompt settings**. For a captured approval, the interactive popover stays beside the icon and shows Claude’s description plus a readable command or file-change preview. **Show JSON** reveals the complete original tool input. The controls are **Yes** first, then **No**, and **Claude**. Yes/No answer without switching desktops. The Claude button returns the unanswered request to Claude, switches to the Site’s desktop, and brings its IDE or terminal forward; selecting the exact Claude tab may still require a click.
+
+While the pointer is over the IDE/Claude icon or its open popup, press **Y** to approve once, or **N** to deny—even when another app has keyboard focus. Only Y, N, C and Escape are intercepted while hovering; Enter, Space, other keys and Command/Control/Option shortcuts stay with the focused app. The hover shortcuts stop when the pointer leaves both regions. **C** goes to Claude without answering. Clicking the buttons works directly. Yes/No is sent immediately; the selected button pulses for one second before the popup closes. Escape closes the panel without answering. An unanswered request stays available for up to 24 hours. Pending requests reconnect through a short DevJay restart; if it stays closed for more than 30 seconds, they return to Claude.
+
+This opt-in integration adds a local `PermissionRequest` hook to Claude's user settings, preserves other settings/hooks, and saves a backup before changes. It does not change approval rules. Restart Claude if it does not pick up the new hook. Already-open prompts, general questions, plan approval, and unsupported tools remain in Claude. Only one installed/development DevJay copy handles the hook at a time; enabling another copy updates the hook's executable path.
+
 ## Useful controls
 
 - Right-click the strip and choose **Minimize strip** for a shallow row of clickable Site names, or **Hide strip** to hide it completely. **⌃⌥⌘D** hides/shows the strip; **⌃⌥⌘S** hides/shows Site windows. The Site-window visibility choice survives restarts and desktop navigation. **⌃⌥⌘M** toggles the compact row globally; **⌃⌥⌘0** restores the full strip.

@@ -20,6 +20,7 @@ const claudeWaitingMaxBytes = 16 * 1024
 // and other registry fields are deliberately ignored. The registry is an
 // observed implementation detail, so missing or unfamiliar data is unknown.
 type claudeWaitingRecord struct {
+	SessionID       string `json:"sessionId"`
 	PID             int    `json:"pid"`
 	PIDDomain       string `json:"pidDomain"`
 	ProcStart       string `json:"procStart"`
@@ -143,4 +144,17 @@ func (r claudeWaitingRecord) matches(process observedAgentProcess, now time.Time
 	// These timestamps advance on changes, not on a heartbeat. A long-lived
 	// waiting dialog stays valid while this exact process is still observed.
 	return true
+}
+
+// A helper can outlive a cancelled or otherwise resolved permission request.
+// Only a validated idle/shell transition AFTER this helper started establishes
+// that it is obsolete. Old idle metadata and busy/waiting remain valid; allow
+// two seconds for a new invocation's initial registry transition to settle.
+// Use the helper's kernel start, never the server's reconnect time.
+func (r claudeWaitingRecord) endedAfterClaudeHook(hookStarted uint64, now time.Time) bool {
+	if hookStarted == 0 || hookStarted > math.MaxInt64 || (r.Status != "idle" && r.Status != "shell") {
+		return false
+	}
+	started := time.UnixMicro(int64(hookStarted))
+	return r.StatusUpdatedAt > started.UnixMilli() && now.Sub(started) >= 2*time.Second
 }

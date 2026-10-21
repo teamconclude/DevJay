@@ -39,6 +39,9 @@ type cardState struct {
 }
 
 func main() {
+	if claudePermissionHookMode() {
+		return
+	}
 	var manager *siteManager
 	app := application.New(application.Options{
 		Name: "DevJay", Description: "Your parallel development workspace",

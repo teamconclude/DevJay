@@ -8,6 +8,7 @@ import { installCardSizing } from './card-sizing.js';
 import { installPathLabels } from './path-label.js';
 import { mountSettingsNavigation } from './settings-navigation.js';
 import { mountProfileSettings } from './profile-settings.js';
+import { mountClaudePermissionSettings } from './claude-permission-settings.js';
 import { mountEditorSettings } from './editor-settings.js';
 import { mountGitViewer } from './git-viewer.js';
 import { cardStatus } from './card-status.js';
@@ -143,6 +144,7 @@ function developmentAppIndicator(site) {
       + (working.length ? ` · ${workingList} ${working.length === 1 ? 'is' : 'are'} working` : '');
     const group = button('', () => emit('app-activate', {siteID:site.id,bundleID:app.bundleID}), `development-app-group${agents.length ? ' has-agents' : ''}${waiting.length ? ' needs-input' : working.length ? ' is-working' : ''}`);
     group.dataset.appBundle = app.bundleID;
+    if (waiting.includes('Claude Code')) group.dataset.claudeSite = site.id;
     const elapsed = waitingAttentionElapsed(appWaitingAttention(site, app));
     if (elapsed !== null) {
       group.classList.add('waiting-attention');
@@ -395,6 +397,9 @@ if (viewer) {
     const label = el('label', 'preference'); const box = el('input'); box.type = 'checkbox'; box.dataset.pref = key; box.onchange = () => emit(key, box.checked);
     label.append(box, document.createTextNode(title)); section.append(label);
   }
+  const claudeSettings = mountClaudePermissionSettings(pages.editors, data => emit('claude-permission-settings', data));
+  Events.On('devjay:claude-permission-settings-state', event => claudeSettings.render(event.data));
+  emit('claude-permission-settings', {operation:'status'});
   const appLabel=el('label','preference'),appStatus=el('input');appStatus.type='checkbox';appStatus.dataset.pref='showIDEStatus';appStatus.onchange=()=>emit('showIDEStatus',appStatus.checked);appLabel.append(appStatus,document.createTextNode('Show development app status'));pages.editors.append(el('h3','','Development app status'),appLabel,el('p','help','Show IDEs, terminals and AI clients on Site cards, including detected agent activity. Turning this off stops app detection.'));
   const stripLayout = el('label', 'decoration-setting', 'Strip layout');
   layout = el('select'); layout.setAttribute('aria-label', 'Strip layout');
@@ -539,7 +544,7 @@ function refreshAppTooltip(state) {
     state.preferences?.showIDEStatus !== false,
     state.layout || 'horizontal', state.decoration || 'none',
     sites.map(site => [site.id, site.path, site.position?.label, state.placements?.[site.id], site.developmentAppsKnown,
-      (site.developmentApps || []).map(app => [app.bundleID, app.name, app.agents, app.waitingAgents, app.workingAgents, app.windowCount]),
+      (site.developmentApps || []).map(app => [app.bundleID, app.name, app.agents, app.waitingAgents, app.workingAgents, app.claudePermissions, app.windowCount]),
       (site.git.pullRequests || []).map(pr => [pr.number, pr.state, pr.isDraft, pr.ciState, pr.otherAuthor])]),
   ]);
   if (signature === appTooltipSignature) return;

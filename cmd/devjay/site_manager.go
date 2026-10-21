@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"maps"
 	"path/filepath"
 	"slices"
@@ -56,50 +57,53 @@ type appSnapshot struct {
 	Error            string                   `json:"error"`
 }
 type siteManager struct {
-	shortcutFailed                                           uint32
-	shortcutRecording, shortcutMessage                       string
-	shortcutRecordingToken                                   uint64
-	settingsPage                                             string
-	addAfterID                                               string
-	profiles                                                 profileMonitor
-	folders                                                  folderMonitor
-	stripRestoreMode                                         stripMode
-	siteWindowsItem                                          *application.MenuItem
-	stripMode                                                stripMode
-	compactSignature                                         string
-	shortcutError                                            string
-	shortcutHints                                            uint32
-	minimalItem, hiddenItem                                  *application.MenuItem
-	lifecycle                                                actionLifetime
-	quitMessage                                              string
-	removing                                                 bool
-	recovery                                                 uiRecovery
-	recoveryWindows                                          map[string]*application.WebviewWindow
-	editorState                                              *EditorState
-	editorGeneration                                         uint64
-	editorBrowsing                                           bool
-	developmentApps                                          developmentAppMonitor
-	appActivationGeneration                                  uint64
-	viewers                                                  map[string]*gitViewerWindow
-	viewerSequence                                           uint64
-	prOpening                                                bool
-	suggestionsAnchor                                        *cardAnchor
-	suggestions, suggestionsParent                           *application.WebviewWindow
-	suggestionsReady                                         bool
-	suggestedSite                                            string
-	action                                                   *CheckoutAction
-	actionCancel                                             context.CancelFunc
-	actionGeneration                                         uint64
-	app                                                      *application.App
-	strip, settings                                          *application.WebviewWindow
-	stripReady, settingsReady, openSettingsPending, browsing bool
-	allDesktopsItem, onTopItem                               *application.MenuItem
-	mu                                                       sync.Mutex // Protect runtime membership against the shutdown callback.
-	config                                                   SiteConfig
-	configError                                              error
-	runtime                                                  map[string]*siteRuntime
-	commands                                                 chan func()
-	monitor                                                  monitorSchedule
+	claudePermissions                                              *claudePermissionServer
+	claudePermissionSettingsBusy                                   bool
+	claudePermissionSettingsKnown, claudePermissionSettingsEnabled bool
+	shortcutFailed                                                 uint32
+	shortcutRecording, shortcutMessage                             string
+	shortcutRecordingToken                                         uint64
+	settingsPage                                                   string
+	addAfterID                                                     string
+	profiles                                                       profileMonitor
+	folders                                                        folderMonitor
+	stripRestoreMode                                               stripMode
+	siteWindowsItem                                                *application.MenuItem
+	stripMode                                                      stripMode
+	compactSignature                                               string
+	shortcutError                                                  string
+	shortcutHints                                                  uint32
+	minimalItem, hiddenItem                                        *application.MenuItem
+	lifecycle                                                      actionLifetime
+	quitMessage                                                    string
+	removing                                                       bool
+	recovery                                                       uiRecovery
+	recoveryWindows                                                map[string]*application.WebviewWindow
+	editorState                                                    *EditorState
+	editorGeneration                                               uint64
+	editorBrowsing                                                 bool
+	developmentApps                                                developmentAppMonitor
+	appActivationGeneration                                        uint64
+	viewers                                                        map[string]*gitViewerWindow
+	viewerSequence                                                 uint64
+	prOpening                                                      bool
+	suggestionsAnchor                                              *cardAnchor
+	suggestions, suggestionsParent                                 *application.WebviewWindow
+	suggestionsReady                                               bool
+	suggestedSite                                                  string
+	action                                                         *CheckoutAction
+	actionCancel                                                   context.CancelFunc
+	actionGeneration                                               uint64
+	app                                                            *application.App
+	strip, settings                                                *application.WebviewWindow
+	stripReady, settingsReady, openSettingsPending, browsing       bool
+	allDesktopsItem, onTopItem                                     *application.MenuItem
+	mu                                                             sync.Mutex // Protect runtime membership against the shutdown callback.
+	config                                                         SiteConfig
+	configError                                                    error
+	runtime                                                        map[string]*siteRuntime
+	commands                                                       chan func()
+	monitor                                                        monitorSchedule
 }
 
 func newSiteManager(app *application.App, c SiteConfig, err error) *siteManager {
@@ -116,6 +120,18 @@ func (m *siteManager) send(fn func()) {
 	}
 }
 func (m *siteManager) run() {
+	installClaudePopover()
+	var permissionChanges <-chan struct{}
+	server, err := startClaudePermissionServer(m.app.Context(), claudePermissionSocket(), verifyClaudePermissionPeer)
+	if err != nil {
+		log.Printf("Claude permission bridge unavailable: %v", err)
+	} else {
+		m.claudePermissions = server
+		permissionChanges = server.changed
+	}
+
+	m.updateClaudePermissionSettings("status")
+
 	// Install the existing power observer before the wake bridge. Native
 	// callbacks only wake this queue; none wait on it from the AppKit thread.
 	m.applySiteWindowsVisibility()
@@ -133,6 +149,24 @@ func (m *siteManager) run() {
 		case fn := <-m.commands:
 			if m.app.Context().Err() == nil {
 				fn()
+			}
+		case <-permissionChanges:
+			if m.claudePermissions != nil && len(m.claudePermissions.list()) > 0 {
+				m.developmentApps.dirty = true
+			}
+			if !m.config.showIDEStatus() {
+				m.claudePermissions.releaseAll()
+			}
+			m.publishSnapshot(false)
+		case choice := <-claudePermissionChoices:
+			if m.claudePromptSettingsRequested(choice) {
+				m.settingsPage = "editors"
+				m.openSettings()
+			} else if req, navigate := m.consumeClaudePermissionChoice(choice); navigate {
+				site := m.runtime[req.SiteID]
+				if site != nil && site.Ready && site.Window != nil {
+					m.activateDevelopmentAppForSite(req, "claude-permission", site)
+				}
 			}
 		case action := <-stripControlEvents:
 			m.handleStripControl(action)
@@ -227,11 +261,13 @@ func (m *siteManager) snapshot() appSnapshot {
 	if m.configError != nil {
 		result.Error = "Cannot read saved Sites. Configuration has not been overwritten: " + m.configError.Error()
 	}
+	permissionViews := m.permissionViews()
+	publishClaudePermissionViews(permissionViews)
 	for _, site := range orderedSites(m.config) {
 		r := items[site.ID]
 		prefix, name := displayPath(site.Path)
 		apps := m.developmentApps.readings[site.ID]
-		view := SiteView{NeedsPlacement: m.needsSitePlacement(site.ID), Enabled: siteEnabled(m.config, site.ID), FolderMissing: m.folders.missing[site.ID], Site: site, Prefix: prefix, Name: name, Window: states[site.ID], Position: positions[site.ID], Git: r.Git, DevelopmentApps: apps.Apps, DevelopmentAppsKnown: apps.Known}
+		view := SiteView{NeedsPlacement: m.needsSitePlacement(site.ID), Enabled: siteEnabled(m.config, site.ID), FolderMissing: m.folders.missing[site.ID], Site: site, Prefix: prefix, Name: name, Window: states[site.ID], Position: positions[site.ID], Git: r.Git, DevelopmentApps: withClaudePermissions(apps.Apps, site.ID, permissionViews), DevelopmentAppsKnown: apps.Known}
 		result.Catalog = append(result.Catalog, view)
 		if view.Enabled {
 			result.Sites = append(result.Sites, view)
@@ -450,6 +486,7 @@ func (m *siteManager) browse(after string) {
 	}()
 }
 func (m *siteManager) registerEvents() {
+	m.registerClaudePermissionSettings()
 	m.registerShortcutEvents()
 	m.registerFolderEvents()
 	m.registerProfileEvents()
@@ -493,6 +530,9 @@ func (m *siteManager) registerEvents() {
 				return
 			}
 			m.developmentApps.setEnabled(value)
+			if !value {
+				m.claudePermissions.releaseAll()
+			}
 			m.siteError("")
 			m.broadcast()
 		})

@@ -186,3 +186,29 @@ char *devjay_refresh_agent_processes(const char *knownJSON) {
         return agent_process_json(results);
     }
 }
+
+// Only our own short-lived hook executable may introduce a permission request.
+// Verify the peer identity before and after walking to its nearest live Claude
+// ancestor. This is metadata inspection, not UI/key-event injection.
+char *devjay_claude_hook_process(int peer) {
+    @autoreleasepool {
+        uid_t user = getuid();
+        NSDictionary *table = agent_process_table();
+        NSDictionary *record = table[@(peer)];
+        if (!record || ![agent_process_path(peer) isEqual:agent_process_path(getpid())] ||
+            !agent_process_unchanged(peer, record, user)) return NULL;
+        NSString *home = NSHomeDirectory().stringByResolvingSymlinksInPath;
+        for (NSNumber *ancestor in agent_process_ancestors(@(peer), table, user)) {
+            NSDictionary *process = agent_process_observation(ancestor, table, home, user);
+            if (![process[@"name"] isEqual:@"Claude Code"]) continue;
+            if (!agent_process_unchanged(peer, record, user)) return NULL;
+            NSMutableDictionary *peerInfo = [NSMutableDictionary dictionaryWithDictionary:process];
+            // Keep the helper's original start across app reconnects. A later
+            // idle transition proves that this old invocation has ended.
+            peerInfo[@"hookStarted"] = record[@"started"];
+            NSData *data = [NSJSONSerialization dataWithJSONObject:peerInfo options:0 error:nil];
+            return data ? strndup(data.bytes, data.length) : NULL;
+        }
+        return NULL;
+    }
+}

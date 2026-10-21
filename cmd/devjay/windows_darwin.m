@@ -5,6 +5,14 @@
 #import "focus_trace_darwin.h"
 #include "layout_geometry.h"
 
+// Optional interactive permission panel, installed after app startup. Keeping
+// these hooks nullable preserves the standalone native tooltip harnesses.
+static BOOL (*devjay_permission_hover)(NSWindow *,NSRect,NSString *,NSString *);
+static void (*devjay_permission_close)(NSWindow *);
+void devjay_set_permission_hover(BOOL (*show)(NSWindow *,NSRect,NSString *,NSString *),void (*close)(NSWindow *)) {
+    devjay_permission_hover=show;devjay_permission_close=close;
+}
+
 // A tooltip must never become the app's remembered key/main window. In
 // particular, hovering on an empty Space must not recreate the desktop bounce.
 @interface DevJayAppTooltipPanel : NSPanel
@@ -53,6 +61,7 @@ static NSRect devjay_tooltip_frame(NSRect anchor, NSSize size, NSRect visible) {
     BOOL pending;
     DevJayAppTooltipPanel *tooltip;
     NSString *tooltipText;
+    NSString *tooltipSite, *tooltipBundle;
     NSRect tooltipRect;
     NSUInteger tooltipGeneration;
     BOOL tooltipReady;
@@ -73,16 +82,20 @@ static NSRect devjay_tooltip_frame(NSRect anchor, NSSize size, NSRect visible) {
     [tooltip orderOut:nil];
     [tooltip release];
     [tooltipText release];
+    [tooltipSite release]; [tooltipBundle release];
+    if (devjay_permission_close) devjay_permission_close(view.window);
     [super dealloc];
 }
 - (void)hideTooltip {
     tooltipGeneration++;
     tooltipReady = NO;
     [tooltipText release]; tooltipText = nil;
+    [tooltipSite release]; tooltipSite=nil; [tooltipBundle release]; tooltipBundle=nil;
     tooltipRect = NSZeroRect;
     if (tooltip.visible) [tooltip orderOut:nil];
 }
 - (void)invalidate:(NSNotification *)notification {
+    if (devjay_permission_close && ![notification.name isEqual:NSWindowDidChangeOcclusionStateNotification]) devjay_permission_close(view.window);
     revision++;
     position = NSMakePoint(-1, -1);
     [self hideTooltip];
@@ -98,11 +111,15 @@ static NSRect devjay_tooltip_frame(NSRect anchor, NSSize size, NSRect visible) {
     NSRect rect;
     if (![self eligible] || !devjay_tooltip_payload(payload, &text, &rect)) {
         [self hideTooltip];
+        if (devjay_permission_hover) devjay_permission_hover(view.window,NSZeroRect,nil,nil);
         return;
     }
-    if (![text isEqual:tooltipText] || !NSEqualRects(rect, tooltipRect)) {
+    NSString *site=[payload[@"site"] isKindOfClass:NSString.class]?payload[@"site"]:@"";
+    NSString *bundle=[payload[@"bundle"] isKindOfClass:NSString.class]?payload[@"bundle"]:@"";
+    if (![site isEqual:tooltipSite] || ![bundle isEqual:tooltipBundle] || ![text isEqual:tooltipText] || !NSEqualRects(rect, tooltipRect)) {
         [self hideTooltip];
         tooltipText = [text copy];
+        tooltipSite=[site copy]; tooltipBundle=[bundle copy];
         tooltipRect = rect;
         NSUInteger generation = tooltipGeneration;
         // Retain the WebView in the delayed block, so its associated tracker
@@ -136,6 +153,9 @@ static NSRect devjay_tooltip_frame(NSRect anchor, NSSize size, NSRect visible) {
     }
     if (!screen || screen.visibleFrame.size.width < 64 || screen.visibleFrame.size.height < 64) {
         [self hideTooltip]; return;
+    }
+    if (devjay_permission_hover && devjay_permission_hover(window,anchor,tooltipSite,tooltipBundle)) {
+        [tooltip orderOut:nil]; return;
     }
     // The text and anchor are unchanged while this panel is visible. Avoid
     // rebuilding its content on every mouse-move callback within one icon.
@@ -190,7 +210,7 @@ static NSRect devjay_tooltip_frame(NSRect anchor, NSSize size, NSRect visible) {
     NSString *script = [NSString stringWithFormat:
         @"(()=>{const x=%.17g,y=%.17g;window.dispatchEvent(new CustomEvent('devjay:native-hover',{detail:{x,y}}));"
         "const n=document.elementFromPoint(x*innerWidth,y*innerHeight)?.closest('[data-app-tooltip]');"
-        "if(!n)return null;const r=n.getBoundingClientRect();return {text:n.dataset.appTooltip,"
+        "if(!n)return null;const r=n.getBoundingClientRect();return {text:n.dataset.appTooltip,site:n.dataset.claudeSite,bundle:n.dataset.appBundle,"
         "x:r.x/innerWidth,y:r.y/innerHeight,width:r.width/innerWidth,height:r.height/innerHeight};})()",
         position.x, position.y];
     // Keep the view alive until delivery finishes, including during closing.
