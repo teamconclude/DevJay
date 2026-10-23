@@ -9,17 +9,6 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
-func (m *siteManager) actionBusy() bool { return m.action != nil && m.action.Status == "running" }
-
-func (m *siteManager) cancelCheckoutAction() {
-	if m.actionCancel != nil {
-		m.actionCancel()
-		m.actionCancel = nil
-	}
-	m.actionGeneration++
-	m.action = nil
-}
-
 func (m *siteManager) actionReply(requestID, message string) {
 	m.app.Event.Emit("devjay:request-result", struct {
 		RequestID string `json:"requestID"`
@@ -30,7 +19,7 @@ func (m *siteManager) actionReply(requestID, message string) {
 // Site buttons may prepare only their own currently available rebased push.
 // All other actions retain their existing viewer/confirmation authorization.
 func (m *siteManager) sitePublishSource(req ActionRequest, sender string) *application.WebviewWindow {
-	if sender != "site-"+req.SiteID || req.Kind != "publish" || m.actionBusy() || (m.action != nil && m.action.Status == "preparing") {
+	if sender != "site-"+req.SiteID || req.Kind != "publish" || m.siteActionBusy(req.SiteID) {
 		return nil
 	}
 	parent, site := m.cardMenuSource(cardMenuRequest{SiteID: req.SiteID}, sender)
@@ -47,8 +36,8 @@ func (m *siteManager) sitePublishSource(req ActionRequest, sender string) *appli
 // Caller authorizes the originating window and action before entering this
 // shared manager-queue path. It only prepares a plan; confirmation is separate.
 func (m *siteManager) prepareAction(req ActionRequest, r *siteRuntime, parent *application.WebviewWindow) {
-	if r == nil || m.runtime[req.SiteID] != r || !r.Ready || m.actionBusy() {
-		m.actionReply(req.RequestID, "The Site is not ready or another action is running. Refresh and try again.")
+	if r == nil || m.runtime[req.SiteID] != r || !r.Ready || m.siteActionBusy(req.SiteID) {
+		m.actionReply(req.RequestID, "The Site is not ready or an action is already running for this Site. Refresh and try again.")
 		return
 	}
 	title := map[string]string{"switch": "Confirm branch switch", "replace": "Confirm branch replacement", "push": "Confirm push", "publish": "Confirm rebased push", "update": "Confirm branch update", "rebase": "Confirm rebase", "rebase-push": "Rebase and push", "merged": "Confirm return to default branch"}[req.Kind]
@@ -56,33 +45,33 @@ func (m *siteManager) prepareAction(req ActionRequest, r *siteRuntime, parent *a
 		m.actionReply(req.RequestID, "Unknown action.")
 		return
 	}
+	d := m.ensureActionDialog(req.SiteID)
 	// Re-preparing within a dialog keeps its original parent/control anchor.
 	if req.Anchor != nil && req.Anchor.valid() {
-		m.suggestionsAnchor = req.Anchor
-	} else if m.suggestedSite != req.SiteID || m.suggestionsParent != parent || m.action == nil || m.action.Kind != req.Kind {
-		m.suggestionsAnchor = nil
+		d.anchor = req.Anchor
+	} else if d.siteID != req.SiteID || d.parent != parent || d.action == nil || d.action.Kind != req.Kind {
+		d.anchor = nil
 	}
-	m.suggestedSite = req.SiteID
-	m.suggestionsParent = parent
+	d.parent = parent
 	m.actionReply(req.RequestID, "")
 	if req.Kind != "switch" {
-		m.suggestions.SetMinSize(400, 340)
+		d.window.SetMinSize(400, 340)
 		height := 470
 		if isPublishAction(req.Kind) {
-			m.suggestions.SetMinSize(400, 300)
+			d.window.SetMinSize(400, 300)
 			height = 330
 		}
-		m.suggestions.SetSize(460, height)
+		d.window.SetSize(460, height)
 	}
-	m.suggestions.SetTitle(title)
-	m.cancelCheckoutAction()
+	d.window.SetTitle(title)
+	d.cancelPreparation()
 	ctx, cancel := context.WithTimeout(m.app.Context(), 2*time.Minute)
-	m.actionCancel = cancel
-	generation := m.actionGeneration
+	d.cancel = cancel
+	generation := d.generation
 	merged := r.Git.MergedPR
-	m.action = &CheckoutAction{SiteID: req.SiteID, Kind: req.Kind, Status: "preparing", Message: "Checking the checkout and fetching the remote…"}
-	if m.suggestionsReady {
-		showSuggestionsWindow(m.suggestions, m.suggestionsParent, m.suggestionsAnchor)
+	d.action = &CheckoutAction{SiteID: req.SiteID, Kind: req.Kind, Status: "preparing", Message: "Checking the checkout and fetching the remote…"}
+	if d.ready {
+		showSuggestionsWindow(d.window, d.parent, d.anchor)
 	}
 	m.broadcast()
 	go func() {
@@ -106,11 +95,11 @@ func (m *siteManager) prepareAction(req ActionRequest, r *siteRuntime, parent *a
 			}
 		}
 		m.send(func() {
-			if generation != m.actionGeneration || m.suggestedSite != req.SiteID || m.runtime[req.SiteID] != r {
+			if !m.currentActionDialog(d, generation, r) {
 				return
 			}
-			m.actionCancel = nil
-			m.action = result
+			d.cancel = nil
+			d.action = result
 			m.broadcast()
 		})
 	}()
@@ -126,20 +115,23 @@ func (m *siteManager) registerCheckoutActions() {
 		}
 		m.send(func() {
 			r := m.runtime[req.SiteID]
-			if r == nil || !r.Ready || m.actionBusy() {
-				m.actionReply(req.RequestID, "The Site is not ready or another action is running. Refresh and try again.")
+			if r == nil || !r.Ready || m.siteActionBusy(req.SiteID) {
+				m.actionReply(req.RequestID, "The Site is not ready or an action is already running for this Site. Refresh and try again.")
 				return
 			}
-			if req.Kind == "switch" && !branchSwitchPreparationAllowed(sender, req.SiteID, m.suggestedSite, m.action) {
+			d := m.actionDialogs[sender]
+			if req.Kind == "switch" && !branchSwitchPreparationAllowed(d, req.SiteID) {
 				m.actionReply(req.RequestID, "Choose a branch from this Site's branch picker before continuing.")
 				return
 			}
-			parent := m.suggestionsParent
-			if sender == "suggested-actions" {
-				if req.SiteID != m.suggestedSite {
-					m.actionReply(req.RequestID, "The selected Site changed. Open the action again.")
+			var parent *application.WebviewWindow
+			if d != nil {
+				if req.SiteID != d.siteID || d.action == nil || d.action.Kind != req.Kind ||
+					(d.action.Status != "ready" && d.action.Status != "choosing") {
+					m.actionReply(req.RequestID, "The selected action changed. Open the action again.")
 					return
 				}
+				parent = d.parent
 			} else if sender == "site-"+req.SiteID {
 				parent = m.sitePublishSource(req, sender)
 				if parent == nil {
@@ -152,17 +144,14 @@ func (m *siteManager) registerCheckoutActions() {
 					m.actionReply(req.RequestID, "This action is no longer available. Refresh the Changes window.")
 					return
 				}
-				// Bind the selected action to this viewer’s Site. Preparation
-				// validates the requested branch and commit against live Git.
+				// Preparation validates the requested branch and commit against live Git.
 				parent = viewer.window
 			}
 			m.prepareAction(req, r, parent)
 		})
 	})
 	m.app.Event.On("devjay:action-confirm", func(e *application.CustomEvent) {
-		if e.Sender != "suggested-actions" {
-			return
-		}
+		sender := e.Sender
 		var req struct {
 			Token     string `json:"token"`
 			RequestID string `json:"requestID"`
@@ -172,13 +161,14 @@ func (m *siteManager) registerCheckoutActions() {
 			return
 		}
 		m.send(func() {
-			if m.action == nil || m.action.Status != "ready" || m.action.Plan == nil || req.Token != m.action.Plan.ID {
+			d := m.readyActionDialog(sender, req.Token)
+			if d == nil {
 				m.actionReply(req.RequestID, "The confirmation is no longer ready. Review the current action.")
 				return
 			}
-			id, plan := m.action.SiteID, m.action.Plan
+			id, plan := d.action.SiteID, d.action.Plan
 			r := m.runtime[id]
-			if r == nil || id != m.suggestedSite {
+			if r == nil || id != d.siteID {
 				m.actionReply(req.RequestID, "The Site changed. Open the action again.")
 				return
 			}
@@ -188,7 +178,8 @@ func (m *siteManager) registerCheckoutActions() {
 				return
 			}
 			m.actionReply(req.RequestID, "")
-			m.action = &CheckoutAction{SiteID: id, Kind: plan.Kind, Status: "running", Message: "Applying the confirmed action. Please wait…"}
+			generation := d.generation
+			d.action = &CheckoutAction{ID: plan.ID, SiteID: id, Kind: plan.Kind, Status: "running", Message: "Applying the confirmed action. Please wait…"}
 			m.broadcast()
 			go func() {
 				defer m.lifecycle.finish()
@@ -198,8 +189,12 @@ func (m *siteManager) registerCheckoutActions() {
 					result = applyCheckoutAction(context.Background(), plan)
 				}
 				result.SiteID = id
+				result.ID = plan.ID
 				m.send(func() {
-					m.action = &result
+					if !m.currentActionDialog(d, generation, r) {
+						return
+					}
+					d.action = &result
 					if current := m.runtime[id]; current == r && current.GitControl != nil {
 						current.GitControl.refresh()
 					}

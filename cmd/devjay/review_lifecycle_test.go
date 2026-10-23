@@ -71,7 +71,7 @@ func TestEditorCatalogCachesAndIsolatesViewerState(t *testing.T) {
 func TestViewerReuseAndClosedParentFallback(t *testing.T) {
 	viewer := &gitViewerWindow{window: &application.WebviewWindow{}, state: &GitView{SiteID: "site", Kind: "edits"}}
 	parent := &application.WebviewWindow{}
-	m := &siteManager{viewers: map[string]*gitViewerWindow{"viewer": viewer}, suggestionsParent: viewer.window, runtime: map[string]*siteRuntime{"site": {Ready: true, Window: parent}}}
+	m := &siteManager{viewers: map[string]*gitViewerWindow{"viewer": viewer}, actionDialogs: map[string]*actionDialog{"dialog": {siteID: "site", parent: viewer.window}}, runtime: map[string]*siteRuntime{"site": {Ready: true, Window: parent}}}
 	if m.existingViewer(viewerRequest{SiteID: "site", Kind: "edits"}) != viewer {
 		t.Fatal("duplicate viewer")
 	}
@@ -80,7 +80,7 @@ func TestViewerReuseAndClosedParentFallback(t *testing.T) {
 	}
 	// Forgetting a closed viewer also removes it from future reuse.
 	m.forgetViewer("viewer")
-	if m.suggestionsParent != parent {
+	if m.actionDialogs["dialog"].parent != parent {
 		t.Fatal("closed popup parent was retained")
 	}
 	if m.existingViewer(viewerRequest{SiteID: "site", Kind: "edits"}) != nil {

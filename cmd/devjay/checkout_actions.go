@@ -56,6 +56,7 @@ type CheckoutPlan struct {
 }
 
 type CheckoutAction struct {
+	ID             string         `json:"id,omitempty"`
 	Kind           string         `json:"kind,omitempty"`
 	CurrentBranch  string         `json:"currentBranch,omitempty"`
 	CurrentHead    string         `json:"currentHead,omitempty"`

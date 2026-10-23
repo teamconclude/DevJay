@@ -5,18 +5,19 @@ import vm from 'node:vm';
 import {cardStatus} from '../cmd/devjay/frontend/card-status.js';
 import {cardMenuTarget,cardBounds} from '../cmd/devjay/frontend/card-menu.js';
 import {installCardActivation} from '../cmd/devjay/frontend/card-interaction.js';
-import {prCheckIndicator,prTagTone} from '../cmd/devjay/frontend/pr-status.js';
+import {prCheckIndicator,prTagTone,prDescription} from '../cmd/devjay/frontend/pr-status.js';
 import {nextNotice} from '../cmd/devjay/frontend/notice.js';
 import {rebasedPublishWarning} from '../cmd/devjay/frontend/suggested-actions.js';
 const navigationSource=(await readFile(new URL('../cmd/devjay/frontend/settings-navigation.js',import.meta.url),'utf8')).replace(/export /g,'');
 const profilesSource=(await readFile(new URL('../cmd/devjay/frontend/profile-settings.js',import.meta.url),'utf8')).replace(/export /g,'');
 const shortcutsSource=(await readFile(new URL('../cmd/devjay/frontend/shortcut-settings.js',import.meta.url),'utf8')).replace(/export /g,'');
 const permissionsSource=(await readFile(new URL('../cmd/devjay/frontend/claude-permission-settings.js',import.meta.url),'utf8')).replace(/export /g,'');
-const source=permissionsSource+'\n'+shortcutsSource+'\n'+navigationSource+'\n'+profilesSource+'\n'+(await readFile(new URL('../cmd/devjay/frontend/app.js',import.meta.url),'utf8')).replace(/^import .*;\n/gm,'');
+const actionsSource=(await readFile(new URL('../cmd/devjay/frontend/suggested-actions.js',import.meta.url),'utf8')).replace(/^import .*;\n/gm,'').replace(/export /g,'');
+const source=actionsSource+'\n'+permissionsSource+'\n'+shortcutsSource+'\n'+navigationSource+'\n'+profilesSource+'\n'+(await readFile(new URL('../cmd/devjay/frontend/app.js',import.meta.url),'utf8')).replace(/^import .*;\n/gm,'');
 
 // Exercise the real snapshot renderer with a small DOM and the Wails boundary.
 function app(search='', actionResult=true) {
- let document, clock=0, readyCount=0;
+ let document, clock=0, readyCount=0; const documentListeners={};
  class Element {
   constructor(tag){this.tag=tag;this.children=[];this.dataset={};this.style={};this.className='';this.attrs={};this.textContent='';this.listeners={};
    this.classList={add:c=>{this.className+=' '+c;},contains:c=>this.className.split(' ').includes(c),toggle:(c,on)=>{const all=new Set(this.className.split(' '));on?all.add(c):all.delete(c);this.className=[...all].join(' ');}};
@@ -41,22 +42,22 @@ function app(search='', actionResult=true) {
   get firstElementChild(){return this.children[0];}
  }
  const root=new Element('main'),body=new Element('body');
- document={body,activeElement:body,createElement:tag=>new Element(tag),createElementNS:(_namespace,tag)=>new Element(tag),createTextNode:text=>{const n=new Element('text');n.textContent=text;return n;},querySelector:s=>s==='#app'?root:body.querySelector(s),querySelectorAll:s=>body.querySelectorAll(s),addEventListener(){}};
+ document={body,activeElement:body,createElement:tag=>new Element(tag),createElementNS:(_namespace,tag)=>new Element(tag),createTextNode:text=>{const n=new Element('text');n.textContent=text;return n;},querySelector:s=>s==='#app'?root:body.querySelector(s),querySelectorAll:s=>body.querySelectorAll(s),addEventListener(name,fn){(documentListeners[name] ||= []).push(fn);},removeEventListener(name,fn){documentListeners[name]=(documentListeners[name] || []).filter(listener=>listener!==fn);}};
  body.append(root);
  const events={},calls=[];
  let drag, bridgeReport;
  const noop=()=>{};
- const context={prCheckIndicator,prTagTone,document,location:{search},URLSearchParams,setTimeout,clearTimeout,nextNotice,performance:{now:()=>clock},
+ const context={prCheckIndicator,prTagTone,prDescription,document,Date,location:{search},URLSearchParams,setTimeout,clearTimeout,nextNotice,performance:{now:()=>clock},
   window:{addEventListener:noop,getSelection:()=>({isCollapsed:true})},
   Events:{On:(name,fn)=>events[name]=fn,Emit:(...args)=>{calls.push(args);return Promise.resolve();}},Window:{},
   createBridge:(send,report)=>{bridgeReport=report;return {emit:async(n,d)=>{await send(`devjay:${n}`,d);report(actionResult===false?'Delivery failed':'',actionResult===false);return actionResult;},reply:noop};},
   uiReady:()=>()=>readyCount++,installCardSizing:()=>noop,installPathLabels:()=>noop,mountEditorSettings:()=>({renderEditor:noop}),
   mountGitViewer:()=>noop,cardStatus,rebasedPublishWarning,cardBounds,
-  mountSuggestedActions:()=>noop,mountViewerSuggestions:()=>noop,
+  mountViewerSuggestions:()=>noop,
   installStripDrag:(_list,options)=>{drag=options;},installCardActivation,installDragOriginGuard:noop,installCardHover:noop,installCardMenu:noop,
  };
  vm.runInNewContext(source,context);
- return {document,root,calls,get readyCount(){return readyCount;},advance:ms=>{clock+=ms;},reportBridge:(text,error)=>bridgeReport(text,error),event:(name,data)=>events[name]?.({data}),get drag(){return drag;},snapshot:s=>events['devjay:snapshot']({data:s}),click:target=>{
+ return {document,root,calls,key(key){for(const fn of documentListeners.keydown || [])fn({key,preventDefault(){}});},get readyCount(){return readyCount;},advance:ms=>{clock+=ms;},reportBridge:(text,error)=>bridgeReport(text,error),event:(name,data)=>events[name]?.({data}),get drag(){return drag;},snapshot:s=>events['devjay:snapshot']({data:s}),click:target=>{
   const event={button:0,defaultPrevented:false,target};
   for(let node=target;node;node=node.parent)for(const listener of node.listeners.click || [])listener(event);
  }};
@@ -1305,4 +1306,16 @@ test('only Claude waiting icons carry a permission popup identity',()=>{
  view.snapshot(state([s]));let group=view.root.querySelector('.development-app-group');assert.equal(group.dataset.claudeSite,'a');
  s.developmentApps[0].agents=['Codex'];s.developmentApps[0].waitingAgents=['Codex'];s.developmentApps[0].claudePermissions=0;
  view.snapshot(state([s]));group=view.root.querySelector('.development-app-group');assert.equal(group.dataset.claudeSite,undefined);
+});
+
+
+test('action window Escape stops the completion countdown and pending Escape sends its own generation',async()=>{
+ const view=app('?actions');
+ view.snapshot({...state([site('a')]),suggestedSite:'a',actionGeneration:4,action:{id:'done',siteID:'a',kind:'update',status:'complete',message:'Updated'}});
+ view.key('Escape');
+ assert.equal(view.root.querySelector('.action-countdown').textContent,'Auto closing stopped.');
+ assert.equal(view.calls.some(([name])=>name==='devjay:suggestions-close'),false);
+ view.snapshot({...state([site('a')]),suggestedSite:'a',actionGeneration:5,action:{siteID:'a',kind:'update',status:'preparing',message:'Checking'}});
+ view.key('Escape');await Promise.resolve();
+ assert.equal(view.calls.find(([name])=>name==='devjay:suggestions-close')[1].generation,5);
 });

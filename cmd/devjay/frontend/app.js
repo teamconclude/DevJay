@@ -361,8 +361,11 @@ if (viewer) {
   document.addEventListener('keydown', e => { if (e.key === 'Escape') emit('viewer-close'); });
 } else if (actions) {
   document.body.className = 'suggestions';
-  renderSuggestedActions = mountSuggestedActions(root, () => emit('suggestions-close'), (name, data) => emit(name, data));
-  document.addEventListener('keydown', e => { if (e.key === 'Escape') emit('suggestions-close'); });
+  renderSuggestedActions = mountSuggestedActions(root, data => emit('suggestions-close', data), (name, data) => emit(name, data));
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') { e.preventDefault(); renderSuggestedActions.escape(); }
+  });
+  window.addEventListener('pagehide', () => renderSuggestedActions.dispose());
 } else if (settings) {
   document.body.className = 'settings';
   settingsNavigation = mountSettingsNavigation(root);

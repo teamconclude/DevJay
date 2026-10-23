@@ -119,9 +119,7 @@ func (m *siteManager) updateSiteFolder(site Site) {
 			m.closeViewer(id)
 		}
 	}
-	if m.suggestedSite == site.ID {
-		m.closeSuggestions()
-	}
+	m.closeSiteAction(site.ID)
 	// Replace the runtime identity to reject workers still using the old path.
 	r := &siteRuntime{Site: site, Window: old.Window, Ready: old.Ready, Git: GitStatus{Summary: "Checking repository…", Tone: "muted"}}
 	m.mu.Lock()

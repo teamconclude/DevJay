@@ -375,3 +375,71 @@ test('combined rebase and push has one compact verified confirmation and manual-
  assert.equal(classNode(root,'action-details').tag,'details');
  assert.equal(classNode(root,'action-details').open,undefined);
 }));
+
+test('completed dialogs count down independently and close exactly once after five seconds',t=>withDocument(()=>{
+ t.mock.timers.enable({apis:['setTimeout','Date'],now:1000});
+ const first=new Element('root'),second=new Element('root'),closed=[];
+ const renderA=mountSuggestedActions(first,data=>closed.push(['a',data]),()=>{});
+ const renderB=mountSuggestedActions(second,data=>closed.push(['b',data]),()=>{});
+ const complete=(id,generation)=>({...branchState(),actionGeneration:generation,action:{id,siteID:'site',kind:'update',status:'complete',message:'Updated'}});
+ renderA(complete('a',1));
+ assert.equal(classNode(first,'action-auto-close').checked,true);
+ assert.equal(classNode(first,'suggestion-footer').children.includes(classNode(first,'action-countdown')),true);
+ assert.equal(classNode(first,'action-countdown-text').textContent,'Auto closing in 5 seconds.');
+ t.mock.timers.tick(2000);
+ assert.equal(classNode(first,'action-countdown-text').textContent,'Auto closing in 3 seconds.');
+ renderB(complete('b',2));
+ renderA({...complete('a',1),sites:[{...branchState().sites[0],git:{branch:'develop',changes:1}}]});
+ t.mock.timers.tick(2999);assert.deepEqual(closed,[]);
+ t.mock.timers.tick(1);assert.deepEqual(closed,[['a',{generation:1}]]);
+ t.mock.timers.tick(2000);assert.deepEqual(closed,[['a',{generation:1}],['b',{generation:2}]]);
+ t.mock.timers.tick(10000);assert.equal(closed.length,2);
+}));
+
+test('Escape stops only its completed dialog countdown and snapshots do not restart it',t=>withDocument(()=>{
+ t.mock.timers.enable({apis:['setTimeout','Date'],now:1000});
+ const root=new Element('root'),other=new Element('root'),closed=[];
+ const render=mountSuggestedActions(root,()=>closed.push('stopped'),()=>{});
+ const renderOther=mountSuggestedActions(other,()=>closed.push('other'),()=>{});
+ const state={...branchState(),action:{id:'one',siteID:'site',kind:'update',status:'complete'}};
+ render(state);renderOther(state);t.mock.timers.tick(4000);render.escape();
+ assert.equal(classNode(root,'action-countdown-text').textContent,'Auto closing stopped.');
+ assert.equal(classNode(root,'action-auto-close').checked,false);
+ render({...state,sites:[{...state.sites[0],git:{branch:'develop',changes:2}}]});
+ render.escape();t.mock.timers.tick(20000);assert.deepEqual(closed,['other']);
+ const checkbox=classNode(root,'action-auto-close');checkbox.checked=true;checkbox.onchange();
+ assert.equal(classNode(root,'action-countdown-text').textContent,'Auto closing in 5 seconds.');
+ t.mock.timers.tick(4000);assert.deepEqual(closed,['other']);
+ checkbox.checked=false;checkbox.onchange();
+ assert.equal(classNode(root,'action-countdown-text').textContent,'Auto closing stopped.');
+ t.mock.timers.tick(10000);assert.deepEqual(closed,['other']);
+ checkbox.checked=true;checkbox.onchange();t.mock.timers.tick(4999);assert.deepEqual(closed,['other']);
+ t.mock.timers.tick(1);assert.deepEqual(closed,['other','stopped']);
+}));
+
+test('new operations replace old countdowns; failures and running actions never auto-close',t=>withDocument(()=>{
+ t.mock.timers.enable({apis:['setTimeout','Date'],now:1000});
+ const root=new Element('root'),closed=[],render=mountSuggestedActions(root,()=>closed.push('close'),()=>{});
+ const state=branchState(),result=status=>({...state,action:{id:'one',siteID:'site',kind:'update',status,plan:status==='ready'?{...switchPlan(),kind:'update'}:undefined}});
+ render(result('complete'));t.mock.timers.tick(3000);
+ for(const status of ['preparing','ready','running','failed']) {
+  render(result(status));if(status==='running')render.escape();
+  assert.equal(classNode(root,'action-countdown').hidden,true);
+  t.mock.timers.tick(10000);assert.deepEqual(closed,[]);
+ }
+ render(result('complete'));render.escape();
+ render({...result('complete'),action:{...result('complete').action,id:'two'}});
+ t.mock.timers.tick(4999);assert.deepEqual(closed,[]);
+ t.mock.timers.tick(1);assert.deepEqual(closed,['close']);
+}));
+
+test('manual dismissal and document disposal clear timers; Escape still cancels pending confirmation',t=>withDocument(()=>{
+ t.mock.timers.enable({apis:['setTimeout','Date'],now:1000});
+ const root=new Element('root'),closed=[],render=mountSuggestedActions(root,()=>closed.push('close'),()=>{});
+ const complete={...branchState(),action:{id:'one',siteID:'site',kind:'update',status:'complete'}};
+ render(complete);nodes(root).find(n=>n.textContent==='Done').onclick();
+ t.mock.timers.tick(10000);assert.deepEqual(closed,['close']);
+ render({...complete,action:{...complete.action,id:'two'}});render.dispose();
+ t.mock.timers.tick(10000);assert.deepEqual(closed,['close']);
+ render(branchState());render.escape();assert.deepEqual(closed,['close','close']);
+}));

@@ -123,8 +123,8 @@ func (m *siteManager) registerCardMenuEvents() {
 			}
 			req = m.resolveCardMenuRequest(req, site.Git)
 			option := makeCardGitOption(req, site.Git)
-			if option != nil && (m.actionBusy() || (m.action != nil && m.action.Status == "preparing")) {
-				option.DisabledReason = "Another Git action is running. Wait for it to finish."
+			if option != nil && m.siteActionBusy(req.SiteID) {
+				option.DisabledReason = "A Git action is already running for this Site. Wait for it to finish."
 			}
 			if req.BundleID != "" {
 				app, ok := m.requestedDevelopmentApp(req.SiteID, req.BundleID)
@@ -155,7 +155,7 @@ func (m *siteManager) registerCardMenuEvents() {
 						return
 					}
 					if selected == cardMenuGitAction {
-						if m.actionBusy() || (m.action != nil && m.action.Status == "preparing") {
+						if m.siteActionBusy(req.SiteID) {
 							return
 						}
 						if action, ok := option.request(req.SiteID, site.Git); ok {

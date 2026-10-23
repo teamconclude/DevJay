@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -348,5 +349,68 @@ func TestRebaseStopsForIgnoredCollisionAndNewUpstream(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// Both commands must reach the remote verification barrier while holding their
+// own repository action locks. A global serialization would fail this test.
+func TestIndependentRepositoryActionsRunConcurrently(t *testing.T) {
+	repoA, _ := updateFixture(t)
+	repoB, _ := updateFixture(t)
+	planA, planB := prepareForTest(t, repoA, "update"), prepareForTest(t, repoB, "update")
+	t.Setenv("DEVJAY_TEST_PARALLEL_BARRIER", t.TempDir())
+	t.Setenv("DEVJAY_TEST_PARALLEL_REPO_A", repoA)
+	installGitShim(t, `for arg in "$@"; do if test "$arg" = ls-remote; then
+ if test "$2" = "$DEVJAY_TEST_PARALLEL_REPO_A"; then own=a; other=b; else own=b; other=a; fi
+ touch "$DEVJAY_TEST_PARALLEL_BARRIER/$own"
+ attempts=0
+ while ! test -f "$DEVJAY_TEST_PARALLEL_BARRIER/$other"; do
+  attempts=$((attempts+1)); test "$attempts" -lt 500 || exit 79
+  sleep .01
+ done
+ break
+ fi; done`)
+	results := make(chan CheckoutAction, 2)
+	for _, plan := range []*CheckoutPlan{planA, planB} {
+		go func() { results <- applyCheckoutAction(context.Background(), plan) }()
+	}
+	for range 2 {
+		result := <-results
+		if result.Status != "complete" {
+			t.Fatalf("parallel update failed: %+v", result)
+		}
+	}
+	for _, plan := range []*CheckoutPlan{planA, planB} {
+		if fixtureGit(t, plan.path, "rev-parse", "HEAD") != plan.TargetHead || fixtureGit(t, plan.path, "status", "--porcelain") != "" {
+			t.Fatal("parallel update did not preserve a clean, expected checkout")
+		}
+		if fixtureGit(t, plan.path, "rev-parse", "refs/devjay/backups/"+plan.ID) != plan.Head {
+			t.Fatal("missing recovery tip")
+		}
+	}
+}
+
+func TestLinkedWorktreeActionRefusesHeldRepositoryLock(t *testing.T) {
+	repo, _ := updateFixture(t)
+	linked := filepath.Join(t.TempDir(), "linked")
+	fixtureGit(t, repo, "worktree", "add", "-b", "linked", linked, "develop")
+	fixtureGit(t, linked, "branch", "--set-upstream-to=origin/develop")
+	plan := prepareForTest(t, linked, "update")
+	common := fixtureGit(t, repo, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	lock, err := os.OpenFile(filepath.Join(common, "devjay-action.lock"), os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		t.Fatal(err)
+	}
+	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+	result := applyCheckoutAction(context.Background(), plan)
+	if result.Status != "failed" || !strings.Contains(result.Message, "Another DevJay action") {
+		t.Fatalf("shared repository lock ignored: %+v", result)
+	}
+	if fixtureGit(t, linked, "rev-parse", "HEAD") != plan.Head || fixtureGit(t, linked, "status", "--porcelain") != "" {
+		t.Fatal("blocked worktree changed")
 	}
 }

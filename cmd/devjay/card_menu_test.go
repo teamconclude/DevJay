@@ -255,9 +255,13 @@ func TestSitePublishSourceOnlyAuthorizesItsCurrentRebasedBranch(t *testing.T) {
 	}
 	*site = siteRuntime{Ready: true, Window: window, Git: status}
 	for _, status := range []string{"preparing", "running"} {
-		m.action = &CheckoutAction{Status: status}
+		m.actionDialogs = map[string]*actionDialog{"own": {siteID: "a", action: &CheckoutAction{SiteID: "a", Status: status}}}
 		if m.sitePublishSource(req, "site-a") != nil {
 			t.Fatal("accepted during busy action")
+		}
+		m.actionDialogs["own"].siteID = "other"
+		if m.sitePublishSource(req, "site-a") != window {
+			t.Fatal("another Site's action blocked publication")
 		}
 	}
 }

@@ -407,6 +407,8 @@ button.base-update:hover, button.base-update.status-hover, button.base-update:fo
 .action-details summary { cursor: pointer; color: #939fb2; }
 .suggestion-plan { overflow-wrap: anywhere; }
 .suggestion-preview { font-size: 11px; color: #939fb2; margin: auto 0 12px; padding-top: 18px; }
+.action-countdown { display: inline-flex; align-items: center; gap: 6px; margin: 0 auto 0 0; font-variant-numeric: tabular-nums; cursor: pointer; }
+.action-auto-close { flex: 0 0 auto; margin: 0; }
 .suggestion-footer { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
 .suggestion-preview[hidden] ~ .suggestion-footer { margin-top: auto; padding-top: 12px; }
 .suggestion-footer button { max-width: 100%; overflow-wrap: anywhere; }

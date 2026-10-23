@@ -45,6 +45,7 @@ type appSnapshot struct {
 	ShortcutError    string                   `json:"shortcutError,omitempty"`
 	ShortcutHints    uint32                   `json:"shortcutHints"`
 	Action           *CheckoutAction          `json:"action,omitempty"`
+	ActionGeneration uint64                   `json:"actionGeneration,omitempty"`
 	QuitMessage      string                   `json:"quitMessage,omitempty"`
 	SuggestedSite    string                   `json:"suggestedSite,omitempty"`
 	Layout           string                   `json:"layout"`
@@ -87,13 +88,8 @@ type siteManager struct {
 	viewers                                                        map[string]*gitViewerWindow
 	viewerSequence                                                 uint64
 	prOpening                                                      bool
-	suggestionsAnchor                                              *cardAnchor
-	suggestions, suggestionsParent                                 *application.WebviewWindow
-	suggestionsReady                                               bool
-	suggestedSite                                                  string
-	action                                                         *CheckoutAction
-	actionCancel                                                   context.CancelFunc
-	actionGeneration                                               uint64
+	actionDialogs                                                  map[string]*actionDialog
+	actionDialogSequence                                           uint64
 	app                                                            *application.App
 	strip, settings                                                *application.WebviewWindow
 	stripReady, settingsReady, openSettingsPending, browsing       bool
@@ -257,7 +253,7 @@ func (m *siteManager) snapshot() appSnapshot {
 	preferences["showIDEStatus"] = m.config.showIDEStatus()
 	m.observeDevelopmentApps(m.monitor.windowNumbers, positions)
 	settingsOpen := m.monitor.settingsOpen
-	result := appSnapshot{ShortcutSettings: m.shortcutSettingsView(), ShortcutLabels: m.shortcutLabels(), Profiles: m.profilesView(), StripMode: m.stripMode, ShortcutError: m.shortcutError, ShortcutHints: m.shortcutHints, Action: m.action, QuitMessage: m.quitMessage, SuggestedSite: m.suggestedSite, Layout: m.config.layout(), Placements: m.config.Placements, SettingsOpen: settingsOpen, Decoration: m.config.decoration(), Sites: []SiteView{}, Manual: m.config.Manual, Preferences: preferences}
+	result := appSnapshot{ShortcutSettings: m.shortcutSettingsView(), ShortcutLabels: m.shortcutLabels(), Profiles: m.profilesView(), StripMode: m.stripMode, ShortcutError: m.shortcutError, ShortcutHints: m.shortcutHints, QuitMessage: m.quitMessage, Layout: m.config.layout(), Placements: m.config.Placements, SettingsOpen: settingsOpen, Decoration: m.config.decoration(), Sites: []SiteView{}, Manual: m.config.Manual, Preferences: preferences}
 	if m.configError != nil {
 		result.Error = "Cannot read saved Sites. Configuration has not been overwritten: " + m.configError.Error()
 	}
@@ -449,9 +445,7 @@ func (m *siteManager) remove(id string) {
 			m.closeViewer(viewerID)
 		}
 	}
-	if m.suggestedSite == id {
-		m.closeSuggestions()
-	}
+	m.closeSiteAction(id)
 	m.mu.Lock()
 	delete(m.runtime, id)
 	m.mu.Unlock()
@@ -807,7 +801,7 @@ func (m *siteManager) shouldQuit() bool {
 	if drained != nil {
 		go func() {
 			m.send(func() {
-				m.quitMessage = "Waiting for the confirmed action to finish before quitting…"
+				m.quitMessage = "Waiting for all confirmed actions to finish before quitting…"
 				m.broadcast()
 			})
 			<-drained

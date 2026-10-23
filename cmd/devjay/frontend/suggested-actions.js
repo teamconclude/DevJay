@@ -177,12 +177,55 @@ export function mountSuggestedActions(root, close, actionEvent) {
   const remoteCheckbox = el('input', 'branch-remote-checkbox'); remoteCheckbox.type = 'checkbox';
   const remoteText = el('span', ''); remoteOption.append(remoteCheckbox, remoteText);
   const preview = el('p', 'suggestion-preview');
+  const countdown = el('label', 'action-countdown help'); countdown.hidden = true;
+  const autoClose = el('input', 'action-auto-close'); autoClose.type = 'checkbox'; autoClose.disabled = true;
+  const countdownText = el('span', 'action-countdown-text'); countdownText.setAttribute('role', 'status');
+  countdown.append(autoClose, countdownText);
   const footer = el('div', 'suggestion-footer');
   const back = el('button', 'branch-back', 'Choose another branch'); back.type = 'button'; back.hidden = true;
   const cancel = el('button', '', 'Cancel'); cancel.type = 'button'; cancel.onclick = close;
   const next = el('button', 'suggestion-primary'); next.type = 'button';
-  footer.append(back, cancel, next); root.append(chrome, heading, context, chooser, plan, deletion, remoteOption, preview, footer);
+  footer.append(back, countdown, cancel, next); root.append(chrome, heading, context, chooser, plan, deletion, remoteOption, preview, footer);
   let current = null, identity = '', choicesIdentity = '', chooserContext = '', preparingChoice = false;
+  let completion = '', timer = null, deadline = 0, countdownStopped = false, closing = false, generation = 0;
+  const clearCountdown = () => { clearTimeout(timer); timer = null; };
+  const stopCountdown = () => {
+    clearCountdown(); countdownStopped = true; autoClose.checked = false;
+    countdownText.textContent = 'Auto closing stopped.';
+  };
+  const closeDialog = () => {
+    if (closing || current?.status === 'running') return;
+    closing = true; clearCountdown();
+    const closingGeneration = generation;
+    return recoverRequest(() => close({generation}), () => {
+      if (generation === closingGeneration) {
+        closing = false;
+        if (completion) stopCountdown();
+      }
+    });
+  };
+  dismiss.onclick = cancel.onclick = closeDialog;
+  const tickCountdown = () => {
+    if (!completion || countdownStopped || closing) return;
+    const seconds = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+    if (!seconds) { closeDialog(); return; }
+    countdownText.textContent = `Auto closing in ${seconds} ${seconds === 1 ? 'second' : 'seconds'}.`;
+    timer = setTimeout(tickCountdown, Math.min(1000, deadline - Date.now()));
+  };
+  const updateCountdown = action => {
+    const key = action?.status === 'complete' ? JSON.stringify([action.siteID, action.id || action]) : '';
+    if (key === completion) return;
+    clearCountdown(); completion = key; countdownStopped = false; closing = false;
+    countdown.hidden = !key;
+    autoClose.disabled = !key; autoClose.checked = !!key;
+    if (key) { deadline = Date.now() + 5000; tickCountdown(); }
+  };
+  autoClose.onchange = () => {
+    if (autoClose.disabled || current?.status !== 'complete' || closing) return;
+    if (!autoClose.checked) { stopCountdown(); return; }
+    clearCountdown(); countdownStopped = false;
+    deadline = Date.now() + 5000; tickCountdown();
+  };
   let branchRows = [];
   const filterBranches = () => {
     const query = search.value.trim().toLocaleLowerCase();
@@ -233,12 +276,16 @@ export function mountSuggestedActions(root, close, actionEvent) {
       if (current === pending) { back.disabled = next.disabled = false; remoteCheckbox.disabled = remoteOption.hidden; }
     });
   };
-  return state => {
+  const render = state => {
+    const nextGeneration = state.actionGeneration || 0;
+    if (generation !== nextGeneration) closing = false;
+    generation = nextGeneration;
     const action = state.action?.siteID === state.suggestedSite ? state.action : null;
     const site = state.sites.find(s => s.id === state.suggestedSite);
-    const key = JSON.stringify([action, site?.path, site?.git.changes, site?.git.conflicts]);
+    const key = JSON.stringify([generation, action, site?.path, site?.git.changes, site?.git.conflicts]);
     if (key === identity) return;
     identity = key; current = action;
+    updateCountdown(action);
     const p = action?.plan;
     const kind = p?.kind || action?.kind;
     const labels = actionLabels(p || {kind, target:site?.git.defaultBranch});
@@ -349,6 +396,12 @@ export function mountSuggestedActions(root, close, actionEvent) {
       if (action?.recovery) plan.append(el('p','help copyable',`Recovery: ${action.recovery}`));
     }
   };
+  render.escape = () => {
+    if (current?.status === 'complete') stopCountdown();
+    else closeDialog();
+  };
+  render.dispose = clearCountdown;
+  return render;
 }
 
 // Live actions follow the current checkout, independently of the pinned diff.

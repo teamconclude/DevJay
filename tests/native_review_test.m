@@ -125,6 +125,16 @@ static void test_confirmation_card_anchor(void) {
     devjay_show_suggestions(popup,strip,200,10,200,140);
     assert(fabs(popup.frame.origin.x-(area.origin.x+100)) < 1);
     assert(fabs(popup.frame.origin.y-(area.origin.y+184)) < 1);
+    // Separate dialogs preserve their own card anchors and remain independently usable.
+    NSRect firstFrame = popup.frame;
+    DevJaySiteTestWindow *second = [[[DevJaySiteTestWindow alloc] initWithContentRect:NSMakeRect(0,0,460,330)
+        styleMask:NSWindowStyleMaskBorderless backing:NSBackingStoreBuffered defer:NO] autorelease];
+    devjay_show_suggestions(second,strip,600,10,200,140);
+    assert(NSEqualRects(popup.frame, firstFrame));
+    assert(second->keyOrders == 1 && popup->keyOrders == 2);
+    assert(!NSApp.modalWindow && !popup.sheetParent && !second.sheetParent);
+    [second orderOut:nil];
+    assert(NSEqualRects(popup.frame, firstFrame));
     method_setImplementation(activation, original);
 }
 

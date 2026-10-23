@@ -1,20 +1,21 @@
 package main
 
-// Branch selection starts in a registered Changes window for this Site. The shared dialog may reopen
-// the chooser only while it is still bound to that Site's switch operation.
-func branchPickerSenderAllowed(sender, siteID, selectedSite, viewerSite string, action *CheckoutAction) bool {
+// The caller resolves both dialog and viewer from the sending window's registry
+// entry. A chooser may only reopen or prepare its own Site's switch operation.
+func branchPickerSenderAllowed(dialog *actionDialog, siteID, viewerSite string) bool {
 	if siteID == "" {
 		return false
 	}
 	if viewerSite == siteID {
 		return true
 	}
-	return sender == "suggested-actions" && selectedSite == siteID && action != nil &&
-		action.SiteID == siteID && action.Kind == "switch" && action.Status != "running"
+	return dialog != nil && dialog.siteID == siteID && dialog.action != nil &&
+		dialog.action.SiteID == siteID && dialog.action.Kind == "switch" &&
+		(dialog.action.Status == "ready" || dialog.action.Status == "failed")
 }
 
-func branchSwitchPreparationAllowed(sender, siteID, selectedSite string, action *CheckoutAction) bool {
-	return siteID != "" && sender == "suggested-actions" && selectedSite == siteID &&
-		action != nil && action.SiteID == siteID && action.Kind == "switch" &&
-		(action.Status == "choosing" || action.Status == "ready")
+func branchSwitchPreparationAllowed(dialog *actionDialog, siteID string) bool {
+	return siteID != "" && dialog != nil && dialog.siteID == siteID &&
+		dialog.action != nil && dialog.action.SiteID == siteID && dialog.action.Kind == "switch" &&
+		(dialog.action.Status == "choosing" || dialog.action.Status == "ready")
 }

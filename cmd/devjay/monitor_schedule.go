@@ -226,7 +226,7 @@ func (m *siteManager) deliverSnapshot(snapshot appSnapshot, force bool) {
 		if viewer := m.viewers[id]; viewer != nil && viewer.state != nil {
 			viewerSite = viewer.state.SiteID
 		}
-		filtered := snapshotForWindow(snapshot, id, viewerSite)
+		filtered := m.actionSnapshot(snapshotForWindow(snapshot, id, viewerSite), id, viewerSite)
 		signature := snapshotSignature(filtered)
 		if !force && m.monitor.sent[id] == signature {
 			continue

@@ -73,6 +73,10 @@ check:
 	trap 'rm -f "$$permission_bin"' EXIT; \
 	clang -Wall -Wextra -Werror -fblocks -framework AppKit -framework QuartzCore -framework Carbon tests/claude_permission_panel_test.m -o "$$permission_bin"; \
 	"$$permission_bin"
+	@set -e; actions_bin=$$(mktemp "$${TMPDIR:-/tmp}/devjay-action-dialog.XXXXXX"); \
+	trap 'rm -f "$$actions_bin"' EXIT; \
+	clang -Wall -Wextra -Werror -fblocks -framework AppKit -framework WebKit tests/action_dialog_layout_test.m -o "$$actions_bin"; \
+	"$$actions_bin"
 	go test -ldflags="$(GO_LINK_FLAGS)" ./...
 	go vet ./...
 	node --input-type=module --check < cmd/devjay/frontend/app.js

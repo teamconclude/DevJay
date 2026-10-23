@@ -90,11 +90,13 @@ func (m *siteManager) forgetViewer(id string) {
 		if r.cancel != nil {
 			r.cancel()
 		}
-		if m.suggestionsParent == r.window {
-			m.suggestionsAnchor = nil
-			m.suggestionsParent = m.strip
-			if site := m.runtime[r.state.SiteID]; site != nil && site.Ready {
-				m.suggestionsParent = site.Window
+		for _, dialog := range m.actionDialogs {
+			if dialog.parent == r.window {
+				dialog.anchor = nil
+				dialog.parent = m.strip
+				if site := m.runtime[dialog.siteID]; site != nil && site.Ready {
+					dialog.parent = site.Window
+				}
 			}
 		}
 		m.forgetView(id)

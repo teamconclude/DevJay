@@ -49,6 +49,8 @@ In the Changes window, click **Switch...** beside the branch name to choose anot
 
 Right-click an incoming count for **Fetch and update <branch>…**, or an outgoing count for **Push N commits…**. Card and branch menus also suggest the relevant rebase, rebased push, merged-branch cleanup, or verified replacement from rewritten remote history. Each uses the same safety checks and separate confirmation as the Changes window.
 
+Git actions for different Sites have independent dialogs and can run in parallel across independent repositories. Successful dialogs close after a five-second countdown; press **Esc** to stop the countdown and keep the result open, or click **Done** to close immediately.
+
 Approved and merged PR tags are green; failing CI takes priority in red. Click the colored PR tag in a card’s upper-right corner to open its pull request. DevJay can reuse tabs in Safari, Chrome, Edge, and Brave with macOS Automation permission; right-click the tag to open a new tab alongside existing PRs.
 
 When a PR is authored by someone else, their GitHub avatar appears at the card’s bottom-right. Hover for their username; click to open the PR. Your own PRs have no avatar.

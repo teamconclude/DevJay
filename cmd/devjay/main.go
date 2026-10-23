@@ -129,7 +129,7 @@ func main() {
 			manager.broadcast()
 		})
 	})
-	manager.createSuggestionsWindow()
+	manager.registerSuggestionsEvents()
 	manager.registerViewerEvents()
 	manager.registerPREvents()
 	manager.registerCardMenuEvents()
