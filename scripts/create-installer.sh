@@ -74,7 +74,7 @@ if [[ "$notarize" == 1 ]]; then
 fi
 codesign --verify --deep --strict "$app"
 for macho_arch in "${macho_architectures[@]}"; do
-    lipo -verify_arch "$macho_arch" "$app/Contents/MacOS/DevJay"
+    lipo "$app/Contents/MacOS/DevJay" -verify_arch "$macho_arch"
 done
 ln -s /Applications "$work/image/Applications"
 cp LICENSE "$work/image/LICENSE.txt"
@@ -112,7 +112,7 @@ hdiutil attach "$work/$name" -readonly -nobrowse -mountpoint "$work/mounted" -qu
 mounted=true
 codesign --verify --deep --strict "$work/mounted/DevJay.app"
 for macho_arch in "${macho_architectures[@]}"; do
-    lipo -verify_arch "$macho_arch" "$work/mounted/DevJay.app/Contents/MacOS/DevJay"
+    lipo "$work/mounted/DevJay.app/Contents/MacOS/DevJay" -verify_arch "$macho_arch"
 done
 [[ "$(readlink "$work/mounted/Applications")" == /Applications ]]
 cmp "$app/Contents/MacOS/DevJay" "$work/mounted/DevJay.app/Contents/MacOS/DevJay"
