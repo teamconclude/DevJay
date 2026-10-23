@@ -486,7 +486,15 @@ static void test_disconnected_window_recovery(void) {
     // A large window is resized; even an excessive minimum size cannot strand buttons.
     window.minSize = NSMakeSize(1800,1200);
     [window setFrame:NSMakeRect(1000,800,1800,1200) display:NO];
-    [monitor recoverWindowsOnScreens:recoveryTestScreens]; assert(NSContainsRect(right.visibleFrame,window.frame));
+    NSRect oversizedFrame = window.frame;
+    [monitor recoverWindowsOnScreens:recoveryTestScreens];
+    if (!NSContainsRect(right.visibleFrame,window.frame)) {
+        fprintf(stderr, "Oversized recovery: before=%s after=%s minimum=%s target=%s actual screens=%s\n",
+            NSStringFromRect(oversizedFrame).UTF8String, NSStringFromRect(window.frame).UTF8String,
+            NSStringFromSize(window.minSize).UTF8String, NSStringFromRect(right.visibleFrame).UTF8String,
+            NSScreen.screens.description.UTF8String);
+    }
+    assert(NSContainsRect(right.visibleFrame,window.frame));
     assert(window.minSize.width <= right.visibleFrame.size.width && window.minSize.height <= right.visibleFrame.size.height);
     window.minSize = NSMakeSize(0,0);
     // Recovery never reveals hidden/transparent or minimized Sites.
