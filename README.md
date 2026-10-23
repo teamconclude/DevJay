@@ -85,7 +85,7 @@ git tag v0.8.0
 git push origin v0.8.0
 ```
 
-GitHub Actions runs `make check`, builds a universal macOS app with the tag’s version, and publishes a GitHub release with a DMG, ZIP, SHA-256 checksums, `version.txt`, and `install.sh`. The source plist stays at `0.0.0`; no version-bump commit is needed. `make release TAG=v0.8.0` builds the same files locally without publishing. `make installer VERSION=0.8.0` also accepts an explicit version.
+GitHub Actions runs `make check`, builds a universal macOS app with the tag’s version, and publishes a GitHub release with a DMG, ZIP, SHA-256 checksums, `version.txt`, and `install.sh`. An existing tag can also be built with **Actions → Release → Run workflow**, entering the tag name. The source plist stays at `0.0.0`; no version-bump commit is needed. `make release TAG=v0.8.0` builds the same files locally without publishing. `make installer VERSION=0.8.0` also accepts an explicit version.
 
 Once the first release is published, install or update from Terminal with:
 

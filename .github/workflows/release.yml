@@ -3,12 +3,18 @@ name: Release
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to build
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
@@ -17,10 +23,16 @@ jobs:
     timeout-minutes: 45
     permissions:
       contents: write
+    env:
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
     steps:
+      - name: Validate release tag
+        shell: bash
+        run: '[[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]'
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
+          ref: refs/tags/${{ inputs.tag || github.ref_name }}
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
@@ -36,15 +48,15 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: ./scripts/build-release.sh "$GITHUB_REF_NAME"
+        run: ./scripts/build-release.sh "$RELEASE_TAG"
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           assets=(dist/*.dmg dist/*.zip dist/*.sha256 dist/version.txt dist/install.sh)
           # Upload everything to a draft before making a new release visible.
-          if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release create "$GITHUB_REF_NAME" --draft --verify-tag --title "${GITHUB_REF_NAME#v}" --generate-notes
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" --draft --verify-tag --title "${RELEASE_TAG#v}" --generate-notes
           fi
-          gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --clobber
-          gh release edit "$GITHUB_REF_NAME" --draft=false
+          gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber
+          gh release edit "$RELEASE_TAG" --draft=false

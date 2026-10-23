@@ -203,3 +203,6 @@ Validation: full `make check` passed (Go suite/vet, native checks, all 206 JavaS
 
 
 First release preparation, 23 October: reviewed the release workflow, installer and in-app updater before publication as v0.8.0. The full local check suite and universal package verification from the updater work passed; final focused race, JavaScript and workflow checks were repeated before committing. Corrected the shell syntax check to inspect every script rather than passing later filenames as arguments to the first script. Remote main was aligned and v0.8.0 was unused. No signing secrets are configured, so this release uses the documented ad-hoc signing path. Publication and hosted workflow results are recorded in GitHub’s release/run history.
+
+
+First-tag workflow recovery: GitHub registered the new Release workflow and received v0.8.0, but created no push-triggered run. Added a manually dispatched existing-tag path with strict tag validation and explicit tag checkout. The v0.8.0 tag is preserved; the manual path builds the same tagged application sources.
