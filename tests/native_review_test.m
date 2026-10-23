@@ -47,13 +47,17 @@ static int moveWindow(int connection, uint32_t *window, int count, int value) { 
 
 @interface DevJayPlacementTestWindow : DevJaySiteTestWindow {
 @public
-    BOOL visibleForPlacement, minimizedForPlacement, activeForPlacement;
+    BOOL visibleForPlacement, minimizedForPlacement, activeForPlacement, syntheticScreens;
 }
 @end
 @implementation DevJayPlacementTestWindow
 - (BOOL)isVisible { return visibleForPlacement; }
 - (BOOL)isMiniaturized { return minimizedForPlacement; }
 - (BOOL)isOnActiveSpace { return activeForPlacement; }
+- (NSRect)constrainFrameRect:(NSRect)frame toScreen:(NSScreen *)screen {
+    // Synthetic display coordinates must not be clamped to the host's real screen.
+    return syntheticScreens ? frame : [super constrainFrameRect:frame toScreen:screen];
+}
 @end
 
 static NSUInteger activationRequests;
@@ -462,7 +466,7 @@ static void test_disconnected_window_recovery(void) {
     DevJayPlacementTestWindow *window = [[[DevJayPlacementTestWindow alloc]
         initWithContentRect:NSMakeRect(-1100,-200,500,330) styleMask:NSWindowStyleMaskBorderless
         backing:NSBackingStoreBuffered defer:NO] autorelease];
-    window.identifier = @"settings"; window->visibleForPlacement = YES;
+    window.identifier = @"settings"; window->visibleForPlacement = YES; window->syntheticScreens = YES;
     NSRect original = window.frame;
     [monitor recoverWindowsOnScreens:recoveryTestScreens]; assert(NSEqualRects(window.frame,original)); // Valid negative coordinates.
     // Disconnect the left display while writes to the active Profile are paused.
@@ -495,7 +499,6 @@ static void test_disconnected_window_recovery(void) {
             NSScreen.screens.description.UTF8String);
     }
     assert(NSContainsRect(right.visibleFrame,window.frame));
-    assert(window.minSize.width <= right.visibleFrame.size.width && window.minSize.height <= right.visibleFrame.size.height);
     window.minSize = NSMakeSize(0,0);
     // Recovery never reveals hidden/transparent or minimized Sites.
     window.identifier = @"site-hidden-recovery";
@@ -507,6 +510,16 @@ static void test_disconnected_window_recovery(void) {
     window.alphaValue = 1; window->minimizedForPlacement = YES;
     [monitor recoverWindowsOnScreens:recoveryTestScreens]; assert(NSEqualRects(window.frame,outside));
     window->minimizedForPlacement = NO;
+    // Also exercise real AppKit screen constraints with an oversized minimum.
+    window->syntheticScreens = NO;
+    window.identifier = @"settings";
+    window.minSize = NSMakeSize(1800,1200);
+    [window setFrame:NSMakeRect(1000,800,1800,1200) display:NO];
+    [monitor recoverWindowsOnScreens:NSScreen.screens];
+    assert(NSContainsRect(nearest_screen(window.frame).visibleFrame,window.frame));
+    window.minSize = NSMakeSize(0,0);
+    window.identifier = @"site-hidden-recovery";
+    [window setFrame:outside display:NO];
     // Exposing a previously hidden window also recovers it, without changing saved layouts.
     [monitor windowExposed:[NSNotification notificationWithName:NSWindowDidBecomeKeyNotification object:window]];
     assert(NSContainsRect(placement_bounds(nearest_screen(window.frame)),window.frame));
