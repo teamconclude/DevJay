@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log"
 	"maps"
+	"os"
 	"path/filepath"
 	"slices"
 	"sync"
@@ -37,6 +38,7 @@ type SiteView struct {
 	DevelopmentAppsKnown bool             `json:"developmentAppsKnown"`
 }
 type appSnapshot struct {
+	Update           UpdateStatus             `json:"update"`
 	ShortcutSettings *ShortcutSettingsView    `json:"shortcutSettings,omitempty"`
 	ShortcutLabels   []string                 `json:"shortcutLabels,omitempty"`
 	Profiles         ProfilesView             `json:"profiles"`
@@ -58,6 +60,9 @@ type appSnapshot struct {
 	Error            string                   `json:"error"`
 }
 type siteManager struct {
+	updater                                                        *appUpdater
+	updateStatus                                                   UpdateStatus
+	updateFound                                                    *updateRelease
 	claudePermissions                                              *claudePermissionServer
 	claudePermissionSettingsBusy                                   bool
 	claudePermissionSettingsKnown, claudePermissionSettingsEnabled bool
@@ -116,6 +121,12 @@ func (m *siteManager) send(fn func()) {
 	}
 }
 func (m *siteManager) run() {
+	m.startUpdater()
+	defer func() {
+		if m.updater.staged != "" && m.updateStatus.State != "installing" {
+			os.RemoveAll(m.updater.staged)
+		}
+	}()
 	installClaudePopover()
 	var permissionChanges <-chan struct{}
 	server, err := startClaudePermissionServer(m.app.Context(), claudePermissionSocket(), verifyClaudePermissionPeer)
@@ -253,7 +264,7 @@ func (m *siteManager) snapshot() appSnapshot {
 	preferences["showIDEStatus"] = m.config.showIDEStatus()
 	m.observeDevelopmentApps(m.monitor.windowNumbers, positions)
 	settingsOpen := m.monitor.settingsOpen
-	result := appSnapshot{ShortcutSettings: m.shortcutSettingsView(), ShortcutLabels: m.shortcutLabels(), Profiles: m.profilesView(), StripMode: m.stripMode, ShortcutError: m.shortcutError, ShortcutHints: m.shortcutHints, QuitMessage: m.quitMessage, Layout: m.config.layout(), Placements: m.config.Placements, SettingsOpen: settingsOpen, Decoration: m.config.decoration(), Sites: []SiteView{}, Manual: m.config.Manual, Preferences: preferences}
+	result := appSnapshot{Update: m.updateStatus, ShortcutSettings: m.shortcutSettingsView(), ShortcutLabels: m.shortcutLabels(), Profiles: m.profilesView(), StripMode: m.stripMode, ShortcutError: m.shortcutError, ShortcutHints: m.shortcutHints, QuitMessage: m.quitMessage, Layout: m.config.layout(), Placements: m.config.Placements, SettingsOpen: settingsOpen, Decoration: m.config.decoration(), Sites: []SiteView{}, Manual: m.config.Manual, Preferences: preferences}
 	if m.configError != nil {
 		result.Error = "Cannot read saved Sites. Configuration has not been overwritten: " + m.configError.Error()
 	}

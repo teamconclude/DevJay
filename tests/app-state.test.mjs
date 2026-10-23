@@ -1,3 +1,4 @@
+import {updatePresentation} from '../cmd/devjay/frontend/updater.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
@@ -53,7 +54,7 @@ function app(search='', actionResult=true) {
   createBridge:(send,report)=>{bridgeReport=report;return {emit:async(n,d)=>{await send(`devjay:${n}`,d);report(actionResult===false?'Delivery failed':'',actionResult===false);return actionResult;},reply:noop};},
   uiReady:()=>()=>readyCount++,installCardSizing:()=>noop,installPathLabels:()=>noop,mountEditorSettings:()=>({renderEditor:noop}),
   mountGitViewer:()=>noop,cardStatus,rebasedPublishWarning,cardBounds,
-  mountViewerSuggestions:()=>noop,
+  mountViewerSuggestions:()=>noop,updatePresentation,
   installStripDrag:(_list,options)=>{drag=options;},installCardActivation,installDragOriginGuard:noop,installCardHover:noop,installCardMenu:noop,
  };
  vm.runInNewContext(source,context);
@@ -1318,4 +1319,30 @@ test('action window Escape stops the completion countdown and pending Escape sen
  view.snapshot({...state([site('a')]),suggestedSite:'a',actionGeneration:5,action:{siteID:'a',kind:'update',status:'preparing',message:'Checking'}});
  view.key('Escape');await Promise.resolve();
  assert.equal(view.calls.find(([name])=>name==='devjay:suggestions-close')[1].generation,5);
+});
+
+test('update controls follow download progress and require a separate restart click',()=>{
+ const view=app('');
+ const show=update=>view.snapshot({...state([site('a')]),update});
+ show({state:'available',version:'0.8.1'});
+ const control=view.root.querySelector('.app-update').querySelector('button');
+ assert.equal(control.textContent,'Update to 0.8.1');control.onclick();
+ assert.deepEqual(JSON.parse(JSON.stringify(view.calls.at(-1))),['devjay:update',{operation:'download'}]);
+ show({state:'downloading',version:'0.8.1',percent:42});
+ assert.equal(control.textContent,'Downloading 42%');assert.equal(control.disabled,true);
+ show({state:'ready',version:'0.8.1'});assert.equal(control.textContent,'Restart to update');control.onclick();
+ assert.deepEqual(JSON.parse(JSON.stringify(view.calls.at(-1))),['devjay:update',{operation:'install'}]);
+ show({state:'installing'});assert.equal(control.disabled,true);
+ show({state:'idle'});assert.equal(view.root.querySelector('.app-update').hidden,true);
+});
+test('Settings retains manual update checks, errors and development status',()=>{
+ const view=app('?settings');
+ const show=update=>view.snapshot({...state([]),update});
+ show({state:'idle',message:'DevJay 0.8.0 is up to date'});
+ const bar=view.root.querySelector('.app-update'),control=bar.querySelector('button');
+ assert.equal(control.textContent,'Check for updates');assert.equal(bar.hidden,false);
+ show({state:'manual',version:'0.8.1',message:'Move DevJay to Applications'});control.onclick();
+ assert.deepEqual(JSON.parse(JSON.stringify(view.calls.at(-1))),['devjay:update',{operation:'manual'}]);
+ show({state:'error',message:'Offline'});assert.match(control.textContent,/Retry/);
+ show({state:'disabled'});assert.equal(control.disabled,true);
 });

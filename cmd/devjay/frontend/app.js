@@ -1,3 +1,4 @@
+import { updatePresentation } from './updater.js';
 import { mountShortcutSettings } from './shortcut-settings.js';
 import { prCheckIndicator, prTagTone } from './pr-status.js';
 import { Events, Window } from '/wails/runtime.js';
@@ -28,6 +29,7 @@ const actions = params.has('actions');
 const viewer = params.has('viewer');
 let renderSuggestedActions, renderViewerSnapshot, editorSettings, settingsNavigation, profileSettings;
 const root = document.querySelector('#app');
+let updateBar, updateButton, updateNote;
 if (!viewer && !actions) installPathLabels(document.body);
 let snapshot = {sites: []}, dragging = null, stripDragging = false;
 let sitePublishPending = null;
@@ -461,6 +463,16 @@ if (viewer) {
   }, true);
 
 }
+if (!viewer && !actions && !siteID) {
+  updateBar = el('div', 'app-update');
+  updateButton = button('', () => {
+    const view = updatePresentation(snapshot.update, settings);
+    if (view.operation && !updateButton.disabled) emit('update', {operation:view.operation});
+  });
+  updateNote = el('span', 'help'); updateNote.setAttribute('role', 'status');
+  updateBar.append(updateButton, updateNote);
+  if (settings) settingsNavigation.footer.querySelector('.settings-actions').append(updateBar); else root.append(updateBar);
+}
 if (viewer || actions) root.append(notice);
 const fitCards = !settings && !actions && !viewer ? installCardSizing(root, list, size => emit('fit-cards', size), () => stripDragging) : () => {};
 
@@ -558,6 +570,14 @@ function render(state) {
   report('snapshot', state);
   if (viewer) { renderViewerSnapshot(state); return; }
   snapshot = state;
+  if (updateBar) {
+    const view = updatePresentation(state.update, settings);
+    updateBar.hidden = !!view.hidden;
+    updateButton.textContent = view.text; updateButton.disabled = !!view.disabled;
+    updateButton.classList.toggle('primary', !!view.primary);
+    updateButton.title = state.update?.message || '';
+    updateNote.textContent = settings ? state.update?.message || '' : '';
+  }
   const showIDEStatus = state.preferences?.showIDEStatus !== false;
   if (actions) { renderSuggestedActions(state); return; }
   updateWaitingAttention(state);

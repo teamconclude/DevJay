@@ -5,7 +5,7 @@ CGO_CFLAGS ?= -O2 -g
 export CGO_CFLAGS := $(CGO_CFLAGS) -mmacosx-version-min=$(MACOS_MIN)
 GO_LINK_FLAGS := -extldflags=-mmacosx-version-min=$(MACOS_MIN)
 
-.PHONY: build run check installer
+.PHONY: build run check installer release
 build:
 	mkdir -p "$(APP)/Contents/MacOS" "$(APP)/Contents/Resources"
 	CGO_ENABLED=1 go build -ldflags="$(GO_LINK_FLAGS) -X main.buildChannel=development" -o "$(APP)/Contents/MacOS/DevJay" ./cmd/devjay
@@ -17,10 +17,14 @@ build:
 installer:
 	./scripts/create-installer.sh
 
+release:
+	./scripts/build-release.sh "$(TAG)"
+
 run: build
 	open "$(APP)"
 
 check:
+	@for script in scripts/*.sh cmd/devjay/native_scripts/update.sh; do bash -n "$$script" || exit; done
 	@set -e; geometry_bin=$$(mktemp "$${TMPDIR:-/tmp}/devjay-layout.XXXXXX"); \
 	trap 'rm -f "$$geometry_bin"' EXIT; \
 	clang -Wall -Wextra -Werror tests/layout_geometry_test.c -o "$$geometry_bin"; \

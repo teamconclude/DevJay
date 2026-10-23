@@ -38,7 +38,7 @@ int main(void) {
         NSRegularExpression *imports=[NSRegularExpression regularExpressionWithPattern:@"^import .*;\n" options:NSRegularExpressionAnchorsMatchLines error:nil];
         for(NSString *search in @[@"",@"?site=a"]) {
             NSMutableString *js=[NSMutableString stringWithString:@"const Events={On:()=>{},Emit:()=>Promise.resolve()},Window={};const installCardHover=()=>{},installDragOriginGuard=()=>{},uiReady=()=>()=>{},installPathLabels=()=>{},installStripDrag=()=>{},installCardSizing=()=>()=>{};"];
-            for(NSString *name in @[@"notice",@"bridge",@"pr-status",@"card-status",@"card-interaction",@"card-menu",@"app"]) {
+            for(NSString *name in @[@"notice",@"bridge",@"pr-status",@"card-status",@"card-interaction",@"card-menu",@"updater",@"app"]) {
                 NSString *code=[NSString stringWithContentsOfFile:[NSString stringWithFormat:@"cmd/devjay/frontend/%@.js",name] encoding:NSUTF8StringEncoding error:nil];assert(code);
                 code=[imports stringByReplacingMatchesInString:code options:0 range:NSMakeRange(0,code.length) withTemplate:@""];
                 code=[code stringByReplacingOccurrencesOfString:@"export " withString:@""];
@@ -60,6 +60,15 @@ int main(void) {
                 evaluate(view,@"var before=document.querySelector('.card-footer').getBoundingClientRect().height;delete item.git.pullRequests[0].otherAuthor;render(fixture)");
                 assert([evaluate(view,@"document.querySelector('.card-footer').getBoundingClientRect().height===before") boolValue]);
                 evaluate(view,@"item.git.pullRequests[0].otherAuthor={login:'laknoll'};render(fixture)");
+            }
+            if ([search isEqualToString:@""]) {
+                [window setContentSize:NSMakeSize(234,400)];
+                for (NSString *state in @[@"available",@"downloading",@"ready",@"installing",@"error"]) {
+                    evaluate(view,[NSString stringWithFormat:@"render({...fixture,update:{state:'%@',version:'0.8.1',percent:42}})",state]);
+                    assert([evaluate(view,@"(()=>{const r=document.querySelector('.app-update button').getBoundingClientRect();return r.left>=0&&r.right<=innerWidth+1&&r.bottom<=innerHeight+1})()") boolValue]);
+                }
+                [window setContentSize:NSMakeSize(600,260)];
+                evaluate(view,@"render(fixture)");
             }
             // Slow image success/failure cannot resize the footer or card.
             evaluate(view,@"var footerHeight=document.querySelector('.card-footer').getBoundingClientRect().height;item.git.pullRequests[0].otherAuthor.avatarURL='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aP9sAAAAASUVORK5CYII=';render(fixture);document.querySelector('.pr-author img').onload()");

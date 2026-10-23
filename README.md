@@ -76,6 +76,27 @@ This opt-in integration adds a local `PermissionRequest` hook to Claude's user s
 
 Desktop restoration uses private macOS APIs and may be affected by OS updates. No Accessibility permission or editor integration is required.
 
+## Releases
+
+Releases follow [Galley’s tag-driven workflow](https://github.com/teamconclude/galley/blob/develop/.github/workflows/release.yml). After committing and pushing the release changes, tag the approved commit and push that tag:
+
+```sh
+git tag v0.8.0
+git push origin v0.8.0
+```
+
+GitHub Actions runs `make check`, builds a universal macOS app with the tag’s version, and publishes a GitHub release with a DMG, ZIP, SHA-256 checksums, `version.txt`, and `install.sh`. The source plist stays at `0.0.0`; no version-bump commit is needed. `make release TAG=v0.8.0` builds the same files locally without publishing. `make installer VERSION=0.8.0` also accepts an explicit version.
+
+Once the first release is published, install or update from Terminal with:
+
+```sh
+curl -fsSL https://github.com/teamconclude/DevJay/releases/latest/download/install.sh | bash
+```
+
+The installer verifies the archive checksum and app signature, asks the installed app to quit, and replaces it in Applications while preserving your settings. It leaves the development copy alone. `DEVJAY_INSTALL_DIR` selects a different installation folder; the default falls back to `~/Applications` when `/Applications` is not writable. Installed copies also check for updates shortly after launch and every six hours. The strip and Settings offer **Update to …**, show download progress, and then offer **Restart to update**. Downloading does not interrupt your work. Restart waits for confirmed Git operations to finish, preserves your Sites/preferences, and replaces the app only after it exits. **Help → Check for Updates…** checks immediately. Development builds do not self-update.
+
+Builds use ad-hoc signing by default. To enable Developer ID signing and Apple notarization, configure the same repository secrets as Galley: `CSC_LINK` (base64-encoded Developer ID Application `.p12`), `CSC_KEY_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, and `APPLE_TEAM_ID`. The certificate is imported into a temporary keychain and deleted after the build; incomplete signing configuration fails the release. See [release validation](docs/ARCHITECTURE.md#build-and-validation).
+
 ## More information
 
 - [User guide](docs/USER_GUIDE.md): settings, Git actions, recovery, and saved data.

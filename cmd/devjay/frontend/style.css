@@ -660,3 +660,13 @@ button.status-line.status-link { padding: 2px 0; margin: -2px 0; width: 100%; fl
   .shortcut-row { gap:8px; grid-template-columns:minmax(120px,1fr) auto; }
   .shortcut-buttons { grid-column:1/-1; justify-content:flex-end; }
 }
+
+.app-update { display:flex; align-items:center; gap:8px; flex-shrink:0; --wails-draggable:no-drag; }
+.app-update[hidden] { display:none; }
+.app-update button { font-size:11px; padding:4px 8px; white-space:nowrap; }
+.app-update .primary { background:#245bb5; color:white; }
+.app-update .help { margin:0; overflow-wrap:anywhere; }
+.strip .app-update { justify-content:flex-end; padding-top:4px; }
+
+.settings-actions .app-update { order:-1; margin-right:auto; min-width:0; max-width:calc(100% - 80px); }
+.settings-actions .app-update .help { min-width:0; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }

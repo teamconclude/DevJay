@@ -136,6 +136,7 @@ func main() {
 	manager.registerDevelopmentAppEvents()
 	manager.registerEvents()
 	manager.registerRecoveryEvents()
+	manager.registerUpdateEvents()
 	menu := app.Menu.New()
 	menu.AddRole(application.AppMenu)
 	menu.AddRole(application.EditMenu)
@@ -177,6 +178,8 @@ func main() {
 		})
 	}
 	menu.AddRole(application.WindowMenu)
+	help := menu.AddSubmenu("Help")
+	help.Add("Check for Updates…").OnClick(func(*application.Context) { manager.send(func() { manager.checkUpdate(true) }) })
 	app.Menu.Set(menu)
 	for _, site := range visibleSites(manager.config) {
 		manager.createWindow(site)

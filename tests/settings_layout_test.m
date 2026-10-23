@@ -37,7 +37,7 @@ int main(void) {
         NSString *css = [NSString stringWithContentsOfFile:@"cmd/devjay/frontend/style.css" encoding:NSUTF8StringEncoding error:nil];
         NSMutableString *js = [NSMutableString stringWithString:@"const callbacks={};const Events={On:(n,f)=>callbacks[n]=f,Emit:()=>Promise.resolve()},Window={};const installCardHover=()=>{},installDragOriginGuard=()=>{},uiReady=()=>()=>{};"];
         NSRegularExpression *imports=[NSRegularExpression regularExpressionWithPattern:@"^import .*;\\n" options:NSRegularExpressionAnchorsMatchLines error:nil];
-        for (NSString *name in @[@"notice",@"bridge",@"path-label",@"settings-navigation",@"profile-settings",@"editor-settings",@"shortcut-settings",@"app"]) {
+        for (NSString *name in @[@"notice",@"bridge",@"path-label",@"settings-navigation",@"profile-settings",@"editor-settings",@"shortcut-settings",@"claude-permission-settings",@"updater",@"app"]) {
             NSString *path=[NSString stringWithFormat:@"cmd/devjay/frontend/%@.js",name];
             NSString *code=[NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];assert(code);
             code=[imports stringByReplacingMatchesInString:code options:0 range:NSMakeRange(0,code.length) withTemplate:@""];
@@ -55,6 +55,10 @@ int main(void) {
         evaluate(view,@"shortcutSettings.render({items:Array.from({length:13},(_,i)=>({id:'shortcut-'+i,title:i<2?'Hide/show Site windows':'Go to Site '+(i+1),label:i===0?'⌃⌥⇧⌘Space':'⌃⌥⌘'+(i%10),default:'⌃⌥⌘D',custom:i===0}))})");
         for (NSNumber *width in @[@880,@760]) {
             [window setContentSize:NSMakeSize(width.doubleValue,width.intValue==760?440:620)];
+            for (NSString *state in @[@"available",@"downloading",@"ready",@"manual",@"error"]) {
+                evaluate(view,[NSString stringWithFormat:@"render({...snapshot,update:{state:'%@',version:'0.8.1',percent:42,message:'Update status'}})",state]);
+                assert([evaluate(view,@"document.querySelector('.app-update button').getBoundingClientRect().right<=innerWidth && document.querySelector('.app-update').getBoundingClientRect().bottom<=innerHeight+1") boolValue]);
+            }
             for (NSString *page in @[@"profiles",@"sites",@"windows",@"editors",@"shortcuts"]) {
                 evaluate(view,[NSString stringWithFormat:@"settingsNavigation.show('%@')",page]);
                 assert([evaluate(view,@"document.body.scrollWidth<=innerWidth+1 && document.body.scrollHeight<=innerHeight+1") boolValue]);
@@ -91,7 +95,7 @@ int main(void) {
         // Optional image for visual inspection; this fixture never shows a window.
         NSString *output=NSProcessInfo.processInfo.environment[@"DEVJAY_SETTINGS_SNAPSHOT"];
         if(output) {
-            [window setContentSize:NSMakeSize(880,620)];evaluate(view,@"settingsNavigation.show('shortcuts')");
+            [window setContentSize:NSMakeSize(880,620)];evaluate(view,@"settingsNavigation.show('shortcuts');render({...snapshot,update:{state:'ready',version:'0.8.1'}})");
             __block BOOL done=NO;
             [view takeSnapshotWithConfiguration:nil completionHandler:^(NSImage *image,NSError *error){
                 assert(image&&!error);NSBitmapImageRep *bitmap=[NSBitmapImageRep imageRepWithData:image.TIFFRepresentation];

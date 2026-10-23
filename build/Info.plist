@@ -8,7 +8,7 @@
   <key>CFBundleExecutable</key><string>DevJay</string>
   <key>CFBundleIdentifier</key><string>io.teamconclude.devjay</string>
   <key>CFBundleVersion</key><string>1</string>
-  <key>CFBundleShortVersionString</key><string>0.1.0</string>
+  <key>CFBundleShortVersionString</key><string>0.0.0</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSAppleEventsUsageDescription</key><string>DevJay can find and activate an existing pull request tab, or open a new tab beside your other pull requests, when you click a PR.</string>
