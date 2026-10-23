@@ -103,7 +103,13 @@ static void recover_window(NSWindow *window, NSArray<NSScreen *> *screens) {
     }
     NSScreen *screen = nearest_screen_in(frame, screens);
     if (!screen) return; // Display enumeration can be empty during a transition.
-    NSRect fitted = ns_rect(dp_clamp(dp_rect(frame), dp_rect(recovery_bounds(window, screen))));
+    NSRect bounds = recovery_bounds(window, screen);
+    NSRect fitted = ns_rect(dp_clamp(dp_rect(frame), dp_rect(bounds)));
+    // AppKit on older supported macOS versions enforces minSize in setFrame:.
+    // A minimum larger than the remaining display must not strand the window.
+    NSSize minimum = window.minSize;
+    if (minimum.width > bounds.size.width || minimum.height > bounds.size.height)
+        window.minSize = NSMakeSize(MIN(minimum.width, bounds.size.width), MIN(minimum.height, bounds.size.height));
     if (!NSEqualRects(frame, fitted)) [window setFrame:fitted display:YES];
 }
 

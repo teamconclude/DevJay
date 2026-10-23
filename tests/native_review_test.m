@@ -487,6 +487,7 @@ static void test_disconnected_window_recovery(void) {
     window.minSize = NSMakeSize(1800,1200);
     [window setFrame:NSMakeRect(1000,800,1800,1200) display:NO];
     [monitor recoverWindowsOnScreens:recoveryTestScreens]; assert(NSContainsRect(right.visibleFrame,window.frame));
+    assert(window.minSize.width <= right.visibleFrame.size.width && window.minSize.height <= right.visibleFrame.size.height);
     window.minSize = NSMakeSize(0,0);
     // Recovery never reveals hidden/transparent or minimized Sites.
     window.identifier = @"site-hidden-recovery";

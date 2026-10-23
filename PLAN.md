@@ -206,3 +206,6 @@ First release preparation, 23 October: reviewed the release workflow, installer 
 
 
 First-tag workflow recovery: GitHub registered the new Release workflow and received v0.8.0, but created no push-triggered run. Added a manually dispatched existing-tag path with strict tag validation and explicit tag checkout. The v0.8.0 tag is preserved; the manual path builds the same tagged application sources.
+
+
+macOS 15 release-run finding: the first hosted run reached native checks and exposed that AppKit enforces an oversized window minimum during disconnected-display recovery. Recovery now caps the minimum to the available display before setting the fitted frame; the native regression explicitly checks that cap. This corrects supported-OS behavior before first publication. The unpublished v0.8.0 tag will be advanced to the verified fix using an exact remote-tag lease.
