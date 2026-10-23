@@ -18,7 +18,7 @@ Registered Sites also follow recognized folder renames and moves. If a folder ca
 
 DevJay requires **macOS 13 or newer**. Git is needed for repository status; GitHub PR information also needs the GitHub CLI (`gh`) and your existing sign-in.
 
-If you have a DevJay `.dmg`, quit any running copy and drag **DevJay.app** into **Applications**. Open it from Applications, then eject the disk image. Updates preserve your Sites and preferences. The universal installer contains Apple Silicon and Intel builds; Go and Node are not needed to run it.
+Download the DMG from the [latest release](https://github.com/teamconclude/DevJay/releases/latest), quit any running copy and drag **DevJay.app** into **Applications**. Open it from Applications, then eject the disk image. Updates preserve your Sites and preferences. The universal installer contains Apple Silicon and Intel builds; Go and Node are not needed to run it.
 
 Current installers are ad-hoc signed and not Apple-notarized. If macOS blocks a downloaded copy, attempt to launch it, then use **System Settings → Privacy & Security → Open Anyway**. Updates may ask for folder permissions again. See [Apple’s guidance](https://developer.apple.com/news/?id=saqachfa).
 
@@ -87,7 +87,7 @@ git push origin v0.8.0
 
 GitHub Actions runs `make check`, builds a universal macOS app with the tag’s version, and publishes a GitHub release with a DMG, ZIP, SHA-256 checksums, `version.txt`, and `install.sh`. An existing tag can also be built with **Actions → Release → Run workflow**, entering the tag name. The source plist stays at `0.0.0`; no version-bump commit is needed. `make release TAG=v0.8.0` builds the same files locally without publishing. `make installer VERSION=0.8.0` also accepts an explicit version.
 
-Once the first release is published, install or update from Terminal with:
+Install or update from Terminal with:
 
 ```sh
 curl -fsSL https://github.com/teamconclude/DevJay/releases/latest/download/install.sh | bash
