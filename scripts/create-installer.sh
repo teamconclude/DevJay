@@ -50,6 +50,7 @@ cp build/Info.plist "$app/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $version" "$app/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $version" "$app/Contents/Info.plist"
 cp build/DevJay.icns "$app/Contents/Resources/DevJay.icns"
+cp LICENSE "$app/Contents/Resources/LICENSE.txt"
 export MACOSX_DEPLOYMENT_TARGET="$minimum"
 export CGO_CFLAGS="${CGO_CFLAGS:--O2 -g} -mmacosx-version-min=$minimum"
 export CGO_LDFLAGS="${CGO_LDFLAGS:-} -mmacosx-version-min=$minimum"
@@ -77,27 +78,6 @@ for macho_arch in "${macho_architectures[@]}"; do
     lipo "$app/Contents/MacOS/DevJay" -verify_arch "$macho_arch"
 done
 ln -s /Applications "$work/image/Applications"
-cp LICENSE "$work/image/LICENSE.txt"
-cat > "$work/image/Installation.txt" <<INSTALL
-DevJay $version — macOS $minimum or newer
-
-1. Quit any running copy of DevJay.
-2. Drag DevJay.app onto the Applications folder.
-3. Open DevJay from Applications, then eject this disk image.
-
-Updating replaces the application while keeping your Sites and preferences.
-Go and Node are not needed to run DevJay. Git is needed for repository status.
-GitHub PR information additionally requires GitHub CLI (gh) and an existing login.
-
-$(if [[ "$notarize" == 1 ]]; then
-    echo 'This build is Developer ID signed and notarized by Apple.'
-else
-    echo 'This build is not notarized by Apple. If macOS blocks a downloaded copy,'
-    echo 'attempt to open it, then use System Settings > Privacy & Security > Open Anyway.'
-fi)
-
-DevJay is made by the Conclude team and licensed under MIT (see LICENSE.txt).
-INSTALL
 name="DevJay-$version-macos-$architecture.dmg"
 hdiutil create -volname "DevJay $version" -srcfolder "$work/image" \
     -fs HFS+ -format UDZO "$work/$name"
@@ -122,9 +102,7 @@ zip="DevJay-$version-macos-$architecture.zip"
 ditto -c -k --sequesterRsrc --keepParent "$app" "$work/$zip"
 mv -f "$work/$name" "$work/$zip" "$dist/"
 (cd "$dist" && shasum -a 256 "$name" > "$name.sha256" && shasum -a 256 "$zip" > "$zip.sha256")
-# The terminal installer always downloads the universal archive.
-if [[ "$architecture" == universal ]]; then
-    printf '%s\n' "$version" > "$dist/version.txt"
-    cp scripts/install.sh "$dist/install.sh"
-fi
+# Both architecture-specific packages share the same installer and version feed.
+printf '%s\n' "$version" > "$dist/version.txt"
+cp scripts/install.sh "$dist/install.sh"
 echo "Created $dist/$name and $dist/$zip"

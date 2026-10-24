@@ -122,9 +122,9 @@ Native layout dictionaries use `DevJay.WindowLayout.Profile.<id>`. First migrati
 | Build | Sites file | Bundle/preferences identity |
 | --- | --- | --- |
 | Installed | `~/Library/Application Support/DevJay/sites.json` | `io.teamconclude.devjay` |
-| Development | `~/Library/Application Support/DevJay Development/sites.json` | `io.teamconclude.devjay.development` |
+| Development | `~/Library/Application Support/DevJay/sites.json` | `io.teamconclude.devjay` |
 
-Each channel has a separate single-instance identity. Avoid changing production data when testing.
+Both channels share the `io.teamconclude.devjay` single-instance identity. Wails acquires that lock during application creation, before configuration is loaded, so opening another copy exits after notifying the first instance. Quit the running copy before switching builds. Development builds retain their channel marker to disable self-updates. Legacy development storage is not imported automatically over an existing installed configuration; preserve backups before a deliberate migration. Tests must use disposable configuration rather than the shared user setup.
 
 Activation uses AppKit; desktop identification/restoration depends on runtime-loaded private SkyLight APIs. Missing APIs/displays/Spaces must leave windows reachable and must not erase a valid saved assignment after a failed restore. Geometry preserves nearby bottom/right edge gaps and clamps windows to usable screen bounds. Automated geometry checks do not certify real desktop switching.
 
@@ -154,6 +154,8 @@ For unexpected desktop switches, quit the development app and launch its executa
 
 ## Build and validation
 
+The DMG presents only `DevJay.app` and an Applications folder shortcut for drag-and-drop installation. The MIT license is included inside `DevJay.app/Contents/Resources/LICENSE.txt`; installation instructions remain in the user guide and release notes.
+
 Use macOS 13+, Go 1.27.1+, Xcode Command Line Tools, Git, and Node for checks. `gh` with existing authentication is optional for live GitHub state. `go.mod` pins Wails; no Wails CLI or npm install is needed.
 
 ```sh
@@ -161,14 +163,14 @@ make check     # Go tests/vet, JS tests/syntax, native checks, plist validation
 make build     # bin/DevJay.app, development identity, ad-hoc signed
 make run       # build and open the development app
 make installer VERSION=0.8.0 # universal DMG, ZIP and SHA-256 checksums in dist/
-make release TAG=v0.8.0       # tag-versioned local release build; no publication
+make release TAG=v0.8.0       # arm64 and amd64 release builds; no publication
 ```
 
 Run these commands from the repository root. Direct Go builds target `./cmd/devjay`; `go test ./...` and `go vet ./...` still cover the entire module. Quit the development app before rebuilding it. `make installer ARCH=arm64` or `ARCH=amd64` selects one architecture. Packaging uses a temporary build, leaves `bin/` untouched, verifies signatures/architectures and the mounted image, and takes `VERSION` or the development placeholder from `build/Info.plist`. `DIST_DIR` overrides the output directory. The packaged plist receives the release version in both bundle version fields without changing the source plist. Installers are ad-hoc signed unless signing is configured. A universal binary and macOS 13 deployment target are not evidence of testing on every supported machine.
 
-The Check workflow runs `make check` on macOS for main and pull requests. The release workflow in `.github/workflows/release.yml` follows Galley: pushing a numeric `vMAJOR.MINOR.PATCH` tag runs checks on macOS, derives the version from the tag, builds universal packages, and uploads them with `gh`. Manual dispatch accepts an existing numeric tag and checks out that tag explicitly. New releases remain drafts until all assets upload; reruns replace the same tag’s assets. `scripts/build-release.sh` accepts the tag locally and never creates or pushes tags. With all five signing secrets documented in README, it imports one Developer ID Application identity into a temporary keychain. The app is signed with hardened runtime, notarized and stapled before ZIP creation; the DMG is signed, notarized and stapled separately. The script removes its keychain on exit. Apple credentials are used only for release packaging.
+The Check workflow runs `make check` on macOS for main and pull requests. The release workflow in `.github/workflows/release.yml` follows Galley: pushing a numeric `vMAJOR.MINOR.PATCH` tag runs checks on macOS, derives the version from the tag, builds arm64 and amd64 (Intel x86_64) DMG/ZIP packages with checksums, and uploads them with `gh`. Manual dispatch accepts an existing numeric tag and checks out that tag explicitly. New releases remain drafts until all assets upload; reruns replace the same tag’s assets. `scripts/build-release.sh` accepts the tag locally and never creates or pushes tags. With all five signing secrets documented in README, it imports one Developer ID Application identity into a temporary keychain. The app is signed with hardened runtime, notarized and stapled before ZIP creation; the DMG is signed, notarized and stapled separately. The script removes its keychain on exit. Apple credentials are used only for release packaging.
 
-`version.txt`, the universal ZIP and its SHA-256 checksum serve both the in-app updater and the explicit terminal installer. The installer verifies the universal ZIP checksum, bundle identity/version and code signature before requesting a graceful quit. It waits up to two minutes for active work and refuses replacement if the installed app remains running. Replacement keeps the previous app until the new bundle has moved into place. Settings and the separately identified development build are untouched. Hosted release execution and public asset/feed verification passed for 0.8.0. Certificate-backed signing/notarization and installation on a fresh Mac still require validation with the actual services/machines.
+`version.txt`, the architecture-specific ZIPs and their SHA-256 checksums serve both the updated in-app updater and the explicit terminal installer. Each selects native ARM64 on Apple Silicon, even under Rosetta, or amd64 on Intel. Published 0.8.0 clients hardcode universal ZIP names and require one manual upgrade to the architecture-aware updater. The installer verifies the universal ZIP checksum, bundle identity/version and code signature before requesting a graceful quit. It waits up to two minutes for active work and refuses replacement if the installed app remains running. Replacement keeps the previous app until the new bundle has moved into place. Settings are preserved, and only the selected application bundle is replaced. Development builds share configuration but still cannot self-update. Hosted release execution and public asset/feed verification passed for 0.8.0. Certificate-backed signing/notarization and installation on a fresh Mac still require validation with the actual services/machines.
 
 For changes to concurrency or operation lifetime, also run the Go race suite with the same deployment target as the Makefile:
 
@@ -199,7 +201,7 @@ Initial settings installation is explicit and Settings-sender-only. At startup, 
 
 ## Application updates
 
-`updater.go` implements version comparison, bounded HTTPS release checks/downloads and staged bundle verification; `updater_darwin.go` routes UI requests through the manager queue. Installed, versioned builds check three seconds after launch and every six hours, with a manual Help menu check. Development and unversioned builds never check or replace themselves. The feed is the fixed DevJay GitHub releases endpoint; tests inject a local HTTP client/server directly without a production feed override.
+`updater.go` implements version comparison, bounded HTTPS release checks/downloads and staged bundle verification; `updater_darwin.go` routes UI requests through the manager queue. Installed, versioned builds check three seconds after launch and every six hours, with a manual DevJay menu check. Development and unversioned builds never check or replace themselves. The feed is the fixed DevJay GitHub releases endpoint; tests inject a local HTTP client/server directly without a production feed override.
 
 The strip and Settings share snapshot state for checking, available, downloading, ready, installing, manual-install and error states. Only the registered strip/Settings senders can request updater actions, and downloads/restarts require separate user clicks. One operation runs at a time. Download/verification work runs off the manager queue, reports integer progress, enforces transfer/archive-size limits and rejects unexpected or traversing archive paths and symlinks. SHA-256, code signature, bundle identifier and release version must match before offering restart. Disk-image/translocated or unwritable installations receive a manual-download action instead.
 

@@ -88,13 +88,16 @@ func TestViewerReuseAndClosedParentFallback(t *testing.T) {
 	}
 }
 
-func TestDevelopmentConfigurationAndLockAreIsolated(t *testing.T) {
+func TestDevelopmentAndReleaseShareConfigurationAndLock(t *testing.T) {
 	old := buildChannel
 	defer func() { buildChannel = old }()
 	buildChannel = "release"
 	installedPath, installedID := siteConfigPath(), instanceID()
+	if configNamespace() != "DevJay" || installedID != "io.teamconclude.devjay" {
+		t.Fatal("shared identity must retain the installed app's existing storage")
+	}
 	buildChannel = "development"
-	if installedPath == siteConfigPath() || installedID == instanceID() {
-		t.Fatal("development instance shares installed configuration or lock")
+	if installedPath != siteConfigPath() || installedID != instanceID() {
+		t.Fatal("development and installed builds must share configuration and the single-writer lock")
 	}
 }

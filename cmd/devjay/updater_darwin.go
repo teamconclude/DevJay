@@ -5,15 +5,22 @@ import (
 	_ "embed"
 	"encoding/json"
 	"github.com/wailsapp/wails/v3/pkg/application"
+	"golang.org/x/sys/unix"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"syscall"
 	"time"
 )
 
 //go:embed native_scripts/update.sh
 var updateScript string
+
+func updateArchitecture() string {
+	armHardware, _ := unix.SysctlUint32("hw.optional.arm64")
+	return releaseArchitecture(runtime.GOARCH, armHardware == 1)
+}
 
 func (m *siteManager) startUpdater() {
 	m.updater = &appUpdater{client: updateHTTPClient(), bundle: updaterBundle(), version: buildVersion}

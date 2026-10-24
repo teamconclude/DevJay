@@ -138,7 +138,19 @@ func main() {
 	manager.registerRecoveryEvents()
 	manager.registerUpdateEvents()
 	menu := app.Menu.New()
-	menu.AddRole(application.AppMenu)
+	devjay := menu.AddSubmenu("DevJay")
+	devjay.AddRole(application.About)
+	devjay.Add("Check for Updates…").OnClick(func(*application.Context) { manager.send(func() { manager.checkUpdate(true) }) })
+	devjay.AddSeparator()
+	devjay.Add("Settings…").SetAccelerator("CmdOrCtrl+,").OnClick(func(*application.Context) { manager.send(manager.openSettings) })
+	devjay.AddSeparator()
+	devjay.AddRole(application.ServicesMenu)
+	devjay.AddSeparator()
+	devjay.AddRole(application.Hide)
+	devjay.AddRole(application.HideOthers)
+	devjay.AddRole(application.UnHide)
+	devjay.AddSeparator()
+	devjay.AddRole(application.Quit)
 	menu.AddRole(application.EditMenu)
 	view := menu.AddSubmenu("View")
 	manager.minimalItem = view.AddCheckbox("Minimize strip", false).OnClick(func(ctx *application.Context) {
@@ -162,7 +174,6 @@ func main() {
 	manager.onTopItem = view.AddCheckbox("Show all windows on top", true).OnClick(func(ctx *application.Context) {
 		manager.send(func() { manager.setViewPreference("onTop", ctx.IsChecked()) })
 	})
-	view.Add("Settings…").SetAccelerator("CmdOrCtrl+,").OnClick(func(*application.Context) { manager.send(manager.openSettings) })
 	view.Add("Reload windows").OnClick(func(*application.Context) {
 		manager.send(func() { manager.recovery.manual(time.Now()) })
 	})
@@ -178,8 +189,6 @@ func main() {
 		})
 	}
 	menu.AddRole(application.WindowMenu)
-	help := menu.AddSubmenu("Help")
-	help.Add("Check for Updates…").OnClick(func(*application.Context) { manager.send(func() { manager.checkUpdate(true) }) })
 	app.Menu.Set(menu)
 	for _, site := range visibleSites(manager.config) {
 		manager.createWindow(site)

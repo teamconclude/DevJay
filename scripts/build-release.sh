@@ -7,7 +7,7 @@ if [[ ! "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
     echo 'Expected a release tag such as v0.8.0.' >&2
     exit 1
 fi
-export VERSION="${tag#v}" ARCH=universal
+export VERSION="${tag#v}"
 work=$(mktemp -d "${TMPDIR:-/tmp}/devjay-release.XXXXXX")
 keychain="$work/signing.keychain-db"
 cleanup() {
@@ -36,4 +36,6 @@ if [[ -n "${CSC_LINK:-}" ]]; then
 else
     export SIGNING_IDENTITY=- NOTARIZE=0
 fi
-./scripts/create-installer.sh
+for architecture in arm64 amd64; do
+    ARCH="$architecture" ./scripts/create-installer.sh
+done

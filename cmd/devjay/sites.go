@@ -272,18 +272,13 @@ func validOrder(sites []Site, ids []string) bool {
 	return len(wanted) == 0
 }
 
-// The development build is isolated from installed copies, including its lock.
+// The channel controls update eligibility, not configuration or instance identity.
+// Both builds share one setup and one lock so only one writer can run at a time.
 var buildChannel = "release"
 
 func configNamespace() string {
-	if buildChannel == "development" {
-		return "DevJay Development"
-	}
 	return "DevJay"
 }
 func instanceID() string {
-	if buildChannel == "development" {
-		return "io.teamconclude.devjay.development"
-	}
 	return "io.teamconclude.devjay"
 }

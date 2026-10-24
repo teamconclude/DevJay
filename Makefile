@@ -11,7 +11,6 @@ build:
 	CGO_ENABLED=1 go build -ldflags="$(GO_LINK_FLAGS) -X main.buildChannel=development" -o "$(APP)/Contents/MacOS/DevJay" ./cmd/devjay
 	cp build/DevJay.icns "$(APP)/Contents/Resources/DevJay.icns"
 	cp build/Info.plist "$(APP)/Contents/Info.plist"
-	/usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier io.teamconclude.devjay.development" "$(APP)/Contents/Info.plist"
 	codesign --force --sign - "$(APP)"
 
 installer:

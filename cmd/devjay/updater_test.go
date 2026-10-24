@@ -17,6 +17,18 @@ import (
 	"time"
 )
 
+func TestUpdateArchitecture(t *testing.T) {
+	for _, c := range []struct {
+		goArch      string
+		armHardware bool
+		want        string
+	}{{"arm64", true, "arm64"}, {"arm64", false, "arm64"}, {"amd64", false, "amd64"}, {"amd64", true, "arm64"}} {
+		if got := releaseArchitecture(c.goArch, c.armHardware); got != c.want {
+			t.Fatalf("%+v: got %s", c, got)
+		}
+	}
+}
+
 func TestUpdateVersionOrdering(t *testing.T) {
 	for _, c := range []struct {
 		a, b string
@@ -35,7 +47,7 @@ func TestUpdateMetadataAndCorruptDownload(t *testing.T) {
 		case strings.HasSuffix(r.URL.Path, "version.txt"):
 			fmt.Fprintln(w, version)
 		case strings.HasSuffix(r.URL.Path, ".sha256"):
-			fmt.Fprintf(w, "%s  DevJay-%s-macos-universal.zip\n", checksum, version)
+			fmt.Fprintf(w, "%s  DevJay-%s-macos-%s.zip\n", checksum, version, updateArchitecture())
 		default:
 			fmt.Fprint(w, "corrupt")
 		}
@@ -48,6 +60,9 @@ func TestUpdateMetadataAndCorruptDownload(t *testing.T) {
 	r, err := u.latest(context.Background(), server.URL)
 	if err != nil || r == nil {
 		t.Fatal(r, err)
+	}
+	if want := server.URL + "/download/v0.8.1/DevJay-0.8.1-macos-" + updateArchitecture() + ".zip"; r.url != want {
+		t.Fatalf("download URL %q, want %q", r.url, want)
 	}
 	if _, err = u.download(context.Background(), r, func(int) {}); err == nil || !strings.Contains(err.Error(), "checksum") {
 		t.Fatal(err)

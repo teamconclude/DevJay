@@ -18,7 +18,7 @@ Registered Sites also follow recognized folder renames and moves. If a folder ca
 
 DevJay requires **macOS 13 or newer**. Git is needed for repository status; GitHub PR information also needs the GitHub CLI (`gh`) and your existing sign-in.
 
-Download the DMG from the [latest release](https://github.com/teamconclude/DevJay/releases/latest), quit any running copy and drag **DevJay.app** into **Applications**. Open it from Applications, then eject the disk image. Updates preserve your Sites and preferences. The universal installer contains Apple Silicon and Intel builds; Go and Node are not needed to run it.
+Download the DMG from the [latest release](https://github.com/teamconclude/DevJay/releases/latest), quit any running copy and drag **DevJay.app** into **Applications**. Open it from Applications, then eject the disk image. Updates preserve your Sites and preferences. Choose arm64 for Apple Silicon or amd64 for Intel; Go and Node are not needed to run it.
 
 Current installers are ad-hoc signed and not Apple-notarized. If macOS blocks a downloaded copy, attempt to launch it, then use **System Settings → Privacy & Security → Open Anyway**. Updates may ask for folder permissions again. See [Apple’s guidance](https://developer.apple.com/news/?id=saqachfa).
 
@@ -28,11 +28,11 @@ To build from a checkout, install **Go 1.27.1+** and **Xcode Command Line Tools*
 make run
 ```
 
-This builds and opens `bin/DevJay.app`. Development builds use separate Sites and preferences, so they can run beside an installed copy. Quit the development app before rebuilding. No npm installation or Wails CLI is needed.
+This builds and opens `bin/DevJay.app`. Development and installed builds share Sites, Profiles, window positions, and preferences. Only one copy runs at a time; opening another copy brings the running app forward. Quit DevJay before rebuilding or switching copies. No npm installation or Wails CLI is needed.
 
 ## Get started
 
-1. Open **Settings** with **⌘,**, or right-click a card and choose **DevJay settings…**.
+1. Choose **DevJay → Settings…**, press **⌘,**, or right-click a card and choose **DevJay settings…**.
 2. Click **Add**, or drop a folder into the Sites list.
 3. Use Mission Control to place its Site window on the desktop where you work.
 4. Repeat for your other folders, then click strip cards to move between them.
@@ -85,7 +85,7 @@ git tag v0.8.0
 git push origin v0.8.0
 ```
 
-GitHub Actions runs `make check`, builds a universal macOS app with the tag’s version, and publishes a GitHub release with a DMG, ZIP, SHA-256 checksums, `version.txt`, and `install.sh`. An existing tag can also be built with **Actions → Release → Run workflow**, entering the tag name. The source plist stays at `0.0.0`; no version-bump commit is needed. `make release TAG=v0.8.0` builds the same files locally without publishing. `make installer VERSION=0.8.0` also accepts an explicit version.
+GitHub Actions runs `make check`, builds macOS apps for Apple Silicon (`arm64`) and Intel (`amd64`, also called `x86_64`) with the tag’s version, and publishes a GitHub release with a DMG, ZIP, and SHA-256 checksums for each, plus `version.txt` and `install.sh`. The terminal installer and updated in-app updater select the native architecture, including when running under Rosetta. The 0.8.0 updater expects the former universal ZIP format, so users of 0.8.0 must install the next release manually once. An existing tag can also be built with **Actions → Release → Run workflow**, entering the tag name. The source plist stays at `0.0.0`; no version-bump commit is needed. `make release TAG=v0.8.0` builds both variants locally without publishing. For a single architecture, use `make installer VERSION=0.8.0 ARCH=arm64` or `ARCH=amd64`.
 
 Install or update from Terminal with:
 
@@ -93,7 +93,7 @@ Install or update from Terminal with:
 curl -fsSL https://github.com/teamconclude/DevJay/releases/latest/download/install.sh | bash
 ```
 
-The installer verifies the archive checksum and app signature, asks the installed app to quit, and replaces it in Applications while preserving your settings. It leaves the development copy alone. `DEVJAY_INSTALL_DIR` selects a different installation folder; the default falls back to `~/Applications` when `/Applications` is not writable. Installed copies also check for updates shortly after launch and every six hours. The strip and Settings offer **Update to …**, show download progress, and then offer **Restart to update**. Downloading does not interrupt your work. Restart waits for confirmed Git operations to finish, preserves your Sites/preferences, and replaces the app only after it exits. **Help → Check for Updates…** checks immediately. Development builds do not self-update.
+The installer verifies the archive checksum and app signature, asks the installed app to quit, and replaces it in Applications while preserving your settings. It replaces only the selected application bundle; configuration is shared with development builds. `DEVJAY_INSTALL_DIR` selects a different installation folder; the default falls back to `~/Applications` when `/Applications` is not writable. Installed copies also check for updates shortly after launch and every six hours. The strip and Settings offer **Update to …**, show download progress, and then offer **Restart to update**. Downloading does not interrupt your work. Restart waits for confirmed Git operations to finish, preserves your Sites/preferences, and replaces the app only after it exits. **DevJay → Check for Updates…** checks immediately. Development builds do not self-update.
 
 Builds use ad-hoc signing by default. To enable Developer ID signing and Apple notarization, configure the same repository secrets as Galley: `CSC_LINK` (base64-encoded Developer ID Application `.p12`), `CSC_KEY_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, and `APPLE_TEAM_ID`. The certificate is imported into a temporary keychain and deleted after the build; incomplete signing configuration fails the release. See [release validation](docs/ARCHITECTURE.md#build-and-validation).
 

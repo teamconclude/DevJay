@@ -7,7 +7,7 @@ import {spawnSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 
 const installer = resolve('scripts/install.sh');
-function fixture(t, mode = '') {
+function fixture(t, mode = '', architecture = 'arm64') {
   const root = mkdtempSync(join(tmpdir(), 'devjay-release-test-'));
   t.after(() => rmSync(root, {recursive:true, force:true}));
   const bin = join(root, 'bin'), dest = join(root, 'Applications');
@@ -16,12 +16,14 @@ function fixture(t, mode = '') {
   writeFileSync(join(old, 'original'), 'keep me');
   const digest = createHash('sha256').update('archive').digest('hex');
   const mock = (name, script) => writeFileSync(join(bin, name), '#!/bin/bash\nset -eu\n' + script, {mode:0o755});
-  mock('uname', 'echo Darwin');
+  mock('uname', `if [[ "$1" == -s ]]; then echo Darwin; else echo ${architecture === 'arm64' ? 'arm64' : 'x86_64'}; fi`);
+  mock('sysctl', `echo ${architecture === 'rosetta' ? '1' : '0'}`);
+  const downloadArchitecture = architecture === 'amd64' ? 'amd64' : 'arm64';
   mock('curl', `url=''; out=''; while (($#)); do case "$1" in -o) out="$2"; shift;; https:*) url="$1";; esac; shift; done
 case "$url" in
 */version.txt) echo 0.8.0;;
-*.sha256) echo '${mode === 'corrupt' ? '0'.repeat(64) : digest}  DevJay-0.8.0-macos-universal.zip' > "$out";;
-*) printf archive > "$out";; esac`);
+*.sha256) echo '${mode === 'corrupt' ? '0'.repeat(64) : digest}  DevJay-0.8.0-macos-${downloadArchitecture}.zip' > "$out";;
+*) printf '%s' "$url" > "$DEVJAY_INSTALL_DIR/download-url"; printf archive > "$out";; esac`);
   // PlistBuddy and shasum remain real: validate the downloaded bundle metadata.
   mock('ditto', `mkdir -p "$4/DevJay.app"
 cat > "$4/DevJay.app/Info.plist" <<'PLIST'
@@ -36,11 +38,15 @@ mv "$4/DevJay.app/Info.plist" "$4/DevJay.app/Contents/Info.plist"`);
   if (mode === 'move') mock('mv', 'if [[ "$1" == */unpacked/DevJay.app ]]; then exit 1; fi\nexec /bin/mv "$@"');
   return {dest, run:() => spawnSync('/bin/bash', [installer], {encoding:'utf8', env:{...process.env, PATH:bin+':'+process.env.PATH, DEVJAY_INSTALL_DIR:dest}})};
 }
-test('terminal installer replaces a verified bundle and opens it', t => {
-  const f = fixture(t), r = f.run(); assert.equal(r.status, 0, r.stderr);
-  assert.ok(existsSync(join(f.dest,'DevJay.app/Contents/Info.plist')));
-  assert.ok(existsSync(join(f.dest,'opened')));
-});
+for (const architecture of ['arm64', 'amd64', 'rosetta']) {
+  test(`terminal installer selects native architecture on ${architecture} and opens a verified bundle`, t => {
+    const f = fixture(t, '', architecture), r = f.run(); assert.equal(r.status, 0, r.stderr);
+    const expected = architecture === 'amd64' ? 'amd64' : 'arm64';
+    assert.equal(readFileSync(join(f.dest,'download-url'),'utf8'), `https://github.com/teamconclude/DevJay/releases/download/v0.8.0/DevJay-0.8.0-macos-${expected}.zip`);
+    assert.ok(existsSync(join(f.dest,'DevJay.app/Contents/Info.plist')));
+    assert.ok(existsSync(join(f.dest,'opened')));
+  });
+}
 for (const mode of ['corrupt','signature','running','automation','move']) {
   test(`terminal installer preserves previous app on ${mode} failure`, t => {
     const f = fixture(t, mode), r = f.run(); assert.notEqual(r.status, 0);

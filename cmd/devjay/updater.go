@@ -37,6 +37,13 @@ type appUpdater struct {
 	bundle, staged, version string
 }
 
+func releaseArchitecture(goArch string, armHardware bool) string {
+	if goArch == "amd64" && armHardware {
+		return "arm64" // Prefer the native build when running under Rosetta.
+	}
+	return goArch
+}
+
 func newerRelease(a, b string) bool {
 	if !releaseVersionPattern.MatchString(a) || !releaseVersionPattern.MatchString(b) {
 		return false
@@ -92,7 +99,7 @@ func (u *appUpdater) latest(ctx context.Context, base string) (*updateRelease, e
 	if !newerRelease(version, u.version) {
 		return nil, nil
 	}
-	name := "DevJay-" + version + "-macos-universal.zip"
+	name := "DevJay-" + version + "-macos-" + updateArchitecture() + ".zip"
 	url := base + "/download/v" + version + "/" + name
 	data, err = u.get(ctx, url+".sha256", 512)
 	if err != nil {

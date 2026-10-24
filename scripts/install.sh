@@ -1,7 +1,14 @@
 #!/bin/bash
-# Install or update the latest DevJay release; development builds are separate.
+# Install or update the selected app bundle; both build channels share settings.
 set -euo pipefail
 [[ "$(uname -s)" == Darwin ]] || { echo 'DevJay requires macOS.' >&2; exit 1; }
+case "$(uname -m)" in
+    arm64) architecture=arm64 ;;
+    x86_64)
+        # A Terminal running under Rosetta must still install the native ARM app.
+        if [[ "$(sysctl -n hw.optional.arm64 2>/dev/null || true)" == 1 ]]; then architecture=arm64; else architecture=amd64; fi ;;
+    *) echo 'Unsupported Mac architecture.' >&2; exit 1 ;;
+esac
 repo=https://github.com/teamconclude/DevJay
 version=$(curl -fsSL "$repo/releases/latest/download/version.txt")
 [[ "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || { echo 'Invalid release version.' >&2; exit 1; }
@@ -21,7 +28,7 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
-name="DevJay-$version-macos-universal.zip"
+name="DevJay-$version-macos-$architecture.zip"
 url="$repo/releases/download/v$version"
 echo "Downloading DevJay ${version}..."
 curl -fL --progress-bar "$url/$name" -o "$work/$name"
