@@ -34,6 +34,17 @@ BOOL dp_move_to_space(NSWindow *window, NSString *space) { (void)window; (void)s
 - (void)makeKeyAndOrderFront:(id)sender { (void)sender; assert(!"monitor must not change focus"); }
 @end
 
+@interface MonitorTestEvent : NSObject {
+@public
+    NSEventType inputType;
+    NSWindow *target;
+}
+@end
+@implementation MonitorTestEvent
+- (NSEventType)type { return inputType; }
+- (NSWindow *)window { return target; }
+@end
+
 @interface LayoutTestObserver : DevJayLayoutObserver {
 @public
     unsigned int saves;
@@ -132,6 +143,46 @@ int main(void) {
         window->mini = NO; window->occlusion = 0;
         assert(!devjay_monitor_window_visible(window));
         assert(!devjay_monitor_window_visible(NULL));
+
+        // Input is observed even when the app is inactive and the strip never
+        // becomes key. Never consume it or mistake tooltip/snapshot work for input.
+        MonitorTestEvent *input = [[[MonitorTestEvent alloc] init] autorelease];
+        input->target = (NSWindow *)window;
+        window->occlusion = NSWindowOcclusionStateVisible;
+        NSTimeInterval interactionTime = 100;
+        for (NSString *name in @[@"strip", @"site-one", @"settings", @"git-viewer", @"suggested-actions", @"compact-strip"]) {
+            window->name = name;
+            for (NSNumber *type in @[@(NSEventTypeMouseMoved), @(NSEventTypeMouseEntered), @(NSEventTypeLeftMouseDown),
+                @(NSEventTypeRightMouseDown), @(NSEventTypeLeftMouseDragged), @(NSEventTypeScrollWheel), @(NSEventTypeKeyDown)]) {
+                input->inputType = type.unsignedIntegerValue;
+                interactionTime += 5;
+                resetEvents();
+                assert(devjay_monitor_interaction((NSEvent *)input, interactionTime) == (NSEvent *)input);
+                assert(receivedFlags == DevJayMonitorInteraction && receivedCalls == 1 && invalidations == 0);
+                devjay_monitor_interaction((NSEvent *)input, interactionTime + 0.1);
+                assert(receivedCalls == 1); // Pointer bursts wake Go at most once per five seconds.
+            }
+        }
+        interactionTime += 10;
+        resetEvents();
+        window->name = @"app-status-tooltip";
+        devjay_monitor_interaction((NSEvent *)input, interactionTime);
+        window->name = @"unrelated";
+        devjay_monitor_interaction((NSEvent *)input, interactionTime);
+        window->name = @"strip";
+        input->inputType = NSEventTypeAppKitDefined;
+        devjay_monitor_interaction((NSEvent *)input, interactionTime);
+        input->inputType = NSEventTypeKeyDown;
+        window->shown = NO;
+        devjay_monitor_interaction((NSEvent *)input, interactionTime);
+        window->shown = YES; window->active = NO;
+        devjay_monitor_interaction((NSEvent *)input, interactionTime);
+        window->active = YES; window->mini = YES;
+        devjay_monitor_interaction((NSEvent *)input, interactionTime);
+        window->mini = NO;
+        input->target = nil;
+        devjay_monitor_interaction((NSEvent *)input, interactionTime);
+        assert(receivedCalls == 0);
 
         testDefaults = [[LayoutTestDefaults alloc] init];
         Method defaultsMethod = class_getClassMethod(NSUserDefaults.class, @selector(standardUserDefaults));

@@ -471,7 +471,6 @@ func describeGit(s GitStatus, m gitMeta, c remoteCache) GitStatus {
 	return s
 }
 func refreshRemote(ctx context.Context, m gitMeta, c *remoteCache) {
-	retryChecks := hasPendingChecks(*c) || c.ChecksRetry
 	c.Attempted = time.Now()
 	defer func() { c.Attempted = time.Now() }()
 	c.Error = ""
@@ -513,8 +512,8 @@ func refreshRemote(ctx context.Context, m gitMeta, c *remoteCache) {
 		out, err := runCommand(ctx, 15*time.Second, "gh", "pr", "list", "--repo", m.GitHubRepo, "--head", m.pullRequestBranch(), "--state", "open", "--limit", "20", "--json", "number,isDraft,reviewDecision,headRepositoryOwner,headRefOid,statusCheckRollup")
 		c.ChecksAttempted = time.Now()
 		c.CheckHeads = pullRequestHeads(out, m.GitHubRepo)
-		c.ChecksRetry = err != nil && retryChecks
-		if err != nil {
+		c.ChecksRetry = err != nil || c.CheckHeads == nil
+		if c.ChecksRetry {
 			c.GitHub = "GitHub unavailable"
 		} else {
 			owner := strings.Split(m.GitHubRepo, "/")[0]

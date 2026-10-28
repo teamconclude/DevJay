@@ -20,13 +20,14 @@ const (
 // The manager changes policy without owning a Git worker's state. Wakeups are
 // coalesced; becoming active refreshes once, while repeated snapshots do nothing.
 type gitWatchControl struct {
-	folderIdentity string // Immutable after the worker starts.
-	mu             sync.Mutex
-	wake           chan struct{}
-	active         bool
-	paused         bool
-	serial         uint64
-	cancel         context.CancelFunc
+	folderIdentity  string // Immutable after the worker starts.
+	mu              sync.Mutex
+	wake            chan struct{}
+	active          bool
+	paused          bool
+	lastInteraction time.Time
+	serial          uint64
+	cancel          context.CancelFunc
 }
 
 func newGitWatchControl() *gitWatchControl {
@@ -54,6 +55,16 @@ func (c *gitWatchControl) refresh() {
 	c.signal()
 }
 
+func (c *gitWatchControl) setLastInteraction(at time.Time) {
+	c.mu.Lock()
+	changed := !c.lastInteraction.Equal(at)
+	c.lastInteraction = at
+	c.mu.Unlock()
+	if changed {
+		c.signal()
+	}
+}
+
 func (c *gitWatchControl) signal() {
 	select {
 	case c.wake <- struct{}{}:
@@ -61,10 +72,10 @@ func (c *gitWatchControl) signal() {
 	}
 }
 
-func (c *gitWatchControl) state() (active, paused bool, serial uint64) {
+func (c *gitWatchControl) state() (active, paused bool, serial uint64, lastInteraction time.Time) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.active, c.paused, c.serial
+	return c.active, c.paused, c.serial, c.lastInteraction
 }
 
 func (c *gitWatchControl) workContext(parent context.Context) (context.Context, context.CancelFunc) {
@@ -213,11 +224,57 @@ func (r gitObservationRoots) topologyChanged(event filesystemEvent) bool {
 		path == filepath.Join(r.gitDir, "gitdir")
 }
 
-func remoteRefreshInterval(active bool) time.Duration {
-	if active {
-		return time.Minute
+const (
+	gitInteractionWindow = 2 * time.Minute
+	gitBackgroundAfter   = 10 * time.Minute
+	githubRetryMinimum   = time.Minute
+)
+
+type gitPollCadence struct {
+	status, full time.Duration
+	transition   time.Time
+}
+
+// Both deadlines are relative to the last input, not to the previous tier.
+// With no recorded interaction, startup uses the background cadence after its
+// initial refresh. Returning to DevJay immediately selects the fast cadence.
+func gitPollingCadence(onDesktop bool, lastInteraction, now time.Time) gitPollCadence {
+	cadence := gitPollCadence{status: 5 * time.Minute}
+	if onDesktop {
+		cadence.status = 2 * time.Minute
 	}
-	return 5 * time.Minute
+	if !lastInteraction.IsZero() {
+		fastUntil := lastInteraction.Add(gitInteractionWindow)
+		backgroundAt := lastInteraction.Add(gitBackgroundAfter)
+		switch {
+		case now.Before(fastUntil):
+			cadence.status, cadence.transition = 15*time.Second, fastUntil
+			if onDesktop {
+				cadence.status = 10 * time.Second
+			}
+		case now.Before(backgroundAt):
+			cadence.status, cadence.transition = 2*time.Minute, backgroundAt
+			if onDesktop {
+				cadence.status = time.Minute
+			}
+		}
+	}
+	// Fast PR polls do not fetch Git or download review discussions. At the
+	// slower cadences, a full refresh supplies both Git and PR status together.
+	cadence.full = max(time.Minute, cadence.status)
+	return cadence
+}
+
+func nextRemoteRefresh(cache remoteCache, cadence gitPollCadence) time.Time {
+	due := cache.Attempted.Add(cadence.full)
+	// A full refresh also queries GitHub. Do not bypass a lightweight failure's
+	// retry delay just because the independent fetch deadline is approaching.
+	if cache.ChecksRetry {
+		if retry := cache.ChecksAttempted.Add(max(githubRetryMinimum, cadence.status)); retry.After(due) {
+			due = retry
+		}
+	}
+	return due
 }
 
 func currentGitRefresh(resultGeneration, generation uint64, resultKey, cacheKey, activeKey string, validLocal, paused bool) bool {
@@ -253,7 +310,7 @@ func watchGitWithControl(ctx context.Context, path string, control *gitWatchCont
 	var changes gitChangeSchedule
 	changes.immediate(time.Now())
 	nextSafety := time.Now().Add(gitSafetyInterval)
-	active, paused, serial := control.state()
+	active, paused, serial, _ := control.state()
 	workCtx, workCancel := control.workContext(ctx)
 	defer func() {
 		workCancel()
@@ -367,7 +424,7 @@ func watchGitWithControl(ctx context.Context, path string, control *gitWatchCont
 		if ctx.Err() != nil {
 			return
 		}
-		nextActive, nextPaused, nextSerial := control.state()
+		nextActive, nextPaused, nextSerial, lastInteraction := control.state()
 		if nextPaused && !paused {
 			workCancel()
 			if remoteCancel != nil {
@@ -393,6 +450,7 @@ func watchGitWithControl(ctx context.Context, path string, control *gitWatchCont
 		}
 		active, paused, serial = nextActive, nextPaused, nextSerial
 		now := time.Now()
+		cadence := gitPollingCadence(active, lastInteraction, now)
 		var timerC <-chan time.Time
 		if !paused {
 			if !changes.due.IsZero() && !now.Before(changes.due) {
@@ -407,20 +465,20 @@ func watchGitWithControl(ctx context.Context, path string, control *gitWatchCont
 			remoteDue := time.Time{}
 			checksDue := time.Time{}
 			if haveLocal && local.Summary == "" && remoteCancel == nil {
-				remoteDue = cache.Attempted.Add(remoteRefreshInterval(active))
+				remoteDue = nextRemoteRefresh(cache, cadence)
 				if !now.Before(remoteDue) {
 					startRemote(false)
 					continue
 				}
-				if meta.GitHubRepo != "" && checksNeedRefresh(cache) {
-					checksDue = cache.ChecksAttempted.Add(checkRefreshInterval(cache))
+				checksDue = nextPullRequestCheck(meta, cache, cadence)
+				if !checksDue.IsZero() {
 					if !now.Before(checksDue) {
 						startRemote(true)
 						continue
 					}
 				}
 			}
-			due := nextSafety
+			due := earlierDeadline(nextSafety, cadence.transition)
 			for _, candidate := range []time.Time{changes.due, remoteDue, checksDue} {
 				if !candidate.IsZero() && candidate.Before(due) {
 					due = candidate

@@ -22,6 +22,7 @@ const (
 	nativeMonitorApplications nativeMonitorFlags = C.DevJayMonitorApplications
 	nativeMonitorPower        nativeMonitorFlags = C.DevJayMonitorPower
 	nativeMonitorDisplays     nativeMonitorFlags = C.DevJayMonitorDisplays
+	nativeMonitorInteraction  nativeMonitorFlags = C.DevJayMonitorInteraction
 )
 
 var nativeMonitoring struct {

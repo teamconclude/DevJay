@@ -57,7 +57,7 @@ func main() {
 			UniqueID: instanceID(),
 			OnSecondInstanceLaunch: func(application.SecondInstanceData) {
 				if manager != nil {
-					go manager.send(manager.showStrip)
+					go manager.send(manager.userCommand(manager.showStrip))
 				}
 			},
 		},
@@ -140,9 +140,9 @@ func main() {
 	menu := app.Menu.New()
 	devjay := menu.AddSubmenu("DevJay")
 	devjay.AddRole(application.About)
-	devjay.Add("Check for Updates…").OnClick(func(*application.Context) { manager.send(func() { manager.checkUpdate(true) }) })
+	devjay.Add("Check for Updates…").OnClick(func(*application.Context) { manager.send(manager.userCommand(func() { manager.checkUpdate(true) })) })
 	devjay.AddSeparator()
-	devjay.Add("Settings…").SetAccelerator("CmdOrCtrl+,").OnClick(func(*application.Context) { manager.send(manager.openSettings) })
+	devjay.Add("Settings…").SetAccelerator("CmdOrCtrl+,").OnClick(func(*application.Context) { manager.send(manager.userCommand(manager.openSettings)) })
 	devjay.AddSeparator()
 	devjay.AddRole(application.ServicesMenu)
 	devjay.AddSeparator()
@@ -154,38 +154,38 @@ func main() {
 	menu.AddRole(application.EditMenu)
 	view := menu.AddSubmenu("View")
 	manager.minimalItem = view.AddCheckbox("Minimize strip", false).OnClick(func(ctx *application.Context) {
-		manager.send(func() {
+		manager.send(manager.userCommand(func() {
 			if ctx.IsChecked() {
 				manager.setStripMode(stripCompact)
 			} else {
 				manager.setStripMode(stripFull)
 			}
-		})
+		}))
 	})
 	manager.hiddenItem = view.Add("Hide strip").OnClick(func(*application.Context) {
-		manager.send(manager.toggleStripVisibility)
+		manager.send(manager.userCommand(manager.toggleStripVisibility))
 	})
 	manager.siteWindowsItem = view.Add("Hide Site windows").OnClick(func(*application.Context) {
-		manager.send(func() { manager.setSiteWindowsHidden(!manager.config.SiteWindowsHidden) })
+		manager.send(manager.userCommand(func() { manager.setSiteWindowsHidden(!manager.config.SiteWindowsHidden) }))
 	})
 	manager.allDesktopsItem = view.AddCheckbox("Strip on all desktops", true).OnClick(func(ctx *application.Context) {
-		manager.send(func() { manager.setViewPreference("allDesktops", ctx.IsChecked()) })
+		manager.send(manager.userCommand(func() { manager.setViewPreference("allDesktops", ctx.IsChecked()) }))
 	})
 	manager.onTopItem = view.AddCheckbox("Show all windows on top", true).OnClick(func(ctx *application.Context) {
-		manager.send(func() { manager.setViewPreference("onTop", ctx.IsChecked()) })
+		manager.send(manager.userCommand(func() { manager.setViewPreference("onTop", ctx.IsChecked()) }))
 	})
 	view.Add("Reload windows").OnClick(func(*application.Context) {
-		manager.send(func() { manager.recovery.manual(time.Now()) })
+		manager.send(manager.userCommand(func() { manager.recovery.manual(time.Now()) }))
 	})
 	sites := menu.AddSubmenu("Sites")
 	sites.Add("Show DevJay").SetAccelerator("CmdOrCtrl+0").OnClick(func(*application.Context) {
-		manager.send(manager.showStrip)
+		manager.send(manager.userCommand(manager.showStrip))
 	})
 	// Shortcuts follow the current visible card order, including manual overrides.
 	for i := 0; i < 9; i++ {
 		index := i
 		sites.Add("Site " + string(rune('1'+i))).SetAccelerator("CmdOrCtrl+" + string(rune('1'+i))).OnClick(func(*application.Context) {
-			manager.send(func() { manager.activateSiteNumber(index) })
+			manager.send(manager.userCommand(func() { manager.activateSiteNumber(index) }))
 		})
 	}
 	menu.AddRole(application.WindowMenu)
@@ -195,7 +195,7 @@ func main() {
 	}
 	app.Event.OnApplicationEvent(events.Common.ApplicationStarted, func(*application.ApplicationEvent) { go manager.run() })
 	app.Event.OnApplicationEvent(events.Mac.ApplicationShouldHandleReopen, func(*application.ApplicationEvent) {
-		manager.send(manager.showStrip)
+		manager.send(manager.userCommand(manager.showStrip))
 	})
 	app.OnShutdown(manager.shutdown)
 	if err := app.Run(); err != nil {

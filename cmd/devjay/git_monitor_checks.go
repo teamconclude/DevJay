@@ -8,24 +8,18 @@ import (
 	"time"
 )
 
-const pendingChecksInterval = 30 * time.Second
-
-func checksNeedRefresh(cache remoteCache) bool { return cache.ChecksRetry || hasPendingChecks(cache) }
-
-func checkRefreshInterval(cache remoteCache) time.Duration {
+// Fast activity uses lightweight queries for every PR state. Normal and
+// background cadences are supplied by the full refresh, including pending CI,
+// so a second timer cannot bypass those intervals or duplicate the same query.
+func nextPullRequestCheck(meta gitMeta, cache remoteCache, cadence gitPollCadence) time.Time {
+	if meta.GitHubRepo == "" || meta.Initial || meta.Branch == "(detached)" || cadence.status >= cadence.full {
+		return time.Time{}
+	}
+	interval := cadence.status
 	if cache.ChecksRetry {
-		return time.Minute
+		interval = max(interval, githubRetryMinimum)
 	}
-	return pendingChecksInterval
-}
-
-func hasPendingChecks(cache remoteCache) bool {
-	for _, pr := range cache.PullRequests {
-		if pr.CIState == "pending" {
-			return true
-		}
-	}
-	return false
+	return cache.ChecksAttempted.Add(interval)
 }
 
 func pullRequestHeads(data []byte, repo string) map[int]string {
@@ -43,8 +37,8 @@ func pullRequestHeads(data []byte, repo string) map[int]string {
 	return heads
 }
 
-// Pending checks need a small status query, not another fetch or a download of
-// review bodies. A changed PR/head requests one full refresh to revalidate them.
+// Recent interaction uses a small status query without a
+// fetch or review bodies. A changed PR/head requests a full refresh.
 func refreshPullRequestChecks(ctx context.Context, m gitMeta, cache *remoteCache) bool {
 	out, err := runCommand(ctx, 15*time.Second, "gh", "pr", "list", "--repo", m.GitHubRepo, "--head", m.pullRequestBranch(),
 		"--state", "open", "--limit", "20", "--json", "number,isDraft,reviewDecision,headRepositoryOwner,headRefOid,statusCheckRollup")

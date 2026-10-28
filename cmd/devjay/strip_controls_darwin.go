@@ -14,6 +14,7 @@ import "C"
 import (
 	"encoding/json"
 	"sync/atomic"
+	"time"
 	"unsafe"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -148,6 +149,8 @@ func (m *siteManager) activateSiteNumber(index int) {
 }
 
 func (m *siteManager) handleStripControl(event stripControlEvent) {
+	// Global DevJay shortcuts arrive through Carbon, outside the local NSEvent monitor.
+	m.noteInteraction(time.Now())
 	action := event.action
 	switch {
 	case action == 0:

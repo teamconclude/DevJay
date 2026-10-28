@@ -90,7 +90,7 @@ func TestGitWatchControlCoalescesAndCancelsOnSleep(t *testing.T) {
 		t.Fatal("sleep did not cancel an in-flight read")
 	}
 	control.refresh()
-	active, paused, serial := control.state()
+	active, paused, serial, _ := control.state()
 	if !active || !paused || serial != 1 || len(control.wake) != 1 {
 		t.Fatal("paused explicit refresh lost its invalidation")
 	}
@@ -142,14 +142,79 @@ func TestGitObservationMissingSiteFiltersUnrelatedChanges(t *testing.T) {
 	}
 }
 
-func TestRemoteRefreshPolicyKeepsPendingChecksPrompt(t *testing.T) {
-	quiet := remoteCache{}
-	if remoteRefreshInterval(false) != 5*time.Minute || remoteRefreshInterval(true) != time.Minute {
-		t.Fatal("quiet/active policies are wrong")
+func TestGitPollingCadenceTransitions(t *testing.T) {
+	last := time.Unix(1000, 0)
+	for _, tc := range []struct {
+		name           string
+		elapsed        time.Duration
+		current, other time.Duration
+		transition     time.Duration
+	}{
+		{"just interacted", 0, 10 * time.Second, 15 * time.Second, 2 * time.Minute},
+		{"before normal", 2*time.Minute - time.Nanosecond, 10 * time.Second, 15 * time.Second, 2 * time.Minute},
+		{"normal boundary", 2 * time.Minute, time.Minute, 2 * time.Minute, 10 * time.Minute},
+		{"before background", 10*time.Minute - time.Nanosecond, time.Minute, 2 * time.Minute, 10 * time.Minute},
+		{"background boundary", 10 * time.Minute, 2 * time.Minute, 5 * time.Minute, 0},
+		{"long idle", time.Hour, 2 * time.Minute, 5 * time.Minute, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, onDesktop := range []bool{true, false} {
+				want := tc.other
+				if onDesktop {
+					want = tc.current
+				}
+				got := gitPollingCadence(onDesktop, last, last.Add(tc.elapsed))
+				transition := time.Time{}
+				if tc.transition != 0 {
+					transition = last.Add(tc.transition)
+				}
+				if got.status != want || got.full != max(time.Minute, want) || got.transition != transition {
+					t.Fatalf("onDesktop=%v: cadence=%+v, want status=%v transition=%v", onDesktop, got, want, transition)
+				}
+			}
+		})
 	}
-	quiet.PullRequests = []PullRequestLink{{CIState: "pending"}}
-	if remoteRefreshInterval(false) != 5*time.Minute || !hasPendingChecks(quiet) || pendingChecksInterval != 30*time.Second {
-		t.Fatal("pending CI changed the expensive background refresh interval")
+	for _, onDesktop := range []bool{true, false} {
+		if got, background := gitPollingCadence(onDesktop, time.Time{}, last), gitPollingCadence(onDesktop, last, last.Add(time.Hour)); got != background {
+			t.Fatal("startup without input did not use background cadence", got)
+		}
+	}
+}
+
+func TestGitPollingCadenceRenewsAndFollowsDesktop(t *testing.T) {
+	last := time.Unix(1000, 0)
+	returned := last.Add(11 * time.Minute)
+	if got := gitPollingCadence(false, last, returned); got.status != 5*time.Minute {
+		t.Fatal("old activity did not expire", got)
+	}
+	for _, onDesktop := range []bool{false, true} {
+		got := gitPollingCadence(onDesktop, returned, returned.Add(time.Minute))
+		want := 15 * time.Second
+		if onDesktop {
+			want = 10 * time.Second
+		}
+		if got.status != want || got.transition != returned.Add(2*time.Minute) {
+			t.Fatal("returning input/desktop policy is wrong", got)
+		}
+	}
+	// Desktop navigation changes the interval without extending the input age.
+	if got := gitPollingCadence(true, returned, returned.Add(2*time.Minute)); got.status != time.Minute || got.transition != returned.Add(10*time.Minute) {
+		t.Fatal("desktop policy extended the interaction window", got)
+	}
+}
+
+func TestFullRefreshDoesNotBypassPRFailureRetry(t *testing.T) {
+	checked := time.Unix(1000, 0)
+	cache := remoteCache{Attempted: checked, ChecksAttempted: checked.Add(50 * time.Second), ChecksRetry: true}
+	fast := gitPollingCadence(false, checked, checked)
+	if got := nextRemoteRefresh(cache, fast); got != checked.Add(110*time.Second) {
+		t.Fatal("full refresh bypassed a recent lightweight failure", got)
+	}
+	for _, onDesktop := range []bool{true, false} {
+		background := gitPollingCadence(onDesktop, checked, checked.Add(10*time.Minute))
+		if got := nextRemoteRefresh(cache, background); got != cache.ChecksAttempted.Add(background.status) {
+			t.Fatal("retry accelerated the background cadence", got)
+		}
 	}
 }
 

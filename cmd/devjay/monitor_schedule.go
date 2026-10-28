@@ -18,6 +18,7 @@ type monitorSchedule struct {
 	preferences                   map[string]bool
 	windowNumbers                 map[string]uint32
 	settingsOpen                  bool
+	lastInteraction               time.Time
 	nativeDue, settleDue          time.Time
 	settleRemaining               int
 	visibility                    map[string]bool
@@ -52,11 +53,36 @@ func (m *siteManager) updateGitWatchActivity() {
 	for id, site := range m.runtime {
 		if site.GitControl != nil {
 			site.GitControl.setActivity(m.monitor.states[id].OnDesktop, m.recovery.paused)
+			site.GitControl.setLastInteraction(m.monitor.lastInteraction)
 		}
 	}
 }
 
+// Called only on the manager queue. All enabled Sites appear in the strip,
+// including those on other desktops. Visibility/snapshots alone are not input.
+func (m *siteManager) noteInteraction(now time.Time) {
+	if m.recovery.paused {
+		return
+	}
+	m.monitor.lastInteraction = now
+	m.updateGitWatchActivity()
+}
+
+// AppKit menu tracking bypasses the local input monitor. Wrap explicit menu
+// and reopen commands before enqueueing them, so activity and the action both
+// run on the manager queue. Constructing a callback must not renew activity.
+func (m *siteManager) userCommand(fn func()) func() {
+	return func() {
+		m.noteInteraction(time.Now())
+		fn()
+	}
+}
+
 func (m *siteManager) handleNativeMonitorEvents(flags nativeMonitorFlags, now time.Time) {
+	if flags&nativeMonitorInteraction != 0 {
+		m.noteInteraction(now)
+		flags &^= nativeMonitorInteraction
+	}
 	if flags&nativeMonitorDisplays != 0 {
 		m.profiles.due = now.Add(2 * time.Second)
 	}
