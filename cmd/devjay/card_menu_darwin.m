@@ -41,8 +41,8 @@ int devjay_card_menu(void *pointer, double x, double y, const char *first, const
         DevJayCardMenuSelection *selection = [[[DevJayCardMenuSelection alloc] init] autorelease];
         NSMenu *menu = [[[NSMenu alloc] initWithTitle:@""] autorelease];
         menu.autoenablesItems = NO;
-        NSArray<NSString *> *titles = @[firstTitle, secondTitle, actionTitle, strip ? @"Minimize strip" : @"", strip ? @"Hide strip" : @"", strip ? (siteWindowsHidden ? @"Show site windows" : @"Hide site windows") : @"", settingsTitle, quitTitle];
-        const NSInteger tags[] = {1, 2, 5, 6, 7, siteWindowsHidden ? 9 : 8, 3, 4};
+        NSArray<NSString *> *titles = @[actionTitle, firstTitle, secondTitle, strip ? @"Minimize strip" : @"", strip ? @"Hide strip" : @"", strip ? (siteWindowsHidden ? @"Show site windows" : @"Hide site windows") : @"", settingsTitle, quitTitle];
+        const NSInteger tags[] = {5, 1, 2, 6, 7, siteWindowsHidden ? 9 : 8, 3, 4};
         for (NSUInteger index = 0; index < titles.count; index++) {
             if (!titles[index].length) continue;
             if ((index == 3 || (index == 6 && !strip)) && menu.numberOfItems) [menu addItem:[NSMenuItem separatorItem]];
@@ -52,7 +52,7 @@ int devjay_card_menu(void *pointer, double x, double y, const char *first, const
             if (index == 3) item.toolTip = @"Show a single row of Site names";
             if (index == 4) item.toolTip = @"Hide the strip completely";
             if (index == 5) item.toolTip = @"Hide or restore independent Site windows without changing the strip";
-            if (index == 2) {
+            if (index == 0) {
                 item.enabled = !disabledReason.length;
                 item.toolTip = disabledReason.length ? disabledReason : hintText;
             }
