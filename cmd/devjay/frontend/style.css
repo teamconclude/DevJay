@@ -408,10 +408,14 @@ button.base-update:hover, button.base-update.status-hover, button.base-update:fo
 .suggestion-plan { overflow-wrap: anywhere; }
 .suggestion-preview { font-size: 11px; color: #939fb2; margin: auto 0 12px; padding-top: 18px; }
 .action-countdown { display: inline-flex; align-items: center; gap: 6px; margin: 0 auto 0 0; font-variant-numeric: tabular-nums; cursor: pointer; }
-.action-auto-close { flex: 0 0 auto; margin: 0; }
+.action-auto-countdown { flex: 0 0 auto; margin: 0; }
 .suggestion-footer { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
 .suggestion-preview[hidden] ~ .suggestion-footer { margin-top: auto; padding-top: 12px; }
 .suggestion-footer button { max-width: 100%; overflow-wrap: anywhere; }
+@media (max-width: 440px) {
+  .suggestion-footer { column-gap: 6px; }
+  .suggestion-footer button { padding-inline: 7px; }
+}
 .suggestion-primary { background: #294568; border-color: #6483af; }
 .suggestion-plan ol { padding-left: 20px; margin: 8px 0; }
 .suggestion-plan li { margin-bottom: 10px; line-height: 18px; overflow-wrap: anywhere; }

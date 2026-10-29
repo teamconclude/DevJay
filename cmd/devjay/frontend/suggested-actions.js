@@ -118,15 +118,19 @@ export function suggestionSteps(suggestion, deleteBranch) {
   ];
 }
 
-export function actionLabels(plan) {
-  if (plan.kind === 'switch') return {title:'Confirm branch switch',button:`Switch to ${plan.target || 'branch'}`};
-  if (plan.kind === 'replace') return {title:'Confirm branch replacement',button:'Replace branch'};
-  if (plan.kind === 'push') return {title:'Confirm push', button:`Push ${plan.commits} ${plan.commits === 1 ? 'commit' : 'commits'}`};
-  if (plan.kind === 'publish') return {title:'Push rebased branch', button:'Push rebased branch'};
-  if (plan.kind === 'rebase-push') return {title:'Rebase and push', button:'Rebase and push'};
-  if (plan.kind === 'update') return {title:'Confirm branch update', button:'Update branch'};
-  if (plan.kind === 'rebase') return {title:'Confirm rebase', button:'Rebase branch'};
-  return {title:'Confirm return to default branch', button:`Return to ${plan.target}${plan.deleteBranch ? ' & delete branch' : ''}`};
+export function actionLabels(plan, status = 'ready') {
+  const labels = {
+    switch: {ready:'Confirm branch switch',preparing:'Checking branch switch…',running:'Switching branch…',complete:'Branch switched',failed:'Branch switch stopped',button:`Switch to ${plan.target || 'branch'}`},
+    replace: {ready:'Confirm branch replacement',preparing:'Checking branch replacement…',running:'Replacing branch…',complete:'Branch replaced',failed:'Branch replacement stopped',button:'Replace branch'},
+    push: {ready:'Confirm push',preparing:'Checking push…',running:'Pushing commits…',complete:'Commits pushed',failed:'Push stopped',button:`Push ${plan.commits} ${plan.commits === 1 ? 'commit' : 'commits'}`},
+    publish: {ready:'Push rebased branch',preparing:'Checking rebased branch…',running:'Pushing rebased branch…',complete:'Rebased branch pushed',failed:'Rebased push stopped',button:'Push rebased branch'},
+    'rebase-push': {ready:'Rebase and push',preparing:'Checking rebase and push…',running:'Rebasing and pushing…',complete:'Branch rebased and pushed',failed:'Rebase and push stopped',button:'Rebase and push'},
+    update: {ready:'Confirm branch update',preparing:'Checking branch update…',running:'Updating branch…',complete:'Branch updated',failed:'Branch update stopped',button:'Update branch'},
+    rebase: {ready:'Confirm rebase',preparing:'Checking rebase…',running:'Rebasing branch…',complete:'Branch rebased',failed:'Rebase stopped',button:'Rebase branch'},
+    merged: {ready:'Confirm return to default branch',preparing:'Checking return to default branch…',running:'Returning to default branch…',complete:'Returned to default branch',failed:'Return to default branch stopped',button:`Return to ${plan.target}${plan.deleteBranch ? ' & delete branch' : ''}`},
+  };
+  const label = labels[plan.kind] || labels.merged;
+  return {title:label[status] || label.ready,button:label.button};
 }
 
 // Best available action goes on the right; prerequisites outrank publishing.
@@ -178,51 +182,63 @@ export function mountSuggestedActions(root, close, actionEvent) {
   const remoteText = el('span', ''); remoteOption.append(remoteCheckbox, remoteText);
   const preview = el('p', 'suggestion-preview');
   const countdown = el('label', 'action-countdown help'); countdown.hidden = true;
-  const autoClose = el('input', 'action-auto-close'); autoClose.type = 'checkbox'; autoClose.disabled = true;
+  const autoCountdown = el('input', 'action-auto-countdown'); autoCountdown.type = 'checkbox'; autoCountdown.disabled = true;
   const countdownText = el('span', 'action-countdown-text'); countdownText.setAttribute('role', 'status');
-  countdown.append(autoClose, countdownText);
+  countdown.append(autoCountdown, countdownText);
   const footer = el('div', 'suggestion-footer');
   const back = el('button', 'branch-back', 'Choose another branch'); back.type = 'button'; back.hidden = true;
   const cancel = el('button', '', 'Cancel'); cancel.type = 'button'; cancel.onclick = close;
   const next = el('button', 'suggestion-primary'); next.type = 'button';
   footer.append(back, countdown, cancel, next); root.append(chrome, heading, context, chooser, plan, deletion, remoteOption, preview, footer);
   let current = null, identity = '', choicesIdentity = '', chooserContext = '', preparingChoice = false;
-  let completion = '', timer = null, deadline = 0, countdownStopped = false, closing = false, generation = 0;
+  let countdownIdentity = '', countdownMode = '', timer = null, deadline = 0, countdownStopped = false;
+  let closing = false, generation = 0, confirming = '', disposed = false;
+  const confirmationKey = action => action?.status === 'ready' && action.plan?.id ? JSON.stringify([generation, action.siteID, action.plan.id]) : '';
+  const countdownVerb = () => countdownMode === 'update' ? 'updating' : 'closing';
   const clearCountdown = () => { clearTimeout(timer); timer = null; };
   const stopCountdown = () => {
-    clearCountdown(); countdownStopped = true; autoClose.checked = false;
-    countdownText.textContent = 'Auto closing stopped.';
+    clearCountdown(); countdownStopped = true; autoCountdown.checked = false;
+    countdownText.textContent = `Auto ${countdownVerb()} stopped.`;
   };
   const closeDialog = () => {
-    if (closing || current?.status === 'running') return;
+    if (disposed || closing || confirming || current?.status === 'running') return;
     closing = true; clearCountdown();
     const closingGeneration = generation;
     return recoverRequest(() => close({generation}), () => {
       if (generation === closingGeneration) {
         closing = false;
-        if (completion) stopCountdown();
+        next.disabled = false;
+        if (countdownIdentity) stopCountdown();
       }
     });
   };
   dismiss.onclick = cancel.onclick = closeDialog;
   const tickCountdown = () => {
-    if (!completion || countdownStopped || closing) return;
+    if (disposed || !countdownIdentity || countdownStopped || closing || confirming) return;
     const seconds = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
-    if (!seconds) { closeDialog(); return; }
-    countdownText.textContent = `Auto closing in ${seconds} ${seconds === 1 ? 'second' : 'seconds'}.`;
+    if (!seconds) {
+      if (countdownMode === 'update') next.onclick();
+      else closeDialog();
+      return;
+    }
+    countdownText.textContent = `Auto ${countdownVerb()} in ${seconds} ${seconds === 1 ? 'second' : 'seconds'}.`;
     timer = setTimeout(tickCountdown, Math.min(1000, deadline - Date.now()));
   };
   const updateCountdown = action => {
-    const key = action?.status === 'complete' ? JSON.stringify([action.siteID, action.id || action]) : '';
-    if (key === completion) return;
-    clearCountdown(); completion = key; countdownStopped = false; closing = false;
+    // Only a checked fast-forward plan may start automatically. Rewrites,
+    // publication, branch switching and deletion still require a button click.
+    const mode = action?.status === 'complete' ? 'close' :
+      confirmationKey(action) && action.plan.kind === 'update' ? 'update' : '';
+    const key = mode ? JSON.stringify([generation, action.siteID, mode, mode === 'update' ? action.plan.id : action.id || action]) : '';
+    if (key === countdownIdentity) return;
+    clearCountdown(); countdownIdentity = key; countdownMode = mode; countdownStopped = false; closing = false;
     countdown.hidden = !key;
-    autoClose.disabled = !key; autoClose.checked = !!key;
+    autoCountdown.disabled = !key; autoCountdown.checked = !!key;
     if (key) { deadline = Date.now() + 5000; tickCountdown(); }
   };
-  autoClose.onchange = () => {
-    if (autoClose.disabled || current?.status !== 'complete' || closing) return;
-    if (!autoClose.checked) { stopCountdown(); return; }
+  autoCountdown.onchange = () => {
+    if (disposed || autoCountdown.disabled || !countdownIdentity || closing || confirming) return;
+    if (!autoCountdown.checked) { stopCountdown(); return; }
     clearCountdown(); countdownStopped = false;
     deadline = Date.now() + 5000; tickCountdown();
   };
@@ -243,11 +259,21 @@ export function mountSuggestedActions(root, close, actionEvent) {
     branch:pending.plan?.branch || pending.currentBranch,head:pending.plan?.head || pending.currentHead,
     targetBranch:target.name,targetRemote:target.remote || '',updateTarget});
   next.onclick = () => {
-    if (next.disabled || current?.status !== 'ready' || !current.plan) return;
+    if (disposed || closing || confirming || next.disabled || !confirmationKey(current)) return;
     next.disabled = remoteCheckbox.disabled = back.disabled = true;
-    const pending = current;
+    cancel.disabled = dismiss.disabled = true;
+    const pending = current, pendingKey = confirming = confirmationKey(current);
+    clearCountdown();
+    if (countdownMode === 'update') {
+      autoCountdown.disabled = true;
+      countdownText.textContent = 'Starting update…';
+    }
     return recoverRequest(() => actionEvent('action-confirm', pending.plan.id), () => {
-      if (current === pending) { next.disabled = back.disabled = false; remoteCheckbox.disabled = remoteOption.hidden; }
+      if (!disposed && confirming === pendingKey && confirmationKey(current) === pendingKey) {
+        confirming = ''; next.disabled = back.disabled = cancel.disabled = dismiss.disabled = false;
+        remoteCheckbox.disabled = remoteOption.hidden;
+        if (countdownMode === 'update') { stopCountdown(); autoCountdown.disabled = false; }
+      }
     });
   };
   checkbox.onchange = () => {
@@ -277,6 +303,7 @@ export function mountSuggestedActions(root, close, actionEvent) {
     });
   };
   const render = state => {
+    if (disposed) return;
     const nextGeneration = state.actionGeneration || 0;
     if (generation !== nextGeneration) closing = false;
     generation = nextGeneration;
@@ -285,27 +312,30 @@ export function mountSuggestedActions(root, close, actionEvent) {
     const key = JSON.stringify([generation, action, site?.path, site?.git.changes, site?.git.conflicts]);
     if (key === identity) return;
     identity = key; current = action;
+    if (confirming !== confirmationKey(action)) confirming = '';
     updateCountdown(action);
     const p = action?.plan;
     const kind = p?.kind || action?.kind;
-    const labels = actionLabels(p || {kind, target:site?.git.defaultBranch});
+    const labels = actionLabels(p || {kind, target:site?.git.defaultBranch}, action?.status);
     const compact = kind === 'rebase-push' || kind === 'publish';
     const choosing = kind === 'switch' && action?.status === 'choosing';
     heading.textContent = kind === 'switch' && ['loading-branches','choosing'].includes(action?.status) ? 'Switch branch' : action ? labels.title : 'Confirm action';
     context.textContent = site ? `${site.name || site.path || ''} · ${p?.branch || action?.currentBranch || site.git.branch}${p ? ` → ${kind === 'rebase-push' ? p.publishBase : p.target}` : ''}` : '';
     context.title = site?.path || '';
-    next.hidden = action?.status !== 'ready'; next.disabled = false;
-    back.hidden = kind !== 'switch' || !['ready','failed'].includes(action?.status); back.disabled = false;
+    next.hidden = action?.status !== 'ready'; next.disabled = closing || !!confirming;
+    back.hidden = kind !== 'switch' || !['ready','failed'].includes(action?.status); back.disabled = !!confirming;
     next.textContent = labels.button;
-    cancel.disabled = dismiss.disabled = action?.status === 'running';
-    cancel.textContent = action?.status === 'complete' ? 'Done' : compact && action?.status === 'failed' ? 'Close' : 'Cancel';
+    cancel.disabled = dismiss.disabled = action?.status === 'running' || !!confirming;
+    cancel.textContent = action?.status === 'complete' ? 'Done' : action?.status === 'failed' ? 'Close' : 'Cancel';
+    const finished = action?.status === 'complete' || action?.status === 'failed';
+    dismiss.title = finished ? 'Close' : 'Cancel'; dismiss.setAttribute('aria-label', finished ? 'Close dialog' : 'Cancel action');
     deletion.hidden = action?.status !== 'ready' || kind !== 'merged';
     checkbox.disabled = deletion.hidden; checkbox.checked = !!p?.deleteBranch;
     deleteText.textContent = `Delete local branch ${p?.branch || ''} afterward`;
     remoteOption.hidden = action?.status !== 'ready' || kind !== 'switch' || !p?.canUpdateTarget || p.createTarget || p.localAhead > 0 || !(p.remoteAhead > 0);
-    remoteCheckbox.disabled = remoteOption.hidden; remoteCheckbox.checked = !!p?.updateTarget;
+    remoteCheckbox.disabled = remoteOption.hidden || !!confirming; remoteCheckbox.checked = !!p?.updateTarget;
     remoteText.textContent = `Use newer remote version from ${p?.remoteTarget || ''} (${p?.remoteAhead || 0} newer ${p?.remoteAhead === 1 ? 'commit' : 'commits'})`;
-    preview.hidden = compact;
+    preview.hidden = compact || action?.status === 'complete';
     preview.textContent = action?.status === 'running' ? 'Finishing the operation before this window can close.' :
       choosing ? 'Select a branch to review before switching.' :
       kind === 'switch' ? (site?.git.conflicts ? 'Resolve the conflicted files before switching branches.' :
@@ -389,23 +419,26 @@ export function mountSuggestedActions(root, close, actionEvent) {
       }
     } else {
       const titles = {'loading-branches':'Loading branches…',preparing:'Checking action…',running:'Applying action…',complete:'✓ Completed',failed:'Action stopped'};
+      const message = kind === 'update' && action?.status === 'running' ? 'Rechecking the branch and remote, then applying the update. Please wait…' : action?.message || '';
       plan.replaceChildren(el('strong', action?.status === 'complete' ? 'good' : '', titles[action?.status] || 'Choose an action in the Site’s changes window.'),
-        el('p', 'copyable', action?.message || ''));
+        el('p', 'copyable', message));
       if (action?.files?.length) { const files=el('ul','copyable'); for(const file of action.files) files.append(el('li','',file)); plan.append(files); }
       if (action?.currentHead) plan.append(el('p','help copyable',`Current checkout: ${action.currentBranch} · ${action.currentHead.slice(0,8)}`));
       if (action?.recovery) plan.append(el('p','help copyable',`Recovery: ${action.recovery}`));
     }
   };
   render.escape = () => {
-    if (current?.status === 'complete') stopCountdown();
+    if (disposed || confirming) return;
+    if (countdownIdentity) stopCountdown();
     else closeDialog();
   };
-  render.dispose = clearCountdown;
+  render.dispose = () => { disposed = true; clearCountdown(); };
   return render;
 }
 
 // Live actions follow the current checkout, independently of the pinned diff.
-// Clicking starts safety checks only; the popup requires separate confirmation.
+// Clicking starts safety checks; only verified fast-forward updates count down
+// to automatic confirmation in the popup.
 export function mountViewerSuggestions(root, prepareAction) {
   let identity = '';
   const el = (tag, cls, text) => {const n=document.createElement(tag);n.className=cls;if(text!==undefined)n.textContent=text;return n;};

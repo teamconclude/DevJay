@@ -223,7 +223,7 @@ test('push button opens Confirm push and requires a separate confirmation',()=>w
  const render=mountSuggestedActions(root,()=>{},(...args)=>calls.push(args));
  const state={suggestedSite:'dj',sites:[site]};
  render({...state,action:{siteID:'dj',kind:'push',status:'preparing'}});
- assert.equal(nodes(root).find(n=>n.tag==='h2').textContent,'Confirm push');
+ assert.equal(nodes(root).find(n=>n.tag==='h2').textContent,'Checking push…');
  assert.equal(calls.length,1);
  const plan={id:'token',kind:'push',branch:'main',target:'origin/main',head:'localsha',targetHead:'oldremote',commits:3};
  render({...state,action:{siteID:'dj',kind:'push',status:'ready',plan}});
@@ -383,7 +383,7 @@ test('completed dialogs count down independently and close exactly once after fi
  const renderB=mountSuggestedActions(second,data=>closed.push(['b',data]),()=>{});
  const complete=(id,generation)=>({...branchState(),actionGeneration:generation,action:{id,siteID:'site',kind:'update',status:'complete',message:'Updated'}});
  renderA(complete('a',1));
- assert.equal(classNode(first,'action-auto-close').checked,true);
+ assert.equal(classNode(first,'action-auto-countdown').checked,true);
  assert.equal(classNode(first,'suggestion-footer').children.includes(classNode(first,'action-countdown')),true);
  assert.equal(classNode(first,'action-countdown-text').textContent,'Auto closing in 5 seconds.');
  t.mock.timers.tick(2000);
@@ -404,10 +404,10 @@ test('Escape stops only its completed dialog countdown and snapshots do not rest
  const state={...branchState(),action:{id:'one',siteID:'site',kind:'update',status:'complete'}};
  render(state);renderOther(state);t.mock.timers.tick(4000);render.escape();
  assert.equal(classNode(root,'action-countdown-text').textContent,'Auto closing stopped.');
- assert.equal(classNode(root,'action-auto-close').checked,false);
+ assert.equal(classNode(root,'action-auto-countdown').checked,false);
  render({...state,sites:[{...state.sites[0],git:{branch:'develop',changes:2}}]});
  render.escape();t.mock.timers.tick(20000);assert.deepEqual(closed,['other']);
- const checkbox=classNode(root,'action-auto-close');checkbox.checked=true;checkbox.onchange();
+ const checkbox=classNode(root,'action-auto-countdown');checkbox.checked=true;checkbox.onchange();
  assert.equal(classNode(root,'action-countdown-text').textContent,'Auto closing in 5 seconds.');
  t.mock.timers.tick(4000);assert.deepEqual(closed,['other']);
  checkbox.checked=false;checkbox.onchange();
@@ -424,7 +424,7 @@ test('new operations replace old countdowns; failures and running actions never 
  render(result('complete'));t.mock.timers.tick(3000);
  for(const status of ['preparing','ready','running','failed']) {
   render(result(status));if(status==='running')render.escape();
-  assert.equal(classNode(root,'action-countdown').hidden,true);
+  assert.equal(classNode(root,'action-countdown').hidden,status!=='ready');
   t.mock.timers.tick(10000);assert.deepEqual(closed,[]);
  }
  render(result('complete'));render.escape();
@@ -441,5 +441,128 @@ test('manual dismissal and document disposal clear timers; Escape still cancels 
  t.mock.timers.tick(10000);assert.deepEqual(closed,['close']);
  render({...complete,action:{...complete.action,id:'two'}});render.dispose();
  t.mock.timers.tick(10000);assert.deepEqual(closed,['close']);
- render(branchState());render.escape();assert.deepEqual(closed,['close','close']);
+ const pending=mountSuggestedActions(new Element('root'),()=>closed.push('close'),()=>{});
+ pending(branchState());pending.escape();assert.deepEqual(closed,['close','close']);
 }));
+
+const updateState=(id='update-token',generation=1)=>({...branchState(),actionGeneration:generation,
+ action:{id,siteID:'site',kind:'update',status:'ready',plan:{...switchPlan(),id,kind:'update',target:'origin/feature'}}});
+
+test('checked updates start once after five seconds and completion gets a fresh Done countdown',t=>withDocument(()=>{
+ t.mock.timers.enable({apis:['setTimeout','Date'],now:1000});
+ const root=new Element('root'),calls=[],closed=[],render=mountSuggestedActions(root,data=>closed.push(data),(...args)=>calls.push(args));
+ const ready=updateState();
+ render({...ready,action:{...ready.action,status:'preparing',plan:undefined}});
+ t.mock.timers.tick(10000);assert.deepEqual(calls,[]);
+ assert.equal(classNode(root,'action-countdown').hidden,true);
+ render(ready);
+ assert.equal(classNode(root,'action-countdown-text').textContent,'Auto updating in 5 seconds.');
+ assert.equal(classNode(root,'action-auto-countdown').checked,true);
+ t.mock.timers.tick(3000);
+ render({...ready,action:{...ready.action,message:'Refreshed'},sites:[{...ready.sites[0],path:'/tmp/renamed'}]});
+ assert.equal(classNode(root,'action-countdown-text').textContent,'Auto updating in 2 seconds.');
+ t.mock.timers.tick(1999);assert.deepEqual(calls,[]);
+ t.mock.timers.tick(1);assert.deepEqual(calls,[['action-confirm','update-token']]);
+ assert.equal(classNode(root,'suggestion-primary').disabled,true);
+ render({...ready,action:{...ready.action,message:'Another snapshot'}});
+ classNode(root,'suggestion-primary').onclick();render.escape();
+ t.mock.timers.tick(10000);assert.equal(calls.length,1);assert.deepEqual(closed,[]);
+ render({...ready,action:{...ready.action,status:'running',plan:undefined}});
+ assert.equal(classNode(root,'action-countdown').hidden,true);
+ t.mock.timers.tick(10000);assert.deepEqual(closed,[]);
+ render({...ready,action:{...ready.action,status:'complete',plan:undefined}});
+ assert.equal(classNode(root,'action-countdown-text').textContent,'Auto closing in 5 seconds.');
+ assert.ok(nodes(root).some(n=>n.textContent==='Done'&&!n.disabled));
+ t.mock.timers.tick(4999);assert.deepEqual(closed,[]);
+ t.mock.timers.tick(1);assert.deepEqual(closed,[{generation:1}]);
+}));
+
+test('update countdowns pause and restart independently; a manual start cancels the timer',t=>withDocument(()=>{
+ t.mock.timers.enable({apis:['setTimeout','Date'],now:1000});
+ const root=new Element('root'),other=new Element('root'),calls=[],closed=[];
+ const render=mountSuggestedActions(root,()=>closed.push('close'),(...args)=>calls.push(args));
+ const renderOther=mountSuggestedActions(other,()=>{},(...args)=>calls.push(args));
+ const ready=updateState('paused');render(ready);renderOther(updateState('other'));
+ t.mock.timers.tick(2000);render.escape();
+ assert.equal(classNode(root,'action-countdown-text').textContent,'Auto updating stopped.');
+ const checkbox=classNode(root,'action-auto-countdown');assert.equal(checkbox.checked,false);
+ render({...ready,action:{...ready.action,message:'Refreshed'}});
+ t.mock.timers.tick(10000);assert.deepEqual(calls,[['action-confirm','other']]);assert.deepEqual(closed,[]);
+ checkbox.checked=true;checkbox.onchange();
+ t.mock.timers.tick(4000);assert.equal(calls.length,1);
+ checkbox.checked=false;checkbox.onchange();t.mock.timers.tick(10000);assert.equal(calls.length,1);
+ checkbox.checked=true;checkbox.onchange();
+ assert.equal(classNode(root,'action-countdown-text').textContent,'Auto updating in 5 seconds.');
+ t.mock.timers.tick(2000);classNode(root,'suggestion-primary').onclick();
+ t.mock.timers.tick(10000);assert.deepEqual(calls,[['action-confirm','other'],['action-confirm','paused']]);
+}));
+
+test('new plans and generations replace update timers; cancel, disposal and failures prevent a start',t=>withDocument(()=>{
+ t.mock.timers.enable({apis:['setTimeout','Date'],now:1000});
+ const root=new Element('root'),calls=[],closed=[],render=mountSuggestedActions(root,data=>closed.push(data),(...args)=>calls.push(args));
+ render(updateState('old'));t.mock.timers.tick(4000);render(updateState('new'));
+ t.mock.timers.tick(4000);assert.deepEqual(calls,[]);
+ render(updateState('new',2));t.mock.timers.tick(4999);assert.deepEqual(calls,[]);
+ t.mock.timers.tick(1);assert.deepEqual(calls,[['action-confirm','new']]);
+ for(const status of ['failed','running','preparing']) {
+  render(updateState(status));t.mock.timers.tick(4000);
+  render({...updateState(status),action:{siteID:'site',kind:'update',status}});
+  t.mock.timers.tick(10000);assert.equal(calls.length,1);
+ }
+ render(updateState('cancel'));nodes(root).find(n=>n.textContent==='Cancel').onclick();
+ t.mock.timers.tick(10000);assert.equal(calls.length,1);assert.deepEqual(closed,[{generation:1}]);
+ render(updateState('dispose'));render.dispose();render(updateState('after-disposal'));
+ t.mock.timers.tick(10000);assert.equal(calls.length,1);
+}));
+
+test('only ready fast-forward updates start automatically',t=>withDocument(()=>{
+ t.mock.timers.enable({apis:['setTimeout','Date'],now:1000});
+ const root=new Element('root'),calls=[],render=mountSuggestedActions(root,()=>{},(...args)=>calls.push(args));
+ for(const kind of ['push','publish','rebase','rebase-push','replace','switch','merged']) {
+  const ready=updateState(kind);ready.action.kind=ready.action.plan.kind=kind;
+  render(ready);assert.equal(classNode(root,'action-countdown').hidden,true);
+  t.mock.timers.tick(10000);assert.deepEqual(calls,[]);
+ }
+ const ready=updateState();delete ready.action.plan.id;
+ render(ready);t.mock.timers.tick(10000);assert.deepEqual(calls,[]);
+ assert.equal(classNode(root,'action-countdown').hidden,true);
+}));
+
+test('failed automatic confirmation delivery stops the timer and allows manual retry after a snapshot',async t=>{
+ t.mock.timers.enable({apis:['setTimeout','Date'],now:1000});
+ const previous=globalThis.document;globalThis.document={createElement:tag=>new Element(tag)};
+ try {
+  const root=new Element('root'),calls=[];let finish;
+  const render=mountSuggestedActions(root,()=>{},(...args)=>{calls.push(args);return new Promise(resolve=>{finish=resolve;});});
+  const ready=updateState();render(ready);t.mock.timers.tick(5000);
+  render({...ready,action:{...ready.action,message:'Refreshed while awaiting acknowledgement'}});
+  assert.equal(classNode(root,'suggestion-primary').disabled,true);
+  finish(false);await Promise.resolve();await Promise.resolve();
+  assert.equal(classNode(root,'action-countdown-text').textContent,'Auto updating stopped.');
+  assert.equal(classNode(root,'action-auto-countdown').checked,false);
+  assert.equal(classNode(root,'suggestion-primary').disabled,false);
+  t.mock.timers.tick(20000);assert.equal(calls.length,1);
+  const retry=classNode(root,'suggestion-primary').onclick();assert.equal(calls.length,2);
+  render(updateState('new-plan',2));finish(false);await retry;
+  assert.equal(classNode(root,'action-countdown-text').textContent,'Auto updating in 5 seconds.');
+  t.mock.timers.tick(5000);assert.deepEqual(calls[2],['action-confirm','new-plan']);
+  render.dispose();
+ } finally {globalThis.document=previous;}
+});
+
+test('failed cancellation leaves an update paused and available for an explicit start',async t=>{
+ t.mock.timers.enable({apis:['setTimeout','Date'],now:1000});
+ const previous=globalThis.document;globalThis.document={createElement:tag=>new Element(tag)};
+ try {
+  const root=new Element('root'),calls=[];let finish;
+  const render=mountSuggestedActions(root,()=>new Promise(resolve=>{finish=resolve;}),(...args)=>calls.push(args));
+  const ready=updateState();render(ready);t.mock.timers.tick(4000);
+  const cancelling=nodes(root).find(n=>n.textContent==='Cancel').onclick();
+  render({...ready,action:{...ready.action,message:'Refreshed'}});
+  finish(false);await cancelling;t.mock.timers.tick(10000);
+  assert.deepEqual(calls,[]);
+  assert.equal(classNode(root,'action-countdown-text').textContent,'Auto updating stopped.');
+  assert.equal(classNode(root,'suggestion-primary').disabled,false);
+  classNode(root,'suggestion-primary').onclick();assert.deepEqual(calls,[['action-confirm','update-token']]);
+ } finally {globalThis.document=previous;}
+});

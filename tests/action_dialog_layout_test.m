@@ -39,7 +39,7 @@ int main(void) {
             code = [imports stringByReplacingMatchesInString:code options:0 range:NSMakeRange(0,code.length) withTemplate:@""];
             [js appendFormat:@"\n%@\n",[code stringByReplacingOccurrencesOfString:@"export " withString:@""]];
         }
-        [js appendString:@"const render=mountSuggestedActions(document.querySelector('#app'),data=>closed.push(data),()=>{});const site={id:'c1',name:'c1',path:'/tmp/c1',git:{branch:'develop'}};function complete(kind,id='result'){render({suggestedSite:'c1',actionGeneration:7,sites:[site],action:{id,siteID:'c1',kind,status:'complete',message:'Updated develop from the remote. Nothing was pushed.',currentBranch:'develop',currentHead:'1234567890abcdef',recovery:'refs/devjay/backups/0123456789abcdef0123456789abcdef'}})};"];
+        [js appendString:@"const confirmed=[];const render=mountSuggestedActions(document.querySelector('#app'),data=>closed.push(data),(...args)=>confirmed.push(args));const site={id:'c1',name:'c1',path:'/tmp/c1',git:{branch:'develop'}};function complete(kind,id='result'){render({suggestedSite:'c1',actionGeneration:7,sites:[site],action:{id,siteID:'c1',kind,status:'complete',message:'Updated develop from the remote. Nothing was pushed.',currentBranch:'develop',currentHead:'1234567890abcdef',recovery:'refs/devjay/backups/0123456789abcdef0123456789abcdef'}})};function update(id){render({suggestedSite:'c1',actionGeneration:7,sites:[site],action:{id,siteID:'c1',kind:'update',status:'ready',plan:{id,kind:'update',branch:'develop',target:'origin/develop',head:'1234567890abcdef',targetHead:'abcdef1234567890'}}})};"];
         NSString *html = [NSString stringWithFormat:@"<!doctype html><meta charset='utf-8'><style>%@</style><body class='suggestions'><main id='app'></main><script>%@</script></body>",css,js];
         NSWindow *window = [[[NSWindow alloc] initWithContentRect:NSMakeRect(0,0,460,470) styleMask:NSWindowStyleMaskBorderless backing:NSBackingStoreBuffered defer:NO] autorelease];
         WKWebViewConfiguration *config = [[[WKWebViewConfiguration alloc] init] autorelease]; config.websiteDataStore = WKWebsiteDataStore.nonPersistentDataStore;
@@ -53,19 +53,39 @@ int main(void) {
                 evaluate(view,[NSString stringWithFormat:@"complete('%@','%@-%@')",kind,kind,width]);
                 assert([evaluate(view,@"document.body.scrollWidth<=innerWidth+1 && document.body.scrollHeight<=innerHeight+1") boolValue]);
                 assert([evaluate(view,@"(()=>{const footer=document.querySelector('.suggestion-footer').getBoundingClientRect(),note=document.querySelector('.action-countdown').getBoundingClientRect(),done=[...document.querySelectorAll('button')].find(b=>b.textContent==='Done').getBoundingClientRect();return footer.bottom<=innerHeight && note.right<done.left && note.top>=done.top && note.bottom<=done.bottom && note.left>=0})()") boolValue]);
-                assert([evaluate(view,@"document.querySelector('.action-countdown').textContent==='Auto closing in 5 seconds.' && document.querySelector('.action-auto-close').checked") boolValue]);
+                assert([evaluate(view,@"document.querySelector('.action-countdown').textContent==='Auto closing in 5 seconds.' && document.querySelector('.action-auto-countdown').checked") boolValue]);
                 evaluate(view,@"advance(3000);render.escape();advance(10000)");
-                assert([evaluate(view,@"closed.length===0 && document.querySelector('.action-countdown').textContent==='Auto closing stopped.' && !document.querySelector('.action-auto-close').checked && [...document.querySelectorAll('button')].some(b=>b.textContent==='Done'&&!b.disabled)") boolValue]);
+                assert([evaluate(view,@"closed.length===0 && document.querySelector('.action-countdown').textContent==='Auto closing stopped.' && !document.querySelector('.action-auto-countdown').checked && [...document.querySelectorAll('button')].some(b=>b.textContent==='Done'&&!b.disabled)") boolValue]);
                 evaluate(view,@"document.querySelector('.action-countdown').click();advance(4000)");
-                assert([evaluate(view,@"document.querySelector('.action-auto-close').checked && closed.length===0") boolValue]);
+                assert([evaluate(view,@"document.querySelector('.action-auto-countdown').checked && closed.length===0") boolValue]);
                 evaluate(view,@"document.querySelector('.action-countdown').click();advance(10000)");
-                assert([evaluate(view,@"!document.querySelector('.action-auto-close').checked && closed.length===0 && document.querySelector('.action-countdown').textContent==='Auto closing stopped.'") boolValue]);
+                assert([evaluate(view,@"!document.querySelector('.action-auto-countdown').checked && closed.length===0 && document.querySelector('.action-countdown').textContent==='Auto closing stopped.'") boolValue]);
             }
         }
         evaluate(view,@"complete('update','last');advance(4999)");
         assert([evaluate(view,@"closed.length===0") boolValue]);
         evaluate(view,@"advance(1)");
         assert([evaluate(view,@"closed.length===1 && closed[0].generation===7") boolValue]);
+        for (NSNumber *width in @[@460,@400]) {
+            [window setContentSize:NSMakeSize(width.doubleValue,470)];
+            evaluate(view,[NSString stringWithFormat:@"closed=[];confirmed.length=0;update('update-%@')",width]);
+            assert([evaluate(view,@"document.body.scrollWidth<=innerWidth+1 && document.body.scrollHeight<=innerHeight+1") boolValue]);
+            assert([evaluate(view,@"(()=>{const footer=document.querySelector('.suggestion-footer').getBoundingClientRect(),note=document.querySelector('.action-countdown').getBoundingClientRect(),start=document.querySelector('.suggestion-primary').getBoundingClientRect();return footer.bottom<=innerHeight && note.right<start.left && note.top>=start.top && note.bottom<=start.bottom && note.left>=0})()") boolValue]);
+            assert([evaluate(view,@"document.querySelector('.action-countdown').textContent==='Auto updating in 5 seconds.' && document.querySelector('.action-auto-countdown').checked") boolValue]);
+            evaluate(view,@"advance(3000);render.escape();advance(10000)");
+            assert([evaluate(view,@"closed.length===0 && confirmed.length===0 && document.querySelector('.action-countdown').textContent==='Auto updating stopped.' && !document.querySelector('.action-auto-countdown').checked") boolValue]);
+            evaluate(view,@"document.querySelector('.action-countdown').click();advance(4999)");
+            assert([evaluate(view,@"confirmed.length===0") boolValue]);
+            evaluate(view,@"advance(1)");
+            assert([evaluate(view,@"confirmed.length===1 && confirmed[0][0]==='action-confirm' && document.querySelector('.suggestion-primary').disabled") boolValue]);
+            evaluate(view,@"render({suggestedSite:'c1',actionGeneration:7,sites:[site],action:{id:confirmed[0][1],siteID:'c1',kind:'update',status:'running'}})");
+            assert([evaluate(view,@"document.querySelector('.confirmation-title').textContent==='Updating branch…' && document.querySelector('.action-countdown').hidden && document.querySelector('.suggestion-plan').textContent.includes('applying the update') && document.body.scrollHeight<=innerHeight+1") boolValue]);
+            evaluate(view,@"complete('update',confirmed[0][1]);advance(4999)");
+            assert([evaluate(view,@"document.querySelector('.confirmation-title').textContent==='Branch updated' && document.querySelector('.suggestion-preview').hidden") boolValue]);
+            assert([evaluate(view,@"closed.length===0 && document.querySelector('.action-countdown').textContent==='Auto closing in 1 second.'") boolValue]);
+            evaluate(view,@"advance(1)");
+            assert([evaluate(view,@"closed.length===1 && closed[0].generation===7") boolValue]);
+        }
         puts("Action dialog WebKit layout and countdown checks passed");
     }
     return 0;
