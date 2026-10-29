@@ -43,7 +43,11 @@ type ViewCounts struct {
 	Branch *int `json:"branch"`
 }
 type GitView struct {
-	ComparisonOnly bool `json:"comparisonOnly,omitempty"` // Tracking/Upstream describe a cached comparison, not configured tracking.
+	ComparisonOnly bool            `json:"comparisonOnly,omitempty"` // Tracking/Upstream describe a cached comparison, not configured tracking.
+	AllChanges     bool            `json:"allChanges,omitempty"`
+	BranchOnly     bool            `json:"branchOnly,omitempty"` // Keep the branch commit range while inspecting individual commits.
+	BranchCommits  *int            `json:"branchCommits,omitempty"`
+	BranchDiff     *ViewBranchDiff `json:"branchDiff,omitempty"`
 
 	Counts        *ViewCounts  `json:"counts"`
 	Editor        *EditorState `json:"editor,omitempty"`
@@ -83,6 +87,15 @@ type GitView struct {
 func validViewKind(kind string) bool {
 	return kind == "edits" || kind == "branch" || kind == "local" || kind == "remote"
 }
+
+// Explicitly opening History starts with this branch's commits. Refreshes and
+// selections keep the user's chosen scope instead of applying this default.
+func setViewMode(v *GitView, kind string) {
+	v.Kind = kind
+	v.BranchOnly, v.AllChanges, v.BranchCommits = kind == "branch", false, nil
+	v.Page = 0
+}
+
 func viewerGit(ctx context.Context, root string, args ...string) ([]byte, error) {
 	prefix := []string{"--no-pager", "--literal-pathspecs", "-C", root, "-c", "core.quotePath=false"}
 	return runCommandWithSlots(ctx, commandSlots, 10*time.Second, "git", append(prefix, args...)...)
@@ -148,6 +161,9 @@ type viewSelection struct {
 }
 
 func viewCategoryCount(v *GitView) *int {
+	if v.Kind == "branch" && v.BranchOnly {
+		return v.BranchCommits
+	}
 	if v.Counts != nil {
 		switch v.Kind {
 		case "branch":
@@ -217,6 +233,11 @@ func restoreViewFile(ctx context.Context, v *GitView, selection *viewSelection) 
 }
 
 func loadGitViewSelection(ctx context.Context, v *GitView, refresh bool, selection *viewSelection) error {
+	if v.Kind != "branch" {
+		v.BranchOnly = false
+	}
+	allChanges := v.AllChanges && v.Kind == "branch"
+	v.AllChanges = false
 	v.Error, v.Diff, v.DiffNote, v.Message, v.Commit, v.Parent = "", "", "", "", "", ""
 	v.File = -1
 	v.Files = []ViewFile{}
@@ -229,6 +250,8 @@ func loadGitViewSelection(ctx context.Context, v *GitView, refresh bool, selecti
 	v.FilesLimited = false
 	if refresh {
 		v.Counts = nil
+		v.BranchCommits = nil
+		v.BranchDiff = nil
 		root, err := viewerGit(ctx, v.Path, "rev-parse", "--show-toplevel")
 		if err != nil {
 			return errors.New("This Site is not an available Git checkout.")
@@ -250,6 +273,9 @@ func loadGitViewSelection(ctx context.Context, v *GitView, refresh bool, selecti
 			v.Upstream = gitString(ctx, v.root, "rev-parse", "--verify", m.Ref+"^{commit}")
 		} else if s.Comparison != nil {
 			v.Tracking, v.Upstream = s.Comparison.Tracking, s.Comparison.Head
+		}
+		if v.Kind == "branch" {
+			v.BranchDiff = captureViewBranchDiff(ctx, v, s)
 		}
 		v.Counts = countViewCategories(ctx, v, s.Changes)
 		v.Captured = time.Now().Format(time.RFC3339)
@@ -314,6 +340,24 @@ func loadGitViewSelection(ctx context.Context, v *GitView, refresh bool, selecti
 	revisions := []string{comparison}
 	if v.Kind == "branch" {
 		revisions = branchViewRevisions(v)
+		if v.BranchOnly {
+			if v.BranchDiff == nil || v.BranchDiff.Base == "" || v.Head == "" {
+				v.AllChanges = allChanges
+				return errors.New("Branch comparison unavailable. Refresh or open Full history.")
+			}
+			revisions = []string{v.BranchDiff.Base + ".." + v.Head}
+			if v.BranchCommits == nil {
+				out, err := viewerGit(ctx, v.root, "rev-list", "--count", revisions[0], "--")
+				if err == nil {
+					if count, err := strconv.Atoi(strings.TrimSpace(string(out))); err == nil && count >= 0 {
+						v.BranchCommits = &count
+					}
+				}
+			}
+			if v.BranchCommits != nil {
+				v.Page = min(v.Page, max(0, (*v.BranchCommits-1)/viewerPageSize))
+			}
+		}
 		if len(revisions) == 0 {
 			return nil // An unborn branch has no history yet.
 		}
@@ -357,6 +401,13 @@ func loadGitViewSelection(ctx context.Context, v *GitView, refresh bool, selecti
 		markRemotePresence(ctx, v)
 	} else if v.Kind == "branch" {
 		markBranchPresence(ctx, v)
+	}
+	if allChanges {
+		if err := showViewBranchDiff(ctx, v); err != nil {
+			return err
+		}
+		restoreViewFile(ctx, v, selection)
+		return nil
 	}
 	if len(v.Commits) > 0 {
 		commit := v.Commits[0].ID
@@ -539,6 +590,7 @@ func selectViewCommit(ctx context.Context, v *GitView, id string) error {
 		return errors.New("This commit is not in the displayed list. Refresh and select it again.")
 	}
 	v.Commit = id
+	v.AllChanges = false
 	v.Files = []ViewFile{}
 	v.File = -1
 	v.Diff = ""
@@ -563,6 +615,10 @@ func selectViewCommit(ctx context.Context, v *GitView, id string) error {
 	if len(v.Message) > 16384 {
 		v.Message = strings.ToValidUTF8(v.Message[:16384], "�") + "\n[Message truncated]"
 	}
+	return loadViewRevisionFiles(ctx, v, id, "Commit")
+}
+
+func loadViewRevisionFiles(ctx context.Context, v *GitView, id, group string) error {
 	args := []string{"diff-tree", "--root", "--no-commit-id", "-r", "--no-ext-diff", "--no-textconv", "--name-status", "-z", "--find-renames"}
 	if v.Parent != "" {
 		args = append(args, v.Parent)
@@ -572,7 +628,7 @@ func selectViewCommit(ctx context.Context, v *GitView, id string) error {
 	if err != nil {
 		return errors.New("Could not list this commit’s changed files.")
 	}
-	v.Files, err = parseViewFiles(out, "Commit")
+	v.Files, err = parseViewFiles(out, group)
 	if err != nil {
 		return err
 	}
@@ -609,7 +665,7 @@ func selectViewFile(ctx context.Context, v *GitView, index int) {
 			args = append(args, "--cached")
 		}
 	} else if v.Parent != "" {
-		args = append(args, v.Parent, v.Commit)
+		args = append(args, v.Parent, viewDiffRevision(v))
 	} else {
 		args = append([]string{"diff-tree", "--root", "--no-commit-id", "-r", "-p"}, args[1:]...)
 		args = append(args, v.Commit)

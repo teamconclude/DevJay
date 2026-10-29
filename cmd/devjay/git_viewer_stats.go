@@ -61,6 +61,9 @@ func parseViewNumstat(data []byte) (map[string]viewLineStats, error) {
 
 func populateViewStats(ctx context.Context, v *GitView) {
 	groups := []string{"Commit"}
+	if v.AllChanges {
+		groups = []string{"Branch"}
+	}
 	if v.Kind == "edits" {
 		groups = []string{"Staged", "Unstaged"}
 	}
@@ -71,7 +74,7 @@ func populateViewStats(ctx context.Context, v *GitView) {
 				args = append(args, "--cached")
 			}
 		} else if v.Parent != "" {
-			args = append(args, v.Parent, v.Commit)
+			args = append(args, v.Parent, viewDiffRevision(v))
 		} else {
 			args = append([]string{"diff-tree", "--root", "--no-commit-id", "-r"}, args[1:]...)
 			args = append(args, v.Commit)

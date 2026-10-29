@@ -15,6 +15,7 @@ type viewerRequest struct {
 	Anchor    *cardAnchor `json:"anchor,omitempty"`
 	SiteID    string      `json:"siteID"`
 	Kind      string      `json:"kind"`
+	Scope     string      `json:"scope"`
 	Operation string      `json:"operation"`
 	Version   uint64      `json:"version"`
 	Commit    string      `json:"commit"`
@@ -121,7 +122,7 @@ func (m *siteManager) openViewer(req viewerRequest, parent *application.WebviewW
 		r.parent, r.anchor = parent, req.Anchor
 		for id, candidate := range m.viewers {
 			if candidate == r {
-				if r.state.Kind != req.Kind {
+				if r.state.Kind != req.Kind || (req.Kind == "branch" && !r.state.BranchOnly) {
 					m.viewerMode(id, req.Kind)
 				} else {
 					r.refresh.pending = true
@@ -143,7 +144,9 @@ func (m *siteManager) openViewer(req viewerRequest, parent *application.WebviewW
 		BackgroundColour: application.NewRGB(20, 24, 32),
 		Mac:              application.MacWindow{CollectionBehavior: application.MacWindowCollectionBehaviorMoveToActiveSpace | application.MacWindowCollectionBehaviorFullScreenNone, TabbingMode: application.MacWindowTabbingModeDisallowed},
 	})
-	m.viewers[id] = &gitViewerWindow{window: w, parent: parent, anchor: req.Anchor, used: m.viewerSequence, state: &GitView{SiteID: req.SiteID, Name: filepath.Base(site.Site.Path), Path: site.Site.Path, Kind: req.Kind, File: -1, RemoteNote: site.Git.RemoteNote, Rebased: site.Git.Rebased}}
+	state := &GitView{SiteID: req.SiteID, Name: filepath.Base(site.Site.Path), Path: site.Site.Path, File: -1, RemoteNote: site.Git.RemoteNote, Rebased: site.Git.Rebased}
+	setViewMode(state, req.Kind)
+	m.viewers[id] = &gitViewerWindow{window: w, parent: parent, anchor: req.Anchor, used: m.viewerSequence, state: state}
 	m.watchView(id, w)
 	w.OnWindowEvent(events.Common.WindowRuntimeReady, func(*application.WindowEvent) {
 		m.send(func() {
@@ -170,7 +173,7 @@ func (m *siteManager) viewerMode(id, kind string) {
 	// Publish the requested mode immediately. Another card click can then
 	// replace this in-flight request instead of mistaking it for the old mode.
 	fresh := *r.state
-	fresh.Kind = kind
+	setViewMode(&fresh, kind)
 	if site := m.runtime[fresh.SiteID]; site != nil {
 		fresh.RemoteNote, fresh.Rebased = site.Git.RemoteNote, site.Git.Rebased
 	}
@@ -250,6 +253,10 @@ func (m *siteManager) registerViewerEvents() {
 					if v.Kind != "edits" {
 						return selectViewCommit(ctx, v, req.Commit)
 					}
+				case "branch-diff":
+					return selectViewBranchDiff(ctx, v)
+				case "history-scope":
+					return selectViewHistoryScope(ctx, v, req.Scope)
 				case "file":
 					selectViewFile(ctx, v, req.File)
 				}

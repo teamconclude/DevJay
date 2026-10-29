@@ -36,6 +36,7 @@ function viewer(openBranches) {
     querySelector(selector){return this.querySelectorAll(selector)[0]||null;}
     focus(){if(document.activeElement!==this){document.activeElement=this;this.onfocus?.();}}
     click(){if(!this.disabled)this.onclick?.();}
+    addEventListener(type,listener){this['on'+type]=listener;}
     scrollIntoView(){this.revealed=(this.revealed||0)+1;}
   }
   const body=new Element('body'),root=new Element('main');
@@ -189,6 +190,133 @@ function key(target,key,modifiers={}) {
  const event={key,preventDefault(){this.defaultPrevented=true;},...modifiers};
  target.onkeydown?.(event);return !!event.defaultPrevented;
 }
+
+const control=(view,label)=>view.root.querySelectorAll('button').find(node=>node.attrs['aria-label']?.startsWith(label));
+const layoutButton=(view,label)=>view.root.querySelector('.git-diff-layout').querySelectorAll('button').find(node=>node.textContent===label);
+
+test('side-by-side keeps commits left, aligns old/new rows and preserves navigation across refreshes',()=>{
+ const view=viewer(),initial=state({kind:'branch',commit:'commit',parent:'parent',commits:[{id:'commit',subject:'Change'}],
+  diff:'@@ -1,4 +1,4 @@\n-old\n+new\n same\n-deleted\n+<img src=x onerror=alert(1)>\n same'});
+ view.render(initial);layoutButton(view,'Side by side').click();
+ const diff=view.root.querySelector('.git-diff');
+ assert.equal(diff.classList.contains('side-by-side'),true);
+ assert.equal(view.root.querySelector('.git-view-files').parentNode,view.root.querySelector('.git-view-sidebar'));
+ assert.equal(view.root.querySelector('.git-view-commits').parentNode,view.root.querySelector('.git-view-sidebar'));
+ assert.match(diff.textContent,/<img src=x onerror=alert\(1\)>/);assert.equal(diff.querySelectorAll('img').length,0);
+ const rows=diff.querySelectorAll('.git-split-line');
+ assert.equal(rows[0].children.length,2);assert.equal(rows[0].children[0].querySelector('.git-code').textContent,'old');
+ assert.equal(rows[0].children[1].querySelector('.git-code').textContent,'new');
+ assert.equal(control(view,'Previous difference').disabled,true);
+ control(view,'Next difference').click();
+ assert.equal(rows[2].revealed,1);assert.equal(rows[2].classList.contains('current-difference'),true);
+ assert.equal(control(view,'Next difference').disabled,true);
+ diff.scrollTop=120;view.render({...initial,version:2});
+ assert.equal(diff.querySelectorAll('.git-split-line')[2],rows[2]);assert.equal(diff.scrollTop,120);
+ assert.match(view.root.querySelector('.git-diff-position').textContent,/2 \/ 2/);
+ layoutButton(view,'Unified').click();
+ assert.equal(diff.classList.contains('side-by-side'),false);
+ assert.match(view.root.querySelector('.git-diff-position').textContent,/2 \/ 2/);
+ assert.equal(view.root.querySelector('.git-view-files').parentNode,view.root.querySelector('.git-detail-panes'));
+});
+
+test('file toolbar follows displayed paths, guards loading and keyboard modifiers, and resets difference selection',()=>{
+ const view=viewer(),initial=state({files:[file('z.go'),file('a.go'),{...file('a.go'),group:'Staged'}],file:1,
+  diff:'@@ -1,3 +1,3 @@\n-old\n+new\n same\n-old\n+new'});
+ view.render(initial);
+ assert.equal(control(view,'Previous file').disabled,true);assert.equal(control(view,'Next file').disabled,false);
+ assert.match(view.root.querySelector('.git-file-position').textContent,/1 \/ 2 files/);
+ assert.equal(key(view.root,'ArrowDown',{altKey:true}),true);
+ assert.match(view.root.querySelector('.git-diff-position').textContent,/2 \/ 2/);
+ assert.equal(key(view.root,'ArrowRight',{altKey:true,metaKey:true}),false);
+ assert.equal(key(view.root,'ArrowRight',{altKey:true,target:{tagName:'INPUT'}}),false);
+ key(view.root,'ArrowRight',{altKey:true});
+ assert.equal(view.requests.at(-1).file,0);assert.equal(view.requests.at(-1).version,1);
+ view.render({...initial,version:2,loading:true});
+ assert.equal(control(view,'Next file').disabled,true);control(view,'Next file').click();
+ key(view.root,'ArrowLeft',{altKey:true});assert.equal(view.requests.length,1);
+ view.render({...initial,version:2,file:0});
+ assert.match(view.root.querySelector('.git-diff-position').textContent,/1 \/ 2/);
+ assert.equal(control(view,'Next file').disabled,true);control(view,'Previous file').click();assert.equal(view.requests.at(-1).file,1);
+});
+
+test('branch overview opens split layout, retains individual commit selection and handles empty or unavailable comparisons',()=>{
+ const view=viewer(),initial=state({kind:'branch',head:'head',commit:'commit',commits:[{id:'commit',subject:'Change'}],branchDiff:{base:'base',target:'origin/develop'}});
+ view.render(initial);view.root.querySelector('.git-branch-diff').click();
+ assert.equal(view.requests.at(-1).operation,'branch-diff');
+ assert.equal(view.root.querySelector('.git-diff').classList.contains('side-by-side'),true);
+ view.render({...initial,version:2,allChanges:true,commit:'',parent:'base'});
+ assert.equal(view.root.querySelector('.git-branch-diff').attrs['aria-pressed'],'true');
+ assert.equal(view.root.querySelector('.git-commit').attrs['aria-selected'],'false');
+ assert.match(view.root.querySelector('.git-commit-detail').textContent,/All branch changes.*origin\/develop.*Committed changes only/);
+ view.root.querySelector('.git-commit').click();assert.equal(view.requests.at(-1).commit,'commit');
+ view.render({...initial,version:3,allChanges:true,commit:'',files:[],file:-1,diff:''});
+ assert.match(view.root.querySelector('.git-detail-empty').textContent,/No branch changes/);
+ assert.equal(control(view,'Next difference').disabled,true);assert.equal(control(view,'Next file').disabled,true);
+ view.render({...initial,version:4,branchDiff:{note:'Base unavailable'}});
+ assert.equal(view.root.querySelector('.git-branch-diff').disabled,true);
+ assert.equal(view.root.querySelector('.git-branch-diff').title,'Base unavailable');
+});
+
+test('History offers independent branch and full history scopes for aggregate and individual diffs',()=>{
+ const view=viewer(),initial=state({kind:'branch',head:'head',commit:'',allChanges:true,branchOnly:true,branchCommits:2,
+  branchDiff:{base:'base',target:'origin/develop'},commits:[{id:'local',subject:'Local branch work',presence:'outgoing'},{id:'published',subject:'Published branch work',presence:'shared'}]});
+ view.render(initial);
+ assert.match(view.root.querySelector('.git-view-context').textContent,/2 branch commits.*common ancestor with origin\/develop/);
+ assert.match(view.root.querySelector('.git-view-context').title,/Includes published commits; excludes shared ancestors and remote-only/);
+ assert.equal(view.root.querySelector('.git-history-divider'),null);
+ assert.equal(view.root.querySelector('.git-view-commits').querySelector('.git-scroll-list').attrs['aria-label'],'Branch commits');
+ const scope=view.root.querySelector('.git-history-scope'),history=view.root.querySelector('.git-full-history'),branch=view.root.querySelector('.git-branch-history');
+ assert.equal(scope.hidden,false);assert.equal(branch.attrs['aria-pressed'],'true');assert.equal(history.attrs['aria-pressed'],'false');
+ view.root.querySelectorAll('.git-commit')[1].click();assert.equal(view.requests.at(-1).commit,'published');
+ view.render({...initial,version:2,allChanges:false,commit:'published'});
+ assert.match(view.root.querySelector('.git-view-context').textContent,/2 branch commits/);
+ assert.equal(view.root.querySelectorAll('.git-commit').length,2);assert.equal(scope.hidden,false);
+ history.click();assert.equal(view.requests.at(-1).operation,'history-scope');assert.equal(view.requests.at(-1).scope,'full');
+ view.render({...initial,version:3,branchOnly:false,allChanges:false,commit:'published'});
+ assert.equal(scope.hidden,false);assert.equal(history.attrs['aria-pressed'],'true');assert.equal(branch.attrs['aria-pressed'],'false');
+ assert.equal(view.root.querySelector('.git-view-commits').querySelector('.git-scroll-list').attrs['aria-label'],'Full history');
+ assert.ok(view.root.querySelector('.git-history-divider'));
+ branch.click();assert.equal(view.requests.at(-1).operation,'history-scope');assert.equal(view.requests.at(-1).scope,'branch');
+ view.render({...initial,version:4,allChanges:false,commit:'local'});
+ assert.equal(branch.attrs['aria-pressed'],'true');assert.equal(view.root.querySelector('.git-branch-diff').attrs['aria-pressed'],'false');
+ view.render({...initial,version:5,loading:true});assert.equal(branch.disabled,true);assert.equal(history.disabled,true);
+ const requests=view.requests.length;history.click();assert.equal(view.requests.length,requests);
+ view.render(state({version:6,kind:'edits'}));assert.equal(scope.hidden,true);
+});
+
+test('empty or unavailable branch ranges never imply a full repository list',()=>{
+ const view=viewer(),initial=state({kind:'branch',allChanges:true,branchOnly:true,branchCommits:0,
+  branchDiff:{base:'base',target:'origin/main'},commits:[],files:[],file:-1,diff:''});
+ view.render(initial);
+ assert.match(view.root.querySelector('.git-view-context').textContent,/0 branch commits/);
+ assert.match(view.root.querySelector('.git-view-commits').textContent,/No commits added since the branch base/);
+ view.render({...initial,version:2,branchCommits:null,error:'Comparison unavailable',branchDiff:{note:'No base'}});
+ assert.doesNotMatch(view.root.querySelector('.git-view-context').textContent,/0 branch commits/);
+ assert.match(view.root.querySelector('.git-view-commits').textContent,/Branch commits unavailable/);
+ assert.equal(view.root.querySelector('.git-full-history').disabled,false);
+});
+
+test('combined conflicts fall back to readable unified text without navigating invented differences',()=>{
+ const view=viewer(),initial=state();view.render(initial);layoutButton(view,'Side by side').click();
+ view.render({...initial,version:2,diff:'@@@ -1 -1 +1 @@@\n++<conflict>'});
+ assert.equal(view.root.querySelector('.git-diff').classList.contains('side-by-side'),false);
+ assert.equal(layoutButton(view,'Side by side').disabled,true);
+ assert.match(view.root.querySelector('.git-diff').textContent,/\+\+<conflict>/);
+ assert.equal(control(view,'Next difference').disabled,true);
+});
+
+test('split view updates revision labels without replacing unchanged lines and retains meaningful metadata',()=>{
+ const view=viewer(),initial=state({kind:'branch',allChanges:true,head:'head-one',parent:'base-one',branchDiff:{target:'origin/main',base:'base-one'},
+  diff:'diff --git a/old b/new\nindex 123..456 100644\n--- a/old\n+++ b/new\nrename from old\nrename to new\n@@ -1 +1 @@\n-old\n+new'});
+ view.render(initial);layoutButton(view,'Side by side').click();
+ const diff=view.root.querySelector('.git-diff'),row=diff.querySelector('.git-split-line');
+ assert.doesNotMatch(diff.textContent,/diff --git|index 123|--- a\/old|\+\+\+ b\/new/);
+ assert.match(diff.textContent,/rename from old.*rename to new/);
+ view.render({...initial,version:2,head:'head-two',parent:'base-two'});
+ assert.equal(diff.querySelector('.git-split-line'),row);
+ assert.match(view.root.querySelector('.git-diff-sides').textContent,/base-two.*head-two/);
+ assert.match(view.root.querySelector('.git-view-status').textContent,/common ancestor with origin\/main/);
+});
 
 test('arrow selection keeps history rows and surrounding text steady while the diff loads',()=>{
  const view=viewer(),initial=state({kind:'branch',commit:'a',message:'First commit',tracking:'origin/main',incomingCount:0,

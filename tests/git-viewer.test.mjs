@@ -4,7 +4,7 @@ import {readFile} from 'node:fs/promises';
 let source=await readFile(new URL('../cmd/devjay/frontend/git-viewer.js',import.meta.url),'utf8');
 const editorSource=await readFile(new URL('../cmd/devjay/frontend/file-editor.js',import.meta.url),'utf8');
 source=source.replace('./file-editor.js',`data:text/javascript;base64,${Buffer.from(editorSource).toString('base64')}`);
-const {diffRows,summarizeFiles,remoteHistoryContext,localHistoryContext,commitPresenceLabel,branchHistoryContext,viewCategory,sameDiffSelection}=await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
+const {diffRows,splitDiff,changedText,summarizeFiles,remoteHistoryContext,localHistoryContext,commitPresenceLabel,branchHistoryContext,viewCategory,sameDiffSelection}=await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
 test('unified diff rows retain independent old and new line numbers',()=>{
  const rows=diffRows('--- a/file\n+++ b/file\n@@ -3,2 +3,3 @@\n context\n-old\n+new\n+added\n\\ No newline at end of file');
  assert.deepEqual(rows.slice(3,7).map(r=>[r.kind,r.old,r.current]),[['context',3,3],['delete',4,''],['add','',4],['add','',5]]);
@@ -19,6 +19,33 @@ test('headers, binary changes, combined conflicts, and HTML-looking code remain 
 test('code resembling a file header remains a numbered addition or deletion inside a hunk',()=>{
  const rows=diffRows('@@ -1 +1 @@\n--- old text\n+++ new text');
  assert.deepEqual(rows.slice(1).map(r=>[r.kind,r.old,r.current]),[['delete',1,''],['add','',1]]);
+});
+
+test('split diff pairs replacements, pads one-sided lines and counts distinct changes within a hunk',()=>{
+ const diff=splitDiff('@@ -10,5 +10,6 @@\n context\n-old one\n-old two\n+new one\n context\n+added one\n+added two\n context');
+ assert.equal(diff.changes,2);
+ const changes=diff.rows.filter(row=>row.kind==='change');
+ assert.deepEqual(changes.map(row=>[row.change,row.before?.old,row.after?.current]),[[0,11,11],[0,12,undefined],[1,undefined,13],[1,undefined,14]]);
+ assert.deepEqual(diff.rows.filter(row=>row.kind==='context').map(row=>[row.before.old,row.after.current]),[[10,10],[13,12],[14,15]]);
+ assert.deepEqual(diff.unified.filter(row=>['add','delete'].includes(row.kind)).map(row=>row.change),[0,0,0,1,1]);
+});
+
+test('split diff preserves no-newline annotations, literal source, additions and deletions',()=>{
+ const diff=splitDiff('@@ -1 +1 @@\n-<script>old</script>\n\\ No newline at end of file\n+<script>new</script>\n\\ No newline at end of file');
+ assert.equal(diff.changes,1);
+ assert.equal(diff.rows[1].before.noNewline,true);assert.equal(diff.rows[1].after.noNewline,true);
+ assert.equal(diff.rows[1].after.line,'+<script>new</script>');
+ assert.equal(splitDiff('@@ -0,0 +1 @@\n+new').rows[1].before,undefined);
+ assert.equal(splitDiff('@@ -1 +0,0 @@\n-removed').rows[1].after,undefined);
+ for(const text of ['', 'Binary files a/a and b/a differ', 'old mode 100644\nnew mode 100755','rename from old\nrename to new'])assert.equal(splitDiff(text).changes,0);
+ assert.equal(splitDiff('@@@ -1 -1 +1 @@@\n++conflict').supported,false);
+});
+
+test('inline change highlights only differing text, including Unicode and empty sides',()=>{
+ assert.deepEqual(changedText('return old(value);','return new(value);'),[['return ','old','(value);'],['return ','new','(value);']]);
+ assert.deepEqual(changedText('a😀z','a🌍z'),[['a','😀','z'],['a','🌍','z']]);
+ assert.deepEqual(changedText('','added'),[['','',''],['','added','']]);
+ assert.deepEqual(changedText('same','same'),[['same','',''],['same','','']]);
 });
 
 test('summary counts distinct paths and sums staged/unstaged lines separately',()=>{
@@ -63,6 +90,13 @@ test('category counts distinguish empty, unavailable, and full remote history',(
  assert.match(viewCategory({upstream:'abc',counts:{remote:null}},'remote').description,/unavailable/);
  // A failed load or absent data must never imply a known empty category.
  assert.equal(viewCategory({error:'Checkout unavailable'},'edits').empty,false);
+ const history={branchOnly:true,branchCommits:2,counts:{branch:248}};
+ assert.equal(viewCategory(history,'branch').count,'2');
+ assert.match(viewCategory(history,'branch').description,/2 commits added since the branch base/);
+ assert.equal(viewCategory({...history,branchOnly:false},'branch').count,'248');
+ assert.match(viewCategory({...history,branchOnly:false},'branch').description,/full history/);
+ assert.equal(viewCategory({...history,branchCommits:null},'branch').count,'—');
+ assert.match(viewCategory({...history,branchCommits:null},'branch').description,/Full history/);
 });
 
 
