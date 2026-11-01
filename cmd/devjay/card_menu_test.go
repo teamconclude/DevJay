@@ -102,10 +102,11 @@ func TestCardMenuActionLabels(t *testing.T) {
 		req    cardMenuRequest
 		labels [4]string
 	}{
-		{cardMenuRequest{Kind: "edits"}, [4]string{"View changes", "", "DevJay settings…", "Quit DevJay"}},
-		{cardMenuRequest{Kind: "branch"}, [4]string{"View branch history", "", "DevJay settings…", "Quit DevJay"}},
-		{cardMenuRequest{Kind: "edits", hasViewer: true}, [4]string{"View changes", "View changes in new window", "DevJay settings…", "Quit DevJay"}},
-		{cardMenuRequest{Kind: "branch", hasViewer: true}, [4]string{"View branch history", "View branch history in new window", "DevJay settings…", "Quit DevJay"}},
+		{cardMenuRequest{Kind: "auto"}, [4]string{"View branch", "", "DevJay settings…", "Quit DevJay"}},
+		{cardMenuRequest{Kind: "edits"}, [4]string{"View branch", "", "DevJay settings…", "Quit DevJay"}},
+		{cardMenuRequest{Kind: "branch"}, [4]string{"View branch", "", "DevJay settings…", "Quit DevJay"}},
+		{cardMenuRequest{Kind: "edits", hasViewer: true}, [4]string{"View branch", "View branch in new window", "DevJay settings…", "Quit DevJay"}},
+		{cardMenuRequest{Kind: "branch", hasViewer: true}, [4]string{"View branch", "View branch in new window", "DevJay settings…", "Quit DevJay"}},
 		{cardMenuRequest{Kind: "site"}, [4]string{"Go to Site desktop", "", "DevJay settings…", "Quit DevJay"}},
 		{cardMenuRequest{BundleID: "com.jetbrains.goland", appName: "GoLand"}, [4]string{"Show GoLand", "", "DevJay settings…", "Quit DevJay"}},
 		{cardMenuRequest{Kind: "local", hasViewer: true}, [4]string{"View local commits", "View local commits in new window", "DevJay settings…", "Quit DevJay"}},
@@ -266,7 +267,7 @@ func TestSitePublishSourceOnlyAuthorizesItsCurrentRebasedBranch(t *testing.T) {
 	}
 }
 
-func TestHeadingMenuChoosesChangesOrHistoryWithoutChangingExplicitTargets(t *testing.T) {
+func TestCardMenuChoosesChangesOrHistoryWithoutChangingGitActionTargets(t *testing.T) {
 	m := &siteManager{}
 	for _, test := range []struct {
 		git  GitStatus
@@ -278,13 +279,18 @@ func TestHeadingMenuChoosesChangesOrHistoryWithoutChangingExplicitTargets(t *tes
 		{GitStatus{Branch: "main", LocalNote: "Could not read local status"}, "edits"},
 		{GitStatus{}, "edits"},
 	} {
-		req := m.resolveCardMenuRequest(cardMenuRequest{Kind: "auto"}, test.git)
-		if req.Kind != test.want {
-			t.Errorf("heading for %#v = %q", test.git, req.Kind)
+		for _, kind := range []string{"auto", "edits", "branch"} {
+			req := m.resolveCardMenuRequest(cardMenuRequest{Kind: kind}, test.git)
+			if got := cardMenuViewKind(req.Kind, test.git); got != test.want {
+				t.Errorf("%s menu for %#v = %q, want %q", kind, test.git, got, test.want)
+			}
+			if req.Kind != kind {
+				t.Fatal("clicked Git action target changed")
+			}
 		}
-		for _, kind := range []string{"edits", "branch", "site"} {
-			if got := m.resolveCardMenuRequest(cardMenuRequest{Kind: kind}, test.git); got.Kind != kind {
-				t.Fatal("explicit target changed")
+		for _, kind := range []string{"site", "local", "remote"} {
+			if got := cardMenuViewKind(kind, test.git); got != kind {
+				t.Fatal("separate navigation target changed")
 			}
 		}
 	}

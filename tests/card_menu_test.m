@@ -44,8 +44,8 @@ static BOOL selectTestItem(NSMenu *menu, SEL selector, NSMenuItem *item, NSPoint
     assert(menu.numberOfItems == (directPublish ? 4 : (singleAction ? 4 : 5) + (rebaseAction ? 1 : 0)));
     if (!directPublish) {
         NSInteger navigation = rebaseAction ? 1 : 0;
-        assert([[menu itemAtIndex:navigation].title isEqualToString:mergedAction ? @"Open PR #42 in browser" : singleAction ? (singleTitle ?: @"Show GoLand") : @"View changes"]);
-        if (!singleAction) assert([[menu itemAtIndex:navigation + 1].title isEqualToString:mergedAction ? @"Open PR #42 in new browser tab" : @"View changes in new window"]);
+        assert([[menu itemAtIndex:navigation].title isEqualToString:mergedAction ? @"Open PR #42 in browser" : singleAction ? (singleTitle ?: @"Show GoLand") : @"View branch"]);
+        if (!singleAction) assert([[menu itemAtIndex:navigation + 1].title isEqualToString:mergedAction ? @"Open PR #42 in new browser tab" : @"View branch in new window"]);
     }
     NSInteger separator = directPublish ? 1 : (singleAction ? 1 : 2) + (rebaseAction ? 1 : 0);
     assert([menu itemAtIndex:separator].separatorItem);
@@ -71,7 +71,7 @@ int main(void) {
         SEL selector = @selector(popUpMenuPositioningItem:atLocation:inView:);
         Method method = class_getInstanceMethod(NSMenu.class, selector);
         IMP original = method_setImplementation(method, (IMP)selectTestItem);
-        const char *first = "View changes", *second = "View changes in new window", *settings = "DevJay settings…", *quit = "Quit DevJay";
+        const char *first = "View branch", *second = "View branch in new window", *settings = "DevJay settings…", *quit = "Quit DevJay";
         expectedPoint = NSMakePoint(22, view.isFlipped ? 41 : 139);
         for (NSInteger index = -1; index < 5; index++) {
             if (index == 2) continue;
@@ -129,7 +129,7 @@ int main(void) {
         syncTitle = @"Push 2 commits…"; rebaseDisabled = NO; chosenIndex = 0;
         assert(devjay_card_menu(window, 22, 41, first, second, settings, quit, syncTitle.UTF8String, "", "Check remote before confirmation.", 0, sitesHidden) == 5);
         assert(popupCount == 23);
-        singleAction = YES; singleTitle = @"View branch history"; syncTitle = @"Replace from remote…";
+        singleAction = YES; singleTitle = @"View branch"; syncTitle = @"Replace from remote…";
         // Omitting the second viewer choice must preserve the Git action tag.
         chosenIndex = 0;
         assert(devjay_card_menu(window, 22, 41, singleTitle.UTF8String, "", settings, quit, syncTitle.UTF8String, "", "Check remote before confirmation.", 0, sitesHidden) == 5);

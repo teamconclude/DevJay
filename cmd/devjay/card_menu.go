@@ -282,16 +282,20 @@ func validAppBundleID(bundle string) bool {
 	return bundle != "" && len(bundle) <= 255 && !strings.ContainsAny(bundle, "\x00\r\n")
 }
 
-// Resolve the heading exception against backend state before showing the menu;
-// keep that visible choice fixed if a later Git reading arrives while it tracks.
-func (m *siteManager) resolveCardMenuRequest(req cardMenuRequest, git GitStatus) cardMenuRequest {
-	if req.Kind == "auto" {
-		req.Kind = "branch"
+// View branch chooses a tab from current local status without changing the
+// clicked metric's identity, which is also used to prepare suggested Git actions.
+func cardMenuViewKind(kind string, git GitStatus) string {
+	if kind == "auto" || kind == "branch" || kind == "edits" {
 		if git.Changes > 0 || git.Conflicts > 0 || git.Branch == "" || git.LocalNote != "" {
-			req.Kind = "edits"
+			return "edits"
 		}
+		return "branch"
 	}
-	req.hasViewer = m.existingViewer(viewerRequest{SiteID: req.SiteID, Kind: req.Kind}) != nil
+	return kind
+}
+
+func (m *siteManager) resolveCardMenuRequest(req cardMenuRequest, git GitStatus) cardMenuRequest {
+	req.hasViewer = m.existingViewer(viewerRequest{SiteID: req.SiteID, Kind: cardMenuViewKind(req.Kind, git)}) != nil
 	return req
 }
 
@@ -312,7 +316,7 @@ func cardMenuLabels(req cardMenuRequest) [4]string {
 	if req.Kind == "site" {
 		return [4]string{"Go to Site desktop", "", "DevJay settings…", "Quit DevJay"}
 	}
-	subject := map[string]string{"edits": "changes", "branch": "branch history", "local": "local commits", "remote": "remote commits"}[req.Kind]
+	subject := map[string]string{"auto": "branch", "edits": "branch", "branch": "branch", "local": "local commits", "remote": "remote commits"}[req.Kind]
 	second := ""
 	if req.hasViewer {
 		second = "View " + subject + " in new window"

@@ -176,7 +176,7 @@ func (m *siteManager) registerCardMenuEvents() {
 						} else if req.Kind == "site" {
 							m.activate(req.SiteID)
 						} else {
-							m.openViewer(viewerRequest{SiteID: req.SiteID, Kind: req.Kind, NewWindow: selected == cardMenuViewNew, Anchor: req.Anchor}, parent, site)
+							m.openViewer(viewerRequest{SiteID: req.SiteID, Kind: cardMenuViewKind(req.Kind, site.Git), NewWindow: selected == cardMenuViewNew, Anchor: req.Anchor}, parent, site)
 						}
 					case cardMenuSettings:
 						m.openSettings()
