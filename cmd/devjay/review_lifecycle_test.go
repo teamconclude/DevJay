@@ -72,6 +72,8 @@ func TestViewerReuseAndClosedParentFallback(t *testing.T) {
 	viewer := &gitViewerWindow{window: &application.WebviewWindow{}, state: &GitView{SiteID: "site", Kind: "edits"}}
 	parent := &application.WebviewWindow{}
 	m := &siteManager{viewers: map[string]*gitViewerWindow{"viewer": viewer}, actionDialogs: map[string]*actionDialog{"dialog": {siteID: "site", parent: viewer.window}}, runtime: map[string]*siteRuntime{"site": {Ready: true, Window: parent}}}
+	child := &gitViewerWindow{parent: viewer.window, state: &GitView{SiteID: "site", Kind: "review"}}
+	m.viewers["child"] = child
 	if m.existingViewer(viewerRequest{SiteID: "site", Kind: "edits"}) != viewer {
 		t.Fatal("duplicate viewer")
 	}
@@ -82,6 +84,9 @@ func TestViewerReuseAndClosedParentFallback(t *testing.T) {
 	m.forgetViewer("viewer")
 	if m.actionDialogs["dialog"].parent != parent {
 		t.Fatal("closed popup parent was retained")
+	}
+	if child.parent != parent {
+		t.Fatal("review retained its closed source window as parent")
 	}
 	if m.existingViewer(viewerRequest{SiteID: "site", Kind: "edits"}) != nil {
 		t.Fatal("closed viewer reused")

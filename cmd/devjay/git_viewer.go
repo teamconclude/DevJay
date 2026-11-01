@@ -43,6 +43,8 @@ type ViewCounts struct {
 	Branch *int `json:"branch"`
 }
 type GitView struct {
+	ReviewEditing  bool            `json:"reviewEditing,omitempty"`
+	Review         *BranchReview   `json:"review,omitempty"`
 	ComparisonOnly bool            `json:"comparisonOnly,omitempty"` // Tracking/Upstream describe a cached comparison, not configured tracking.
 	AllChanges     bool            `json:"allChanges,omitempty"`
 	BranchOnly     bool            `json:"branchOnly,omitempty"` // Keep the branch commit range while inspecting individual commits.
@@ -85,7 +87,7 @@ type GitView struct {
 }
 
 func validViewKind(kind string) bool {
-	return kind == "edits" || kind == "branch" || kind == "local" || kind == "remote"
+	return kind == "edits" || kind == "branch" || kind == "local" || kind == "remote" || kind == "review"
 }
 
 // Explicitly opening History starts with this branch's commits. Refreshes and
@@ -128,12 +130,23 @@ func parseViewFiles(data []byte, group string) ([]ViewFile, error) {
 }
 
 func loadGitView(ctx context.Context, v *GitView, refresh bool) error {
+	if v.Kind == "review" {
+		v.Error = ""
+		base, ignoreWhitespace := "", false
+		if v.Review != nil {
+			base, ignoreWhitespace = v.Review.BaseRef, v.Review.IgnoreWhitespace
+		}
+		return loadBranchReview(ctx, v, base, ignoreWhitespace)
+	}
 	return loadGitViewSelection(ctx, v, refresh, nil)
 }
 
 // Refresh keeps the selected change when it still exists in the refreshed
 // category. Indexes alone are not stable as files and commits are added.
 func refreshGitView(ctx context.Context, v *GitView) error {
+	if v.Kind == "review" {
+		return loadGitView(ctx, v, true)
+	}
 	selection := viewSelection{branch: v.Branch, commit: v.Commit, page: v.Page, count: -1}
 	if count := viewCategoryCount(v); count != nil {
 		selection.count = *count

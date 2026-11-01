@@ -12,21 +12,29 @@ import (
 )
 
 type viewerRequest struct {
-	Anchor    *cardAnchor `json:"anchor,omitempty"`
-	SiteID    string      `json:"siteID"`
-	Kind      string      `json:"kind"`
-	Scope     string      `json:"scope"`
-	Operation string      `json:"operation"`
-	Version   uint64      `json:"version"`
-	Commit    string      `json:"commit"`
-	File      int         `json:"file"`
-	Page      int         `json:"page"`
-	NewWindow bool        `json:"newWindow"`
+	BaseRef          string      `json:"baseRef"`
+	IgnoreWhitespace bool        `json:"ignoreWhitespace"`
+	Token            string      `json:"token"`
+	Content          string      `json:"content"`
+	Editing          bool        `json:"editing"`
+	Anchor           *cardAnchor `json:"anchor,omitempty"`
+	SiteID           string      `json:"siteID"`
+	Kind             string      `json:"kind"`
+	Scope            string      `json:"scope"`
+	Operation        string      `json:"operation"`
+	Version          uint64      `json:"version"`
+	Commit           string      `json:"commit"`
+	File             int         `json:"file"`
+	Page             int         `json:"page"`
+	NewWindow        bool        `json:"newWindow"`
 }
 
 // Each window owns its snapshot, selections, and cancellable read. UI events
 // are routed by Wails' sender, never by a client-supplied Site identifier.
 type gitViewerWindow struct {
+	removeCloseHook  func()
+	reviewEditing    bool
+	reviewSaving     bool
 	editorGeneration uint64
 	editorOpening    bool
 	window           *application.WebviewWindow
@@ -80,6 +88,7 @@ func (m *siteManager) viewerLoad(id string, work func(context.Context, *GitView)
 			r.state = &next
 			r.cancel = nil
 			r.refresh.lastFinished = time.Now()
+			r.reviewSaving = false
 			m.emitViewer(id)
 			m.refreshViewerEditor(id)
 		})
@@ -87,6 +96,9 @@ func (m *siteManager) viewerLoad(id string, work func(context.Context, *GitView)
 }
 func (m *siteManager) forgetViewer(id string) {
 	if r := m.viewers[id]; r != nil {
+		if r.reviewEditing {
+			m.lifecycle.finishDraft()
+		}
 		r.cancelViewerRefresh()
 		if r.cancel != nil {
 			r.cancel()
@@ -100,12 +112,30 @@ func (m *siteManager) forgetViewer(id string) {
 				}
 			}
 		}
+		for _, viewer := range m.viewers {
+			if viewer != r && viewer.parent == r.window {
+				viewer.parent, viewer.anchor = m.strip, nil
+				if site := m.runtime[viewer.state.SiteID]; site != nil && site.Ready {
+					viewer.parent = site.Window
+				}
+			}
+		}
 		m.forgetView(id)
 		delete(m.viewers, id)
 	}
 }
 func (m *siteManager) closeViewer(id string) {
 	if r := m.viewers[id]; r != nil {
+		if r.reviewEditing || r.reviewSaving {
+			// Site/Profile lifecycle may remove the original parent while this
+			// window stays open to preserve its unsaved text.
+			r.parent, r.anchor = nil, nil
+			m.reviewCloseError(id, "Save or cancel your edits before closing this window.")
+			return
+		}
+		if r.removeCloseHook != nil {
+			r.removeCloseHook()
+		}
 		m.forgetViewer(id)
 		r.window.Close()
 	}
@@ -138,8 +168,12 @@ func (m *siteManager) openViewer(req viewerRequest, parent *application.WebviewW
 	}
 	m.viewerSequence++
 	id := fmt.Sprintf("git-viewer-%d", m.viewerSequence)
+	title, url := "Changes", "/?viewer="+id
+	if req.Kind == "review" {
+		title, url = "Branch review", url+"&review=1"
+	}
 	w := m.app.Window.NewWithOptions(application.WebviewWindowOptions{
-		Name: id, Title: "DevJay · " + filepath.Base(site.Site.Path) + " · Changes", URL: "/?viewer=" + id,
+		Name: id, Title: "DevJay · " + filepath.Base(site.Site.Path) + " · " + title, URL: url,
 		Width: 1100, Height: 740, MinWidth: 720, MinHeight: 460, Hidden: true,
 		BackgroundColour: application.NewRGB(20, 24, 32),
 		Mac:              application.MacWindow{CollectionBehavior: application.MacWindowCollectionBehaviorMoveToActiveSpace | application.MacWindowCollectionBehaviorFullScreenNone, TabbingMode: application.MacWindowTabbingModeDisallowed},
@@ -159,15 +193,24 @@ func (m *siteManager) openViewer(req viewerRequest, parent *application.WebviewW
 			}
 		})
 	})
-	w.RegisterHook(events.Common.WindowClosing, func(*application.WindowEvent) {
-		m.send(func() { m.forgetViewer(id) })
+	m.viewers[id].removeCloseHook = w.RegisterHook(events.Common.WindowClosing, func(e *application.WindowEvent) {
+		if m.app.Context().Err() != nil {
+			return
+		}
+		e.Cancel()
+		m.send(func() { m.requestCloseViewer(id) })
 	})
-	m.viewerLoad(id, func(ctx context.Context, v *GitView) error { return loadGitView(ctx, v, true) })
+	m.viewerLoad(id, func(ctx context.Context, v *GitView) error {
+		if req.Kind == "review" {
+			return loadBranchReview(ctx, v, req.BaseRef, req.IgnoreWhitespace)
+		}
+		return loadGitView(ctx, v, true)
+	})
 }
 
 func (m *siteManager) viewerMode(id, kind string) {
 	r := m.viewers[id]
-	if r == nil || !validViewKind(kind) {
+	if r == nil || !validViewKind(kind) || kind == "review" || r.state.Kind == "review" {
 		return
 	}
 	// Publish the requested mode immediately. Another card click can then
@@ -232,6 +275,20 @@ func (m *siteManager) registerViewerEvents() {
 				m.emitViewer(id)
 				return
 			}
+			if req.Operation == "review-open" {
+				if site := m.runtime[r.state.SiteID]; site != nil && site.Ready {
+					open := viewerRequest{SiteID: r.state.SiteID, Kind: "review", NewWindow: true}
+					if r.state.Review != nil {
+						open.BaseRef, open.IgnoreWhitespace = r.state.Review.BaseRef, r.state.Review.IgnoreWhitespace
+					}
+					m.openViewer(open, r.window, site)
+				}
+				return
+			}
+			if r.state.Kind == "review" {
+				m.handleReviewRequest(id, req)
+				return
+			}
 			switch req.Operation {
 			case "file-open":
 				m.openViewerFile(id)
@@ -270,7 +327,7 @@ func (m *siteManager) registerViewerEvents() {
 	})
 	m.app.Event.On("devjay:viewer-close", func(e *application.CustomEvent) {
 		id := e.Sender
-		m.send(func() { m.closeViewer(id) })
+		m.send(func() { m.requestCloseViewer(id) })
 	})
 }
 
@@ -280,7 +337,7 @@ func (m *siteManager) existingViewer(req viewerRequest) *gitViewerWindow {
 	}
 	var selected *gitViewerWindow
 	for _, viewer := range m.viewers {
-		if viewer.state.SiteID != req.SiteID {
+		if viewer.state.SiteID != req.SiteID || (viewer.state.Kind == "review") != (req.Kind == "review") {
 			continue
 		}
 		if selected == nil || (viewer.state.Kind == req.Kind && selected.state.Kind != req.Kind) ||

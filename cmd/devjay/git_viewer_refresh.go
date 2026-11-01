@@ -56,5 +56,23 @@ func gitViewContentEqual(before, after GitView) bool {
 	before.Captured, after.Captured = "", ""
 	before.Version, after.Version = 0, 0
 	before.Editor, after.Editor = nil, nil
+	before.Review = reviewVisibleContent(before.Review)
+	after.Review = reviewVisibleContent(after.Review)
 	return reflect.DeepEqual(before, after)
+}
+
+// Filesystem access times and allocation of fresh FileInfo objects are private
+// save guards. They must not rebuild an otherwise unchanged review document.
+func reviewVisibleContent(review *BranchReview) *BranchReview {
+	if review == nil {
+		return nil
+	}
+	copy := *review
+	copy.rootInfo = nil
+	if review.Selected != nil {
+		selected := *review.Selected
+		selected.info = nil
+		copy.Selected = &selected
+	}
+	return &copy
 }

@@ -1,4 +1,6 @@
 import { mountFileEditor } from './file-editor.js';
+import { syntaxLines } from './syntax-highlight.js';
+import { filterSearchRows, appendSearchSyntax } from './diff-search.js';
 // Diff contents are always text nodes, never HTML. Line numbers remain aligned
 // with unified hunks; combined conflict hunks are displayed verbatim.
 export function diffRows(text) {
@@ -45,6 +47,37 @@ export function changedText(before, after) {
   while(end<left.length-start&&end<right.length-start&&left[left.length-1-end]===right[right.length-1-end])end++;
   const parts=chars=>[chars.slice(0,start).join(''),chars.slice(start,chars.length-end).join(''),end?chars.slice(-end).join(''):''];
   return [parts(left),parts(right)];
+}
+
+// A patch does not include the whole file. Keep before/after lexer states
+// independent inside each hunk, and reset at omitted sections rather than
+// inferring their contents or carrying a comment through an unknown gap.
+export function patchSyntaxRows(rows, path, oldPath = path) {
+  const result = new Map();
+  let before = [], after = [], remaining = 30000;
+  const flush = () => {
+    for (const [side, source, name] of [['before', before, oldPath], ['after', after, path]]) {
+      if (!source.length || remaining <= 0) continue;
+      const lines = syntaxLines(name, source.map(row => row.line.slice(1)).join('\n'));
+      for (let index = 0; index < source.length; index++) {
+        const tokens = lines[index];
+        remaining -= tokens?.length || 0;
+        if (remaining < 0) break;
+        const values = result.get(source[index]) || {};
+        values[side] = tokens; result.set(source[index], values);
+      }
+    }
+    before = []; after = [];
+  };
+  for (const row of rows) {
+    if (row.kind === 'hunk') flush();
+    else if (row.kind === 'delete') before.push(row);
+    else if (row.kind === 'add') after.push(row);
+    else if (row.kind === 'context') { before.push(row); after.push(row); }
+    else if (row.line !== '\\ No newline at end of file') flush();
+  }
+  flush();
+  return result;
 }
 
 // A path can appear in both staged and unstaged sections. Count it once in
@@ -202,9 +235,22 @@ export function mountGitViewer(root, request, suggestions, openBranches) {
     };
     tab.append(el('span','',label),el('span','git-tab-count','…'));tabs.append(tab);
   }
-  const refresh=button('Refresh',()=>send('refresh'));
+  const toolbarIcon=path=>{
+    const icon=document.createElementNS('http://www.w3.org/2000/svg','svg');
+    for(const [name,value] of Object.entries({viewBox:'0 0 16 16',width:16,height:16,fill:'none',stroke:'currentColor','stroke-width':1.5,'stroke-linecap':'round','stroke-linejoin':'round','aria-hidden':'true',focusable:'false'}))icon.setAttribute(name,value);
+    const shape=document.createElementNS('http://www.w3.org/2000/svg','path');shape.setAttribute('d',path);icon.append(shape);return icon;
+  };
+  const refresh=button('',()=>send('refresh'),'git-refresh');
+  refresh.append(toolbarIcon('M13.2 5.5A5.5 5.5 0 1 0 13.5 9M13.2 1.5v4h-4'));
+  refresh.setAttribute('aria-label','Refresh');
   refresh.title='Reread files and the last fetched history. Push and Update check the remote before confirmation.';
-  header.append(title,branchRow,...(suggestions?[suggestions]:[]),refresh);
+  const reviewBranch=button('',()=>send('review-open'),'git-review-branch');
+  reviewBranch.append(toolbarIcon('M1.5 8C4.5 2 11.5 2 14.5 8C11.5 14 4.5 14 1.5 8ZM10 8A2 2 0 1 1 6 8A2 2 0 0 1 10 8Z'),el('span','','View diffs'));
+  reviewBranch.setAttribute('aria-label','View diffs');
+  reviewBranch.title='Open a focused window comparing the branch fork point with current files, including uncommitted edits';
+  branchName.append(refresh);
+  const tools=el('div','git-view-tools');tools.append(reviewBranch);
+  header.append(title,branchRow,...(suggestions?[suggestions]:[]),tools);
   const context=el('div','git-view-context');
   const error=el('div','git-view-error');error.setAttribute('role','status');error.hidden=true;
   const panes=el('div','git-view-panes');
@@ -252,6 +298,22 @@ export function mountGitViewer(root, request, suggestions, openBranches) {
   const unifiedButton=button('Unified',()=>setLayout('unified'));
   const splitButton=button('Side by side',()=>setLayout('split'));
   layoutControls.append(unifiedButton,splitButton);diffToolbar.append(differenceControls,fileControls,layoutControls);
+  const findBar=el('div','diff-find');findBar.hidden=true;
+  const findInput=el('input','diff-find-input');findInput.type='search';findInput.maxLength=512;findInput.placeholder='Find in diff…';findInput.setAttribute('aria-label','Find text in diff');
+  const findStatus=el('span','diff-find-status');findStatus.setAttribute('role','status');
+  const findClose=button('×',closeFind,'diff-find-close');findClose.title='Close find (Escape)';findClose.setAttribute('aria-label',findClose.title);
+  findBar.append(findInput,findStatus,findClose);
+  let findScroll=null;
+  function refreshFind(){
+    if(!model||!(renderedState||state))return;
+    if(findInput.value&&!findScroll)findScroll={top:diff.scrollTop,left:diff.scrollLeft};
+    paintDiff(renderedState||state);
+    if(findInput.value)diff.scrollTop=0;
+    else if(findScroll){diff.scrollTop=findScroll.top;diff.scrollLeft=findScroll.left;findScroll=null;}
+  }
+  function closeFind(){findBar.hidden=true;findInput.value='';refreshFind();diff.focus({preventScroll:true});}
+  findInput.oninput=refreshFind;
+  const visibleDifferences=()=>changeNodes.flatMap((node,index)=>node?[index]:[]);
   const sides=el('div','git-diff-sides'),beforeLabel=el('span',''),afterLabel=el('span','');sides.append(beforeLabel,afterLabel);
   function placeFiles(){
     const inSidebar=state?.kind==='edits'||layout==='split';
@@ -262,11 +324,12 @@ export function mountGitViewer(root, request, suggestions, openBranches) {
   function updateDiffControls(){
     const loading=!state||state.loading, count=model?.changes||0;
     const index=fileRows.findIndex(row=>row.selected);
-    previousDiff.disabled=loading||difference<=0;
-    nextDiff.disabled=loading||!count||difference>=count-1;
+    const visible=visibleDifferences();
+    previousDiff.disabled=loading||!visible.some(index=>index<difference);
+    nextDiff.disabled=loading||!visible.some(index=>index>difference);
     previousFile.disabled=loading||index<=0;
     nextFile.disabled=loading||index<0||index>=fileRows.length-1;
-    differenceStatus.textContent=count?`${difference+1} / ${count} ${count===1?'difference':'differences'}`:'No text differences';
+    differenceStatus.textContent=count&&difference>=0?`${difference+1} / ${count} ${count===1?'difference':'differences'}`:findInput.value?'No visible differences':'No text differences';
     fileStatus.textContent=`${index<0?0:index+1} / ${fileRows.length}${state?.filesLimited?'+':''} files`;
     unifiedButton.disabled=loading;splitButton.disabled=loading||model?.supported===false;
     splitButton.title=model?.supported===false?'Combined conflict diffs are shown in unified form.':'Show aligned before and after versions';
@@ -277,7 +340,8 @@ export function mountGitViewer(root, request, suggestions, openBranches) {
   }
   function moveDifference(direction){
     if(!state||state.loading||!model?.changes)return;
-    const next=Math.max(0,Math.min(model.changes-1,difference+direction));
+    const visible=visibleDifferences(),next=(direction<0?visible.reverse():visible).find(index=>direction<0?index<difference:index>difference);
+    if(next===undefined)return;
     difference=next;markDifference();updateDiffControls();
     changeNodes[difference]?.scrollIntoView({block:'center',inline:'nearest'});
   }
@@ -295,15 +359,24 @@ export function mountGitViewer(root, request, suggestions, openBranches) {
   }
   function paintDiff(v){
     const split=layout==='split'&&model?.supported!==false;
+    const file=v.files?.[v.file];
+    const syntax=model?.supported===false?new Map():patchSyntaxRows(model?.unified||[],file?.path||'',file?.oldPath||file?.path||'');
     diff.classList.toggle('side-by-side',split);sides.hidden=!split||!v.files?.[v.file];
     updateDiffLabels(v);
-    const fragment=document.createDocumentFragment();changeNodes=[];
+    const fragment=document.createDocumentFragment(),highlightBudget={remaining:2048};changeNodes=[];
     const register=(line,row)=>{
       if(row.change===undefined)return;
       line.classList.add('git-difference');line.dataset.change=String(row.change);
       if(!changeNodes[row.change])changeNodes[row.change]=line;
     };
-    for(const row of (split?model?.rows:model?.unified)||[]){
+    const query=findInput.value||'';
+    const search=filterSearchRows((split?model?.rows:model?.unified)||[],query,row=>{
+      if(split&&(row.kind==='change'||row.kind==='context'))return [row.before,row.after].filter(Boolean).map(side=>side.line.slice(1));
+      return ['context','add','delete'].includes(row.kind)?[row.line.slice(1)]:model?.supported===false?[row.line||'']:[];
+    });
+    findStatus.textContent=query?(search.matchingRows?`${search.matchingRows} matching ${search.matchingRows===1?'line':'lines'}`:'No matches'):'Search current diff';
+    for(const row of search.rows){
+      if(row.kind==='search-gap'){fragment.append(el('div','diff-search-gap',`… ${row.count} lines hidden …`));continue;}
       // File paths and revision labels are already visible above the panes.
       // Keep meaningful metadata (renames, modes, binary notices) in the diff.
       if(split&&row.kind==='meta'&&/^(diff --git |index |--- |\+\+\+ )/.test(row.line))continue;
@@ -315,8 +388,14 @@ export function mountGitViewer(root, request, suggestions, openBranches) {
           const number=el('span','git-line-number',source?(side==='before'?source.old:source.current):'');number.setAttribute('aria-hidden','true');
           const code=el('span','git-code');
           if(source){
-            if(parts){code.append(el('span','',parts[index][0]),el('mark','git-inline-change',parts[index][1]),el('span','',parts[index][2]));}
-            else code.textContent=source.line.slice(1);
+            const text=source.line.slice(1),tokens=syntax.get(source)?.[side];
+            if(parts){
+              let offset=0;
+              parts[index].forEach((part,partIndex)=>{
+                const node=el(partIndex===1?'mark':'span',partIndex===1?'git-inline-change':'');
+                appendSearchSyntax(node,text,tokens,query,offset,offset+part.length,highlightBudget);offset+=part.length;code.append(node);
+              });
+            }else appendSearchSyntax(code,text,tokens,query,0,text.length,highlightBudget);
             if(source.noNewline)code.append(el('span','git-no-newline',' ⏎ No newline at end of file'));
           }
           cell.append(number,code);line.append(cell);
@@ -326,10 +405,19 @@ export function mountGitViewer(root, request, suggestions, openBranches) {
         const line=el('div',`git-diff-line ${row.kind}`);register(line,row);
         const left=el('span','git-line-number',row.old),right=el('span','git-line-number',row.current);
         left.setAttribute('aria-hidden','true');right.setAttribute('aria-hidden','true');
-        line.append(left,right,el('span','git-code',row.line));fragment.append(line);
+        const code=el('span','git-code');
+        if(['context','add','delete'].includes(row.kind)){
+          code.append(el('span','git-diff-prefix',row.line.slice(0,1)));
+          appendSearchSyntax(code,row.line.slice(1),syntax.get(row)?.[row.kind==='delete'?'before':'after'],query,0,row.line.length-1,highlightBudget);
+        }else if(model?.supported===false)appendSearchSyntax(code,row.line,null,query,0,row.line.length,highlightBudget);
+        else code.textContent=row.line;
+        line.append(left,right,code);fragment.append(line);
       }
     }
-    diff.replaceChildren(fragment);markDifference();updateDiffControls();
+    if(query&&!search.matchingRows)fragment.append(el('p','diff-search-empty','No matches in this diff.'));
+    diff.replaceChildren(fragment);
+    if(!changeNodes[difference])difference=visibleDifferences()[0]??-1;
+    markDifference();updateDiffControls();
   }
   function updateDiffLabels(v){
     const file=v.files?.[v.file];
@@ -337,19 +425,28 @@ export function mountGitViewer(root, request, suggestions, openBranches) {
       v.parent?`Before · ${v.parent.slice(0,8)}`:'Empty tree';
     afterLabel.textContent=v.kind==='edits'?(file?.group==='Staged'?'Index':'Working tree'):`After · ${((v.allChanges?v.head:v.commit)||'').slice(0,8)}`;
   }
-  root.addEventListener('keydown',event=>{
-    if(!event.altKey||event.ctrlKey||event.metaKey||event.shiftKey||event.isComposing||event.defaultPrevented)return;
+  const handleKeydown=event=>{
+    if(event.isComposing||event.defaultPrevented)return;
+    if(event.metaKey&&!event.altKey&&!event.ctrlKey&&!event.shiftKey&&event.key?.toLowerCase()==='f'){
+      event.preventDefault();findBar.hidden=false;findInput.focus();findInput.select();return;
+    }
+    if(event.key==='Escape'&&!findBar.hidden){event.preventDefault();closeFind();return;}
+    if(!event.altKey||event.ctrlKey||event.metaKey||event.shiftKey)return;
     if(['INPUT','TEXTAREA','SELECT'].includes(event.target?.tagName)||event.target?.isContentEditable)return;
     const control={ArrowUp:previousDiff,ArrowDown:nextDiff,ArrowLeft:previousFile,ArrowRight:nextFile}[event.key];
     if(control){event.preventDefault();if(!control.disabled)control.click();}
-  });
+  };
+  // BODY can retain keyboard focus after a native window opens or diff nodes
+  // are replaced, so shortcuts must also work outside the root's descendants.
+  document.addEventListener('keydown',handleKeydown);
   const emptyDetail=el('div','git-detail-empty');
-  content.append(diffHeader,diffToolbar,partTabs,note,sides,diff,emptyDetail);
+  content.append(diffHeader,diffToolbar,findBar,partTabs,note,sides,diff,emptyDetail);
   sidebar.append(commits);detailPanes.append(files,content);inspection.append(commitDetail,detailPanes);
   panes.append(sidebar,inspection);root.append(header,error,panes,statusbar);
-  return v=>{
+  const render=v=>{
     const changedContext=state?.siteID!==v.siteID||state?.kind!==v.kind;
     state=v;
+    reviewBranch.disabled=!!v.loading||!v.head;
     updateDiffControls();
     branchDiffButton.hidden=v.kind!=='branch';
     branchDiffButton.disabled=v.loading||!v.branchDiff?.base;
@@ -430,6 +527,7 @@ export function mountGitViewer(root, request, suggestions, openBranches) {
     const commitScroll=sameList?commitList.scrollTop:0;
     const fileScroll=sameList&&renderedState?.commit===v.commit?fileList.scrollTop:0;
     const sameDiff=sameDiffSelection(previousState,v);
+    if(!sameDiff)findScroll=null;
     const diffScroll=sameDiff?{top:diff.scrollTop,left:diff.scrollLeft}:{top:0,left:0};
     const focusedPart=partTabs.contains(document.activeElement)?document.activeElement?.dataset.group:null;
     renderedState=v;
@@ -564,4 +662,6 @@ export function mountGitViewer(root, request, suggestions, openBranches) {
     updateDiffLabels(v);
     diff.scrollTop=diffScroll.top;diff.scrollLeft=diffScroll.left;
   };
+  render.destroy=()=>document.removeEventListener('keydown',handleKeydown);
+  return render;
 }

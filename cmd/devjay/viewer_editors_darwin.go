@@ -9,7 +9,7 @@ import (
 
 func (m *siteManager) refreshViewerEditor(id string) {
 	r := m.viewers[id]
-	if r == nil || r.state.Loading {
+	if r == nil || r.state.Loading || r.state.Kind == "review" {
 		return
 	}
 	v := *r.state

@@ -9,7 +9,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"sync"
 	"time"
 )
 
@@ -87,13 +86,12 @@ func main() {
 			}
 		})
 	})
-	var quit sync.Once
 	strip.RegisterHook(events.Common.WindowClosing, func(e *application.WindowEvent) {
 		if app.Context().Err() != nil {
 			return
 		}
 		e.Cancel()
-		quit.Do(func() { go app.Quit() })
+		go app.Quit()
 	})
 	settings.RegisterHook(events.Common.WindowClosing, func(e *application.WindowEvent) {
 		if app.Context().Err() != nil {

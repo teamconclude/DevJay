@@ -4,6 +4,8 @@ import {readFile} from 'node:fs/promises';
 import vm from 'node:vm';
 
 const editorSource=(await readFile(new URL('../cmd/devjay/frontend/file-editor.js',import.meta.url),'utf8')).replace(/^export /gm,'');
+const syntaxSource=(await readFile(new URL('../cmd/devjay/frontend/syntax-highlight.js',import.meta.url),'utf8')).replace(/^export /gm,'');
+const searchSource=(await readFile(new URL('../cmd/devjay/frontend/diff-search.js',import.meta.url),'utf8')).replace(/^import .*;\n/gm,'').replace(/^export /gm,'');
 const viewerSource=(await readFile(new URL('../cmd/devjay/frontend/git-viewer.js',import.meta.url),'utf8')).replace(/^import .*;\n/gm,'').replace(/^export /gm,'');
 
 // Mount the production renderer. Fragments, focus and scroll are represented
@@ -23,8 +25,9 @@ function viewer(openBranches) {
       }
     }
     get parentNode(){return this.parent;}
+    get tagName(){return this.tag.toUpperCase();}
     insertBefore(node,next){node.remove();node.parent=this;const index=this.children.indexOf(next);this.children.splice(index<0?this.children.length:index,0,node);}
-    remove(){if(this.parent){const nodes=this.parent.children;nodes.splice(nodes.indexOf(this),1);this.parent=null;}}
+    remove(){if(this.parent){if(this.contains(document.activeElement))document.activeElement=document.body;const nodes=this.parent.children;nodes.splice(nodes.indexOf(this),1);this.parent=null;}}
     replaceChildren(...nodes){if(this.children.some(node=>node.contains(document.activeElement)))document.activeElement=document.body;for(const node of this.children)node.parent=null;this.children=[];this._text='';this.scrollTop=0;this.scrollLeft=0;this.append(...nodes);}
     set textContent(text){this.replaceChildren();this._text=String(text);}
     get textContent(){return (this._text||'')+this.children.map(node=>node.textContent).join('');}
@@ -35,15 +38,20 @@ function viewer(openBranches) {
     querySelectorAll(selector){return this.children.flatMap(child=>[...(child.matches(selector)?[child]:[]),...child.querySelectorAll(selector)]);}
     querySelector(selector){return this.querySelectorAll(selector)[0]||null;}
     focus(){if(document.activeElement!==this){document.activeElement=this;this.onfocus?.();}}
+    select(){this.selectionStart=0;this.selectionEnd=(this.value||'').length;}
     click(){if(!this.disabled)this.onclick?.();}
-    addEventListener(type,listener){this['on'+type]=listener;}
+    addEventListener(type,listener){(this.listeners||={})[type]||=new Set();this.listeners[type].add(listener);}
+    removeEventListener(type,listener){this.listeners?.[type]?.delete(listener);}
+    dispatchEvent(event){event.target??=this;event.currentTarget=this;this['on'+event.type]?.(event);for(const listener of this.listeners?.[event.type]||[])listener(event);if(event.bubbles&&!event.cancelBubble){if(this.parent)this.parent.dispatchEvent(event);else if(this===document.documentElement)document.dispatchEvent(event);}return !event.defaultPrevented;}
     scrollIntoView(){this.revealed=(this.revealed||0)+1;}
   }
-  const body=new Element('body'),root=new Element('main');
-  document={body,activeElement:body,createElement:tag=>new Element(tag),createDocumentFragment:()=>new Element('fragment')};
-  body.append(root);
+  const body=new Element('body'),root=new Element('main'),html=new Element('html'),listeners={};
+  document={body,documentElement:html,activeElement:body,createElement:tag=>new Element(tag),createElementNS:(_,tag)=>new Element(tag),createDocumentFragment:()=>new Element('fragment'),
+    addEventListener(type,listener){(listeners[type]||=new Set()).add(listener);},removeEventListener(type,listener){listeners[type]?.delete(listener);},
+    dispatchEvent(event){event.target??=this;event.currentTarget=this;for(const listener of listeners[event.type]||[])listener(event);return !event.defaultPrevented;}};
+  html.append(body);body.append(root);
   const context=vm.createContext({document});
-  vm.runInContext(editorSource+'\n'+viewerSource,context);
+  vm.runInContext(syntaxSource+'\n'+searchSource+'\n'+editorSource+'\n'+viewerSource,context);
   const requests=[];
   return {root,document,requests,render:context.mountGitViewer(root,request=>requests.push(request),null,openBranches)};
 }
@@ -52,6 +60,34 @@ const file=(path='selected.go')=>({path,group:'Unstaged',status:'M',statsKnown:t
 const state=overrides=>({siteID:'one',name:'one',kind:'edits',version:1,loading:false,branch:'feature',page:0,
   commit:'',commits:[],files:[file()],file:0,counts:{edits:1,local:1,remote:5},
   diff:'@@ -1 +1 @@\n-old\n+selected contents',...overrides});
+
+test('View diffs opens a dedicated window from the current branch toolbar',()=>{
+  const view=viewer();view.render(state({head:'abc123'}));
+  const button=view.root.querySelector('.git-review-branch');
+  assert.equal(button.disabled,false);button.click();
+  assert.equal(view.requests.length,1);
+  assert.equal(view.requests[0].operation,'review-open');
+  assert.equal(view.requests[0].version,1);
+  view.render(state({version:2,loading:true,head:'abc123'}));
+  assert.equal(button.disabled,true);
+  view.render(state({version:2,head:''}));
+  assert.equal(button.disabled,true);
+});
+
+test('Git patch syntax preserves literal text, inline changes, and hunk-local state on each side',()=>{
+  const view=viewer(),initial=state({diff:'@@ -1 +1 @@\n-/* original comment begins\n+const live = 7;\n@@ -100 +100 @@\n-return "old"\n+return "<script>new</script>"'});view.render(initial);
+  assert.ok(view.root.querySelectorAll('.syntax-keyword').some(node=>node.textContent==='return'));
+  assert.ok(view.root.querySelectorAll('.syntax-comment').some(node=>node.textContent.includes('original comment')));
+  assert.equal(view.root.querySelectorAll('script').length,0);
+  const layout=view.root.querySelectorAll('button').find(node=>node.textContent==='Side by side');layout.click();
+  const cells=view.root.querySelectorAll('.git-split-cell');
+  assert.equal(cells[1].querySelector('.syntax-keyword').textContent,'const');
+  assert.equal(cells[2].querySelector('.syntax-keyword').textContent,'return');
+  assert.equal(cells[3].querySelector('.git-code').textContent,'return "<script>new</script>"');
+  assert.ok(view.root.querySelectorAll('.git-inline-change').some(node=>node.textContent.includes('script')));
+  assert.ok(view.root.querySelectorAll('.syntax-string').length);
+  assert.equal(view.root.querySelectorAll('script').length,0);
+});
 
 test('rapid category changes back to the last rendered category restore the cleared diff',()=>{
   const view=viewer(),initial=state({kind:'remote',commit:'a',commits:[{id:'a',subject:'Selected',date:'2026-01-01'}]});
@@ -187,8 +223,8 @@ test('Changes and History navigation sends only a mode request and clean changes
 });
 
 function key(target,key,modifiers={}) {
- const event={key,preventDefault(){this.defaultPrevented=true;},...modifiers};
- target.onkeydown?.(event);return !!event.defaultPrevented;
+ const event={type:'keydown',key,bubbles:true,cancelable:true,preventDefault(){this.defaultPrevented=true;},stopPropagation(){this.cancelBubble=true;},...modifiers};
+ target.dispatchEvent(event);return !!event.defaultPrevented;
 }
 
 const control=(view,label)=>view.root.querySelectorAll('button').find(node=>node.attrs['aria-label']?.startsWith(label));
@@ -396,7 +432,7 @@ test('file arrows follow displayed paths, not backend indices or staged duplicat
 
 test('list navigation does not steal focus, swallow modified keys, or request reads while loading',()=>{
  const view=viewer(),initial=state({files:[file('a.go'),file('b.go')]});
- const refresh=view.root.querySelector('.git-view-header').querySelectorAll('button').at(-1);
+ const refresh=view.root.querySelector('.git-refresh');
  refresh.focus();view.render(initial);assert.equal(view.document.activeElement,refresh);
  const list=view.root.querySelector('.git-view-files').querySelector('.git-scroll-list');
  for(const modifiers of [{altKey:true},{ctrlKey:true},{metaKey:true},{shiftKey:true},{isComposing:true},{defaultPrevented:true}]){
@@ -429,4 +465,108 @@ test('history files navigate independently and ArrowDown from a category enters 
  tabs[1].click();view.render({...initial,version:4,loading:true});view.render({...initial,version:4});
  key(tabs[1],'ArrowDown');assert.equal(view.document.activeElement,view.root.querySelector('.git-view-commits').querySelector('.git-scroll-list'));
  assert.equal(view.requests.length,3);
+});
+
+test('viewer shortcuts navigate from body and descendant focus, survive replacement, and detach on destroy',()=>{
+ const view=viewer(),initial=state({files:[file('one.go'),file('two.go')],
+  diff:'@@ -1,5 +1,5 @@\n-old one\n+new one\n context\n-old two\n+new two\n context\n-old three\n+new three'});
+ view.render(initial);view.document.body.focus();
+ const position=()=>view.root.querySelector('.git-diff-position').textContent;
+ assert.equal(key(view.document.activeElement,'ArrowDown',{altKey:true}),true);assert.match(position(),/2 \/ 3/);
+ const source=view.root.querySelector('.git-code');
+ assert.equal(key(source,'ArrowDown',{altKey:true}),true);assert.match(position(),/3 \/ 3/);
+ assert.equal(key(source,'ArrowUp',{altKey:true}),true);assert.match(position(),/2 \/ 3/);
+ assert.equal(key(view.document.documentElement,'ArrowUp',{altKey:true}),true);assert.match(position(),/1 \/ 3/);
+ source.focus();view.render({...initial,version:2,diff:initial.diff.replace('new one','changed one')});
+ assert.equal(view.document.activeElement,view.document.body);
+ assert.equal(key(view.document.activeElement,'ArrowDown',{altKey:true}),true);assert.match(position(),/2 \/ 3/);
+ const requests=view.requests.length;view.render.destroy();
+ assert.equal(key(view.document.body,'ArrowRight',{altKey:true}),false);assert.equal(view.requests.length,requests);
+});
+
+test('viewer document shortcuts preserve text controls, modified keys, and handled events',()=>{
+ const view=viewer();view.render(state({files:[file('one.go'),file('two.go')],diff:'@@ -1,3 +1,3 @@\n-old one\n+new one\n context\n-old two\n+new two'}));
+ for(const modifiers of [{shiftKey:true},{ctrlKey:true},{metaKey:true},{isComposing:true}]){
+  assert.equal(key(view.document.body,'ArrowRight',{altKey:true,...modifiers}),false);
+ }
+ for(const tag of ['input','textarea','select','span']){
+  const target=view.document.createElement(tag);if(tag==='span')target.isContentEditable=true;view.root.append(target);
+  assert.equal(key(target,'ArrowRight',{altKey:true}),false);
+ }
+ const source=view.root.querySelector('.git-code');source.onkeydown=event=>event.preventDefault();
+ assert.equal(key(source,'ArrowDown',{altKey:true}),true);
+ assert.match(view.root.querySelector('.git-diff-position').textContent,/1 \/ 2/);
+ assert.equal(view.requests.length,0);
+});
+
+function searchablePatch(){
+ const changes=new Map([
+  [10,['const original = "needle original-only";','const current = "replacement";']],
+  [30,['old unrelated change','new unrelated change']],
+  [50,['const old = "replacement";','const current = "NEEDLE current-only";']],
+  [70,['old markup','const markup = "<script>literal</script>";']],
+ ]);
+ return '@@ -1,80 +1,80 @@\n'+Array.from({length:80},(_,index)=>{
+  const change=changes.get(index+1);return change?`-${change[0]}\n+${change[1]}`:` context line ${index+1}`;
+ }).join('\n');
+}
+
+test('Cmd+F filters either diff side, retains syntax and file navigation, and skips hidden changes',()=>{
+ const view=viewer();view.render(state({files:[file('one.go'),file('two.go')],diff:searchablePatch()}));
+ const diff=view.root.querySelector('.git-diff');diff.scrollTop=350;
+ assert.equal(key(view.document.body,'f',{metaKey:true}),true);
+ const input=view.root.querySelector('.diff-find-input'),bar=view.root.querySelector('.diff-find');
+ assert.equal(bar.hidden,false);assert.equal(view.document.activeElement,input);
+ input.value='needle';input.oninput();
+ assert.equal(view.root.querySelector('.diff-find-status').textContent,'2 matching lines');
+ assert.match(diff.textContent,/original-only/);assert.match(diff.textContent,/current-only/);assert.match(diff.textContent,/context line 9/);
+ assert.doesNotMatch(diff.textContent,/unrelated change|context line 30/);
+ assert.equal(view.root.querySelectorAll('.git-file').length,2);
+ assert.equal(diff.querySelectorAll('.diff-search-hit').length,2);
+ assert.ok(diff.querySelectorAll('.syntax-keyword').length);assert.ok(diff.querySelectorAll('.diff-search-gap').length);
+ assert.equal(view.root.querySelector('.current-difference').dataset.change,'0');
+ control(view,'Next difference').click();assert.equal(view.root.querySelector('.current-difference').dataset.change,'2');
+ assert.match(view.root.querySelector('.git-diff-position').textContent,/3 \/ 4/);
+ assert.equal(control(view,'Next difference').disabled,true);
+ control(view,'Previous difference').click();assert.equal(view.root.querySelector('.current-difference').dataset.change,'0');
+ layoutButton(view,'Side by side').click();
+ assert.equal(diff.querySelectorAll('.diff-search-hit').length,2);assert.ok(diff.querySelectorAll('.git-inline-change').length);
+ input.value='<script>';input.oninput();
+ assert.equal(diff.querySelector('.diff-search-hit').textContent,'<script>');assert.equal(view.root.querySelectorAll('script').length,0);
+ input.value='missing term';input.oninput();
+ assert.equal(view.root.querySelector('.diff-find-status').textContent,'No matches');
+ assert.match(diff.querySelector('.diff-search-empty').textContent,/No matches/);
+ assert.equal(control(view,'Previous difference').disabled,true);assert.equal(control(view,'Next difference').disabled,true);
+ assert.equal(key(input,'Escape'),true);assert.equal(bar.hidden,true);assert.equal(input.value,'');
+ assert.equal(view.document.activeElement,diff);assert.equal(diff.scrollTop,350);
+ assert.match(diff.textContent,/unrelated change/);assert.equal(diff.querySelectorAll('.diff-search-hit').length,0);
+ assert.equal(view.requests.length,0);
+});
+
+test('diff search preserves current query and focus across loading and refreshed source',()=>{
+ const view=viewer(),initial=state({files:[file('one.go'),file('two.go')],diff:searchablePatch()});view.render(initial);
+ key(view.document.body,'f',{metaKey:true});
+ const input=view.root.querySelector('.diff-find-input');input.value='needle';input.oninput();
+ assert.equal(key(input,'f',{metaKey:true}),true);assert.equal(input.selectionStart,0);assert.equal(input.selectionEnd,6);
+ view.render({...initial,version:2,loading:true});
+ input.value='current-only';input.oninput();
+ assert.equal(view.root.querySelector('.diff-find-status').textContent,'1 matching line');
+ view.render({...initial,version:2,diff:initial.diff.replace('new unrelated change','new current-only change')});
+ assert.equal(view.root.querySelector('.diff-find-input'),input);assert.equal(input.value,'current-only');assert.equal(view.document.activeElement,input);
+ assert.equal(view.root.querySelector('.diff-find-status').textContent,'2 matching lines');
+ view.render({...initial,version:3,file:1,diff:'@@ -1 +1 @@\n-old\n+different file'});
+ assert.equal(input.value,'current-only');assert.equal(view.document.activeElement,input);
+ assert.equal(view.root.querySelector('.diff-find-status').textContent,'No matches');
+ control(view,'Close find').click();assert.match(view.root.querySelector('.git-diff').textContent,/different file/);
+ assert.equal(view.requests.length,0);
+});
+
+test('find shortcut respects modifiers, composition, and child event handlers',()=>{
+ const view=viewer();view.render(state());const bar=view.root.querySelector('.diff-find');
+ for(const modifiers of [{ctrlKey:true},{altKey:true},{shiftKey:true},{isComposing:true}]){
+  assert.equal(key(view.document.body,'f',{metaKey:true,...modifiers}),false);assert.equal(bar.hidden,true);
+ }
+ const source=view.root.querySelector('.git-code');source.onkeydown=event=>event.preventDefault();
+ assert.equal(key(source,'f',{metaKey:true}),true);assert.equal(bar.hidden,true);
+ view.render.destroy();assert.equal(key(view.document.body,'f',{metaKey:true}),false);assert.equal(bar.hidden,true);
 });

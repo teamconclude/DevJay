@@ -69,6 +69,7 @@ func (m *siteManager) recoverViews() {
 }
 
 func (m *siteManager) tickViewRecovery(now time.Time) {
+	m.deferReviewEditorRecovery(now)
 	reload, failed := m.recovery.tick(now)
 	for _, id := range reload {
 		if w := m.recoveryWindows[id]; w != nil {

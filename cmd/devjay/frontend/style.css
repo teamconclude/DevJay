@@ -449,20 +449,32 @@ button.status-line { padding: 0; border: 0; border-radius: 3px; background: tran
 button.status-line:hover { text-decoration: underline; }
 .git-viewer #app { --git-sidebar-width: clamp(220px, 27vw, 292px); height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
 .git-viewer [hidden] { display: none !important; }
-.git-view-header { display: grid; grid-template-columns: var(--git-sidebar-width) minmax(130px, 1fr) auto auto auto; grid-template-rows: minmax(78px, auto); align-items: stretch; border-bottom: 1px solid #343c48; background: #20252e; flex-shrink: 0; }
-.git-view-header:has(.git-suggestion-warning) { grid-template-columns: var(--git-sidebar-width) minmax(130px, max-content) minmax(0, 1fr) auto auto; }
-.git-view-header:has(.git-suggestion-warning) > .git-view-branch { max-width: clamp(130px, calc(50vw - 240px), 330px); }
+.git-view-header { display: grid; grid-template-columns: var(--git-sidebar-width) minmax(190px, 1fr) auto auto auto; grid-template-rows: minmax(78px, auto); align-items: stretch; border-bottom: 1px solid #343c48; background: #20252e; flex-shrink: 0; }
+.git-view-header:has(.git-suggestion-warning) { grid-template-columns: var(--git-sidebar-width) minmax(190px, max-content) minmax(0, 1fr) auto auto; }
+.git-view-header:has(.git-suggestion-warning) > .git-view-branch { max-width: clamp(190px, calc(50vw - 240px), 390px); }
 .git-view-header:has(.git-suggestion-warning) .git-suggestion-header { max-width: clamp(130px, calc(50vw - 250px), 420px); }
 .git-view-header > .git-view-title { grid-column: 1; grid-row: 1; }
 .git-view-header > .git-view-branch { grid-column: 2; grid-row: 1; }
 .git-view-title { display: flex; flex-direction: column; justify-content: center; gap: 5px; width: var(--git-sidebar-width); flex-shrink: 0; padding: 13px 18px; border-right: 1px solid #343c48; overflow: hidden; }
 .git-view-title strong { font-size: 15px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.git-toolbar-label { font-size: 10px; color: #a3acb9; }
-.git-view-branch { display: flex; flex-direction: column; justify-content: center; gap: 5px; padding: 12px 18px; min-width: 130px; flex: 1; overflow: hidden; }
-.git-branch-name { display: flex; align-items: center; gap: 5px 9px; min-width: 0; }
+.git-toolbar-label { font-size: 10px; line-height: 12px; color: #a3acb9; }
+.git-view-branch { display: flex; flex-direction: column; justify-content: center; gap: 5px; padding: 12px 18px; min-width: 190px; flex: 1; overflow: hidden; }
+.git-branch-name { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .git-current-branch { min-width: 0; font-size: 13px; font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.git-switch-branch { flex-shrink: 0; padding: 2px 5px; font-size: 10px; white-space: nowrap; background: transparent; border-color: #454f5e; --wails-draggable: no-drag; }
-.git-view-header > button { grid-column: 5; grid-row: 1; align-self: center; margin: 10px 14px 10px 8px; font-size: 11px; padding: 6px 9px; background: transparent; }
+.git-branch-name > button,.git-view-tools > button { display: inline-flex; flex: none; align-items: center; justify-content: center; gap: 6px; height: 28px; padding: 4px 8px; font-size: 11px; background: transparent; white-space: nowrap; --wails-draggable: no-drag; }
+.git-switch-branch { border-color: #454f5e; }
+.git-branch-name > .git-refresh { width: 28px; padding: 0; }
+/* Match the branch row's 12px label plus 5px gap while staying at the far edge. */
+.git-view-tools { grid-column: 5; grid-row: 1; display: flex; align-items: center; padding-top: 17px; margin: 0 18px 0 8px; }
+.diff-find { display: flex; align-items: center; gap: 10px; flex: none; padding: 7px 12px; border-bottom: 1px solid #3a4352; background: #252c37; }
+.diff-find-input { flex: 1; min-width: 90px; max-width: 360px; padding: 5px 8px; border: 1px solid #56637a; border-radius: 5px; background: #171e29; color: #edf1f7; font-size: 12px; }
+.diff-find-input:focus-visible { outline: 2px solid #81a9f4; outline-offset: -1px; }
+.diff-find-status { min-width: 0; color: #b2bed0; font-size: 11px; }
+.diff-find-close { flex: none; margin-left: auto; width: 26px; height: 26px; padding: 0; background: transparent; }
+.diff-search-gap { grid-column: 1 / -1; padding: 5px 10px; color: #9cabc0; background: #263040; font: 11px -apple-system,BlinkMacSystemFont,sans-serif; text-align: center; }
+.diff-search-empty { padding: 12px; color: #aab6c8; font-size: 12px; }
+mark.diff-search-hit { background: #ffe08a; color: #191c24; border-radius: 2px; }
+mark.diff-search-hit [class^="syntax-"] { color: inherit; }
 .git-view-tabs { display: flex; flex-shrink: 0; border-bottom: 1px solid #343c48; background: #1b2028; }
 .git-view-tabs button { display: inline-flex; flex: 1; justify-content: center; align-items: center; gap: 7px; white-space: nowrap; padding: 13px 8px; background: transparent; border: 0; border-radius: 0; color: #a8b2c1; font-size: 12px; }
 .git-view-tabs button.selected { box-shadow: inset 0 -2px #80b8ff; color: #f0f5fc; background: #252d39; }
@@ -560,6 +572,15 @@ button.status-line:hover { text-decoration: underline; }
 .git-split-cell.blank { background: #1d222a; }
 .git-inline-change { color: inherit; background: #40856570; border-radius: 2px; }
 .delete .git-inline-change { background: #b44e6555; }
+
+/* Text color alone carries syntax; diff backgrounds and inline marks remain
+   visible. All syntax spans contain literal source text, never HTML. */
+:is(.br-code,.git-diff) .syntax-comment { color: #a1a9b5; }
+:is(.br-code,.git-diff) :is(.syntax-keyword,.syntax-operator) { color: #ff9b92; }
+:is(.br-code,.git-diff) .syntax-string { color: #b7d8ff; }
+:is(.br-code,.git-diff) :is(.syntax-number,.syntax-constant,.syntax-property,.syntax-attribute) { color: #8ecbff; }
+:is(.br-code,.git-diff) :is(.syntax-function,.syntax-type) { color: #d5b6ff; }
+:is(.br-code,.git-diff) .syntax-tag { color: #91db9f; }
 .git-no-newline { color: #b3a18b; font-style: italic; font-size: 10px; }
 .git-difference.current-difference { box-shadow: inset 3px 0 #8fc1ff; }
 .git-split-line.current-difference > .git-split-cell:first-child { box-shadow: inset 3px 0 #8fc1ff; }

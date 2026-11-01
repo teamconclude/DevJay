@@ -12,6 +12,7 @@ import { mountProfileSettings } from './profile-settings.js';
 import { mountClaudePermissionSettings } from './claude-permission-settings.js';
 import { mountEditorSettings } from './editor-settings.js';
 import { mountGitViewer } from './git-viewer.js';
+import { createBranchReview } from './branch-review.js';
 import { cardStatus } from './card-status.js';
 import { mountSuggestedActions, mountViewerSuggestions, rebasedPublishWarning } from './suggested-actions.js';
 import { installStripDrag } from './strip-drag.js';
@@ -350,17 +351,23 @@ function details(site, parent, showIDEStatus) {
 
 let list, decoration, layout, siteError, siteErrorTimer, shortcutError, shortcutSettings, addAfter;
 if (viewer) {
-  document.body.className = 'git-viewer';
+  const review = params.has('review');
+  document.body.className = review ? 'branch-review' : 'git-viewer';
   let currentView = null, currentSnapshot = {sites:[]};
   const suggestions = el('section', 'git-view-suggestions'); suggestions.hidden = true;
   const updateSuggestions = mountViewerSuggestions(suggestions, request => emit('action-prepare', request));
-  const updateOverview = () => updateSuggestions(currentSnapshot.sites.find(site => site.id === currentView?.siteID), currentSnapshot.action);
+  const updateOverview = () => { if (!review) updateSuggestions(currentSnapshot.sites.find(site => site.id === currentView?.siteID), currentSnapshot.action); };
   renderViewerSnapshot = state => { currentSnapshot = state; updateOverview(); };
-  const renderViewer = mountGitViewer(root, data => emit('viewer-request', data), suggestions, (siteID, anchor) => emit('branches-open', {siteID, anchor}));
+  const branchReview = review ? createBranchReview(root, data => emit('viewer-request', data)) : null;
+  const renderViewer = branchReview ? view => branchReview.render(view) : mountGitViewer(root, data => emit('viewer-request', data), suggestions, (siteID, anchor) => emit('branches-open', {siteID, anchor}));
   Events.On(`devjay:viewer-state:${params.get('viewer')}`, event => {
     currentView = event.data; renderViewer(currentView); updateOverview(); reportUIReady();
   });
-  document.addEventListener('keydown', e => { if (e.key === 'Escape') emit('viewer-close'); });
+  if (branchReview) window.addEventListener('pagehide', () => branchReview.destroy());
+  else {
+    window.addEventListener('pagehide', () => renderViewer.destroy());
+    document.addEventListener('keydown', e => { if (e.key === 'Escape' && !e.defaultPrevented) emit('viewer-close'); });
+  }
 } else if (actions) {
   document.body.className = 'suggestions';
   renderSuggestedActions = mountSuggestedActions(root, data => emit('suggestions-close', data), (name, data) => emit(name, data));

@@ -47,6 +47,8 @@ Click a card’s status or change count to inspect file diffs and a single branc
 
 In the Changes window, click **Switch...** beside the branch name to choose another branch. Switching requires a clean checkout and a separate confirmation. If the destination has a newer remote version with no local-only commits, DevJay offers to use it; branches with unpublished or diverged commits keep their local version.
 
+Choose **View diffs** (the eye button) in the Changes/History window to review the whole branch in a separate, focused window. It compares the branch's common ancestor with its base against your current files, including committed, staged, unstaged, and untracked work. Filter files, review full files side by side or unified, switch to a continuous view with expandable context, and inspect commit details for changed blocks. Each review window has its own comparison and display options. Small text corrections can be made with **Edit** and explicitly saved to the working file.
+
 Right-click an incoming count for **Fetch and update <branch>…**, or an outgoing count for **Push N commits…**. Card and branch menus also suggest the relevant rebase, rebased push, merged-branch cleanup, or verified replacement from rewritten remote history. Each uses the same safety checks and separate confirmation as the Changes window.
 
 In a ready branch-update dialog, uncheck **Auto updating in 5 seconds.** or press **Esc** to pause, check it again to restart, or click **Update branch** to start immediately. Cancel or × closes it without updating.

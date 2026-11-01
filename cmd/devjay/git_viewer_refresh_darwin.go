@@ -37,7 +37,7 @@ func (m *siteManager) refreshViewers(now time.Time) {
 		if r.refresh.running {
 			active++
 		}
-		if r.refresh.due(now, r.ready, r.state.Loading || r.editorOpening, false) {
+		if r.refresh.due(now, r.ready, r.state.Loading || r.editorOpening || r.reviewEditing || r.reviewSaving, false) {
 			due = append(due, id)
 		}
 	}
@@ -74,7 +74,7 @@ func (m *siteManager) nextViewerRefresh(now time.Time) time.Time {
 	}
 	var due time.Time
 	for id, viewer := range m.viewers {
-		if !m.monitor.visibility[id] || !viewer.ready || viewer.state.Loading || viewer.editorOpening || viewer.refresh.running {
+		if !m.monitor.visibility[id] || !viewer.ready || viewer.state.Loading || viewer.editorOpening || viewer.reviewEditing || viewer.reviewSaving || viewer.refresh.running {
 			continue
 		}
 		next := viewer.refresh.lastFinished.Add(viewerRefreshInterval)
@@ -114,7 +114,7 @@ func (r *gitViewerWindow) completeViewerRefresh(epoch, version uint64, next GitV
 		return false
 	}
 	r.refreshCancel = nil
-	if version != r.generation || r.state.Loading || r.editorOpening || paused {
+	if version != r.generation || r.state.Loading || r.editorOpening || r.reviewEditing || r.reviewSaving || paused {
 		r.refresh.pending = true
 		return false
 	}
@@ -124,6 +124,13 @@ func (r *gitViewerWindow) completeViewerRefresh(epoch, version uint64, next GitV
 		next.Error = err.Error()
 	}
 	if gitViewContentEqual(*r.state, next) {
+		if err == nil && next.Kind == "review" {
+			// Refresh private inode guards without invalidating the user's
+			// unchanged visible contents, cache, or current request version.
+			fresh := *r.state
+			fresh.Review = next.Review
+			r.state = &fresh
+		}
 		return false
 	}
 	r.generation++

@@ -809,6 +809,16 @@ func (m *siteManager) shutdown() {
 // ShouldQuit runs on AppKit. Wait off that thread so windows stay responsive.
 func (m *siteManager) shouldQuit() bool {
 	ready, drained := m.lifecycle.quit()
+	if !ready && drained == nil && m.lifecycle.hasDrafts() {
+		m.send(func() {
+			for id, viewer := range m.viewers {
+				if viewer.reviewEditing {
+					m.reviewCloseError(id, "Save or cancel your edits before quitting DevJay.")
+					showViewerWindow(viewer.window, viewer.parent, viewer.anchor)
+				}
+			}
+		})
+	}
 	if drained != nil {
 		go func() {
 			m.send(func() {
