@@ -192,6 +192,10 @@ int main(void) {
             assert(first.layer.borderWidth == 2 && second.layer.borderWidth == 1);
             unsigned int appearanceOrders = frontOrders;
             NSRect compactFrame = stripControls->compact.frame;
+            // The previous iteration restores System, which can be light.
+            // Establish Dark explicitly before capturing the comparison color.
+            devjay_set_appearance(0);
+            devjay_strip_appearance(0);
             CGColorRef darkColor = CGColorRetain(first.layer.backgroundColor);
             for (int light = 1; light >= 0; light--) {
                 devjay_set_appearance(light);

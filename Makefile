@@ -71,7 +71,8 @@ check:
 	@set -e; strip_bin=$$(mktemp "$${TMPDIR:-/tmp}/devjay-strip-controls.XXXXXX"); \
 	trap 'rm -f "$$strip_bin"' EXIT; \
 	clang -Wall -Wextra -Werror -fblocks -framework AppKit -framework Carbon -framework QuartzCore tests/strip_controls_test.m -o "$$strip_bin"; \
-	"$$strip_bin"
+	"$$strip_bin" -AppleInterfaceStyle Light; \
+	"$$strip_bin" -AppleInterfaceStyle Dark
 	@set -e; permission_bin=$$(mktemp "$${TMPDIR:-/tmp}/devjay-claude-permission.XXXXXX"); \
 	trap 'rm -f "$$permission_bin"' EXIT; \
 	clang -Wall -Wextra -Werror -fblocks -framework AppKit -framework QuartzCore -framework Carbon tests/claude_permission_panel_test.m -o "$$permission_bin"; \
