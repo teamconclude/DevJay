@@ -86,6 +86,7 @@ export function createBranchReview(root, request) {
   let view = null, snapshotKey = '', selectedPath = '', activeChange = 0, layout = 'split', presentation = 'file', wrap = false;
   let highlighting = true;
   let revealPath = '', revealEdge = '';
+  let scrollFrame = 0, selectionScrollTop = null;
   const syntaxCache = new WeakMap();
   const searchCache = new WeakMap();
   let cache = new Map(), cards = new Map(), expanded = new Map(), pages = new Map(), wanted = new Set(), forced = new Set(), failed = new Set(), pendingPath = '', pendingVersion = 0, renderKey = '';
@@ -273,6 +274,53 @@ export function createBranchReview(root, request) {
     const meta = el('p', 'br-commit-meta'); meta.append(el('code', '', commit.id?.slice(0, 8) || ''), el('span', '', when)); node.append(meta);
     return node;
   }
+  function revealNode(node, block) {
+    node?.scrollIntoView({block, inline:'nearest'});
+    // A short file near the end cannot always align with the viewport top.
+    // Keep an explicit selection until the reader moves vertically again.
+    selectionScrollTop = content.scrollTop;
+  }
+  function syncVisibleFile() {
+    scrollFrame = 0;
+    if (destroyed || presentation !== 'continuous' || editing || beginningEdit || view?.loading || content.scrollTop === selectionScrollTop) return;
+    selectionScrollTop = null;
+    const area = content.getBoundingClientRect();
+    if (area.height <= 0) return;
+    const readingTop = area.top + Math.min(24, area.height / 4);
+    let current;
+    if (content.scrollTop > 0 && content.scrollTop + content.clientHeight >= content.scrollHeight - 1) current = [...cards.values()].at(-1);
+    else for (const card of cards.values()) {
+      const rect = card.getBoundingClientRect();
+      if (rect.bottom > readingTop && rect.top < area.bottom) { current = card; break; }
+    }
+    const path = current?.dataset.path;
+    if (!path || path === selectedPath) return;
+    selectedPath = path; revealPath = ''; revealEdge = '';
+    const visibleChange = [...current.querySelectorAll('.br-change')].find(node => {
+      const rect = node.getBoundingClientRect();
+      return rect.bottom > readingTop && rect.top < area.bottom;
+    });
+    activeChange = visibleChange ? Number(visibleChange.dataset.change) : changeIndices(selectedData())[0] || 0;
+    // Update the existing sidebar nodes so scrolling never steals focus or
+    // rebuilds the diff. Only the sidebar itself follows an offscreen row.
+    for (const row of filesList.querySelectorAll('.br-file')) {
+      row.setAttribute('aria-selected', String(row.dataset.path === path));
+      if (row.dataset.path === path) {
+        const rect = row.getBoundingClientRect(), list = filesList.getBoundingClientRect();
+        if (rect.top < list.top) filesList.scrollTop += rect.top - list.top;
+        else if (rect.bottom > list.bottom) filesList.scrollTop += rect.bottom - list.bottom;
+      }
+    }
+    for (const node of content.querySelectorAll('.br-change')) node.classList.toggle('br-current-change', node.dataset.path === path && Number(node.dataset.change) === activeChange);
+    renderCommits(); updateControls();
+    if (!cache.has(path) && !failed.has(path)) { wanted.add(path); pump(); }
+  }
+  function scheduleVisibleFile() {
+    if (destroyed || presentation !== 'continuous' || scrollFrame) return;
+    scrollFrame = requestAnimationFrame(syncVisibleFile);
+  }
+  function trackScroll(event) { if (event.target === content) scheduleVisibleFile(); }
+  content.addEventListener('scroll', trackScroll, {passive:true});
   function selectFile(path, scroll = true, edge = '') {
     if (editing || beginningEdit || !view?.files?.some(file => file.path === path)) return;
     const changed = selectedPath !== path;
@@ -284,7 +332,7 @@ export function createBranchReview(root, request) {
     }
     renderFiles(); renderCommits();
     if (presentation === 'file') { renderContent(); if (changed) content.scrollTop = 0; }
-    else if (scroll) cards.get(path)?.scrollIntoView({block:'start', inline:'nearest'});
+    else if (scroll) revealNode(cards.get(path), 'start');
     failed.delete(path); wanted.add(path); forced.add(path); pump();
     if (cache.has(path) && changed) { revealPath = ''; revealEdge = ''; selectChange(activeChange, presentation === 'file' || !!edge); }
   }
@@ -297,6 +345,7 @@ export function createBranchReview(root, request) {
     const data = cache.get(path);
     const available = changeIndices(data);
     if (!available.length) return;
+    selectionScrollTop = content.scrollTop;
     revealPath = ''; revealEdge = '';
     if (path !== selectedPath) { selectedPath = path; renderFiles(); }
     activeChange = available.find(change => change >= index) ?? available.at(-1);
@@ -309,7 +358,7 @@ export function createBranchReview(root, request) {
       const page = Math.floor(Math.max(0, rowIndex) / reviewRowLimit);
       if ((pages.get(path) || 0) !== page) { pages.set(path, page); renderCard(path); }
       const row = [...(cards.get(path)?.querySelectorAll('.br-change') || [])].find(node => Number(node.dataset.change) === activeChange);
-      row?.scrollIntoView({block:'center', inline:'nearest'});
+      revealNode(row, 'center');
     }
   }
   function moveChange(direction) {
@@ -695,6 +744,9 @@ export function createBranchReview(root, request) {
     }
     if (selectedPath && !cache.has(selectedPath) && !failed.has(selectedPath) && !view.error) wanted.add(selectedPath);
     pump();
+    // A file read can finish after the reader has scrolled elsewhere while
+    // loading. Reconcile against the final layout, never the returned path.
+    scheduleVisibleFile();
   }
-  return {render, destroy() { destroyed = true; document.removeEventListener('keydown', handleKeydown); observer?.disconnect(); frame.remove(); }};
+  return {render, destroy() { destroyed = true; document.removeEventListener('keydown', handleKeydown); content.removeEventListener('scroll', trackScroll); if (scrollFrame) cancelAnimationFrame(scrollFrame); observer?.disconnect(); frame.remove(); }};
 }

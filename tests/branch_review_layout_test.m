@@ -34,6 +34,16 @@ static void check(WKWebView *view, NSString *script) {
         abort();
     }
 }
+static void waitForCheck(WKWebView *view, NSString *script) {
+    // Hidden WebKit windows pause animation frames. Flush the fixture's
+    // frame queue explicitly while retaining real DOM scroll/layout behavior.
+    evaluate(view,@"flushReviewFrames();void 0");
+    NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:3];
+    while (![evaluate(view, script) boolValue] && deadline.timeIntervalSinceNow > 0)
+        [NSRunLoop.currentRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:.02]];
+    if (![evaluate(view, script) boolValue]) NSLog(@"Scroll diagnostics: %@",evaluate(view,@"JSON.stringify({position:filePosition(),path:selectedPath(),top:scrollArea.scrollTop,height:scrollArea.clientHeight,total:scrollArea.scrollHeight,rect:scrollArea.getBoundingClientRect(),cards:[...document.querySelectorAll('.br-file-card')].map(n=>({path:n.dataset.path,rect:n.getBoundingClientRect()}))})"));
+    check(view, script);
+}
 
 int main(void) {
     @autoreleasepool {
@@ -51,7 +61,7 @@ int main(void) {
             source=[imports stringByReplacingMatchesInString:source options:0 range:NSMakeRange(0,source.length) withTemplate:@""];
             [js appendFormat:@"\n%@\n",[source stringByReplacingOccurrencesOfString:@"export " withString:@""]];
         }
-        [js appendString:@"\nconst requests=[];const review=createBranchReview(document.querySelector('#app'),payload=>{requests.push(payload);return Promise.resolve()});\n"
+        [js appendString:@"\nconst reviewFrames=new Map();let reviewFrameID=0;window.requestAnimationFrame=fn=>{reviewFrames.set(++reviewFrameID,fn);return reviewFrameID;};window.cancelAnimationFrame=id=>reviewFrames.delete(id);const flushReviewFrames=()=>{const pending=[...reviewFrames.values()];reviewFrames.clear();for(const fn of pending)fn();};\nconst requests=[];const review=createBranchReview(document.querySelector('#app'),payload=>{requests.push(payload);return Promise.resolve()});\n"
          "const before=Array.from({length:55},(_,i)=>i===20?'  return oldValue;':i===40?'  // previous behavior':`  // context line ${i+1}`);const after=[...before];after[20]='  return currentValue;';after[40]='  // branch-wide review';\n"
          "const commit={id:'1234567890abcdef1234567890abcdef12345678',author:'Alex Developer',date:'2026-11-01T09:00:00+01:00',subject:'Add branch review navigation'};\n"
          "const fixture={kind:'review',siteID:'fixture',name:'DevJay',branch:'feature/branch-review',head:'abcdef0123456789',version:1,captured:'fixture-1',file:0,files:[{path:'cmd/devjay/review.go',status:'M',group:'Branch',added:2,removed:2,statsKnown:true},{path:'cmd/devjay/frontend/review.js',status:'A',group:'Branch',added:12,removed:0,statsKnown:true}],review:{baseRef:'origin/main',base:'567890abcdef',refs:['main','origin/main'],ignoreWhitespace:false,selected:{path:'cmd/devjay/review.go',oldText:before.join('\\n')+'\\n',newText:after.join('\\n')+'\\n',diff:'@@ -21 +21 @@\\n-  return oldValue;\\n+  return currentValue;\\n@@ -41 +41 @@\\n-  // previous behavior\\n+  // branch-wide review\\n',editable:true,token:'fixture-token',hunks:[{oldStart:21,oldLines:1,newStart:21,newLines:1,commits:[commit],uncommitted:false},{oldStart:41,oldLines:1,newStart:41,newLines:1,commits:[],uncommitted:true}],commits:[commit]}}};review.render(fixture);\n"
@@ -160,6 +170,19 @@ int main(void) {
         check(view, @"document.querySelector('.br-change-position').textContent==='2 / 2' && document.querySelector('.br-current-change').dataset.path==='previous.go' && selectedVisible()");
         evaluate(view, @"button('↓').click();void 0");
         check(view, @"document.querySelector('.br-current-change').dataset.path==='next.go' && document.querySelector('.br-change-position').textContent==='1 / 1' && selectedVisible() && button('↓').disabled");
+        // Scroll the actual WebKit viewport, without selecting a file. Both
+        // layouts must follow it while preserving focus and the scroll offset.
+        evaluate(view, @"var scrollFiles=Array.from({length:8},(_,i)=>({path:`scroll-${i}.go`,status:'M'}));var scrollFixture={...fixture,captured:'scroll-tracking',version:70,files:scrollFiles};var scrollData=i=>({...fixture.review.selected,path:scrollFiles[i].path,oldText:'old\\n'.repeat(i===7?1:35),newText:'new\\n'.repeat(i===7?1:35),hunks:[{oldStart:1,oldLines:i===7?1:35,newStart:1,newLines:i===7?1:35,commits:[{...commit,subject:`File ${i} commit`}]}]});for(let i=0;i<8;i++)review.render({...scrollFixture,version:70+i,file:i,review:{...fixture.review,selected:scrollData(i)}});var scrollArea=document.querySelector('.br-content');var filePosition=()=>document.querySelectorAll('.br-nav-group')[1].textContent;var selectedPath=()=>document.querySelector('.br-file[aria-selected=true]')?.dataset.path;var scrollToCard=i=>{const card=document.querySelectorAll('.br-file-card')[i];scrollArea.scrollTop+=card.getBoundingClientRect().top-scrollArea.getBoundingClientRect().top;scrollArea.focus();scrollArea.dispatchEvent(new Event('scroll'));};void 0");
+        for (NSString *layout in @[@"Side by side",@"Unified"]) {
+            evaluate(view,[NSString stringWithFormat:@"document.querySelector('[aria-label=\"%@\"]').click();scrollToCard(4);var scrollOffset=scrollArea.scrollTop;void 0",layout]);
+            waitForCheck(view,@"filePosition()==='←5 / 8→' && selectedPath()==='scroll-4.go'");
+            check(view,@"scrollArea.scrollTop===scrollOffset && document.activeElement===scrollArea && document.querySelector('.br-commit-panel').textContent.includes('File 4 commit')");
+            evaluate(view,@"scrollToCard(1);void 0");
+            waitForCheck(view,@"filePosition()==='←2 / 8→' && selectedPath()==='scroll-1.go'");
+            evaluate(view,@"scrollArea.scrollTop=scrollArea.scrollHeight;scrollArea.dispatchEvent(new Event('scroll'));void 0");
+            waitForCheck(view,@"filePosition()==='←8 / 8→' && selectedPath()==='scroll-7.go'");
+            check(view,@"(()=>{const row=document.querySelector('.br-file[aria-selected=true]').getBoundingClientRect(),list=document.querySelector('.br-files').getBoundingClientRect();return row.top>=list.top-1&&row.bottom<=list.bottom+1})()");
+        }
         // Larger counts must fit between the arrows at the minimum width.
         evaluate(view, @"document.querySelector('.br-change-position').textContent='234 / 234';document.querySelectorAll('.br-nav-group')[1].querySelector('.br-position').textContent='2000 / 2000';void 0");
         for (NSNumber *width in @[@1280,@900,@720]) {

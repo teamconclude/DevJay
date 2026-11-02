@@ -66,15 +66,17 @@ function viewer(storage = new Map()) {
     removeEventListener(type,listener){this.listeners?.[type]?.delete(listener);}
     dispatchEvent(event){event.target??=this;event.currentTarget=this;this['on'+event.type]?.(event);for(const listener of this.listeners?.[event.type]||[])listener(event);if(event.bubbles&&!event.cancelBubble){if(this.parent)this.parent.dispatchEvent(event);else if(this===document.documentElement)document.dispatchEvent(event);}return !event.defaultPrevented;}
     scrollIntoView(){this.revealed=true;}
+    getBoundingClientRect(){return {top:0,bottom:0,height:0};}
   }
   const root=new Element('main'),body=new Element('body'),html=new Element('html'),listeners={};
   document={body,documentElement:html,activeElement:body,createElement:tag=>new Element(tag),createDocumentFragment:()=>new Element('fragment'),
     addEventListener(type,listener){(listeners[type]||=new Set()).add(listener);},removeEventListener(type,listener){listeners[type]?.delete(listener);},
     dispatchEvent(event){event.target??=this;event.currentTarget=this;for(const listener of listeners[event.type]||[])listener(event);return !event.defaultPrevented;}};
   html.append(body);body.append(root);
-  const context=vm.createContext({document,sessionStorage:{setItem:(key,value)=>storage.set(key,value),getItem:key=>storage.get(key)||null,removeItem:key=>storage.delete(key)}});vm.runInContext(syntaxSource.replace(/^export /gm,'')+'\n'+searchSource.replace(/^import .*;\n/gm,'').replace(/^export /gm,'')+'\n'+source.replace(/^import .*;\n/gm,'').replace(/^export /gm,''),context);
+  const frames=new Map();let nextFrame=0;
+  const context=vm.createContext({document,requestAnimationFrame:fn=>{frames.set(++nextFrame,fn);return nextFrame;},cancelAnimationFrame:id=>frames.delete(id),sessionStorage:{setItem:(key,value)=>storage.set(key,value),getItem:key=>storage.get(key)||null,removeItem:key=>storage.delete(key)}});vm.runInContext(syntaxSource.replace(/^export /gm,'')+'\n'+searchSource.replace(/^import .*;\n/gm,'').replace(/^export /gm,'')+'\n'+source.replace(/^import .*;\n/gm,'').replace(/^export /gm,''),context);
   const requests=[];const api=context.createBranchReview(root,data=>{requests.push(JSON.parse(JSON.stringify(data)));return true;});
-  return {root,document,requests,...api};
+  return {root,document,requests,frames,flushFrames(){const pending=[...frames.values()];frames.clear();for(const fn of pending)fn();},...api};
 }
 const commit={id:'abc123456789',subject:'Add greeting',author:'Ada',date:'2026-01-01T12:00:00Z'};
 const payload=(path='one.go',overrides={})=>({path,oldText:'prefix\nold\nsuffix\n',newText:'prefix\n<script>literal</script>\nsuffix\n',hunks:[{oldStart:2,oldLines:1,newStart:2,newLines:1,commits:[commit],uncommitted:true}],commits:[commit],editable:true,token:path+'-token',...overrides});
@@ -131,6 +133,41 @@ test('continuous mode expands context and requests unloaded files sequentially',
   assert.equal(view.requests.length,1);assert.equal(view.requests[0].operation,'review-file');assert.equal(view.requests[0].file,1);
   view.render({...initial,version:2,file:1,review:{...initial.review,selected:payload('two.go')}});
   assert.equal(view.root.querySelectorAll('.br-code').length,2);
+});
+test('continuous scrolling follows the visible file without rebuilding content or stealing focus',()=>{
+  const view=viewer(),initial=state({files:[{path:'one.go'},{path:'two.go'},{path:'three.go'}]});view.render(initial);
+  const mode=view.root.querySelector('.br-presentation');mode.value='continuous';mode.onchange();
+  const content=view.root.querySelector('.br-content'),list=view.root.querySelector('.br-files'),rows=view.root.querySelectorAll('.br-file'),cards=view.root.querySelectorAll('.br-file-card');
+  content.clientHeight=400;content.scrollHeight=1460;content.getBoundingClientRect=()=>({top:100,bottom:500,height:400});
+  list.getBoundingClientRect=()=>({top:100,bottom:200,height:100});
+  const measureRows=()=>view.root.querySelectorAll('.br-file').forEach((row,i)=>{row.getBoundingClientRect=()=>({top:100+i*45-list.scrollTop,bottom:145+i*45-list.scrollTop,height:45});});measureRows();
+  cards.forEach((card,i)=>{card.getBoundingClientRect=()=>({top:120+i*620-content.scrollTop,bottom:120+i*620+(i===2?200:600)-content.scrollTop});});
+  const scroll=top=>{content.scrollTop=top;content.dispatchEvent({type:'scroll'});view.flushFrames();};
+  const position=()=>view.root.querySelectorAll('.br-nav-group')[1].textContent;
+  content.focus();scroll(590);assert.equal(position(),'←1 / 3→');
+  scroll(620);assert.equal(position(),'←2 / 3→');
+  assert.equal(rows[1].attrs['aria-selected'],'true');assert.equal(rows[0].attrs['aria-selected'],'false');
+  assert.equal(view.document.activeElement,content);assert.equal(content.scrollTop,620);assert.equal(view.root.querySelectorAll('.br-file-card')[0],cards[0]);
+  assert.equal(view.requests.length,1);assert.equal(view.requests[0].file,1);
+  view.render({...initial,version:2,file:1,review:{...initial.review,selected:payload('two.go')}});
+  assert.equal(content.scrollTop,620);assert.equal(position(),'←2 / 3→');
+  view.render({...initial,version:3,loading:true});scroll(1060);assert.equal(position(),'←2 / 3→');
+  view.render({...initial,version:4,file:1,review:{...initial.review,selected:payload('two.go')}});view.flushFrames();
+  assert.equal(position(),'←3 / 3→');assert.ok(list.scrollTop>0);
+  // Explicit navigation to a short file at a clamped scroll position wins
+  // over its queued scroll event, until the user actually scrolls again.
+  rows[1].click();measureRows();scroll(1060);assert.equal(position(),'←2 / 3→');
+  scroll(0);assert.equal(position(),'←1 / 3→');assert.equal(list.scrollTop,0);
+  assert.equal(view.document.activeElement,content);
+});
+test('scroll tracking is coalesced, isolated to continuous mode and removed on teardown',()=>{
+  const view=viewer();view.render(state());const content=view.root.querySelector('.br-content');
+  content.dispatchEvent({type:'scroll'});assert.equal(view.frames.size,0);
+  const mode=view.root.querySelector('.br-presentation');mode.value='continuous';mode.onchange();
+  content.dispatchEvent({type:'scroll'});content.dispatchEvent({type:'scroll'});assert.equal(view.frames.size,1);
+  mode.value='file';mode.onchange();view.flushFrames();assert.equal(view.root.querySelectorAll('.br-nav-group')[1].textContent,'←1 / 1→');
+  mode.value='continuous';mode.onchange();content.dispatchEvent({type:'scroll'});assert.equal(view.frames.size,1);
+  view.destroy();assert.equal(view.frames.size,0);content.dispatchEvent({type:'scroll'});assert.equal(view.frames.size,0);
 });
 test('full refresh invalidates same-size cached file content while selections retain it',()=>{
   const view=viewer(),initial=state({files:[{path:'one.go'},{path:'two.go'}]});view.render(initial);
