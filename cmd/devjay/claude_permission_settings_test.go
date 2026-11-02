@@ -115,7 +115,7 @@ func TestClaudePermissionTimeoutUpgradePreservesExistingGlobalSettings(t *testin
 	if err := os.WriteFile(path, old, 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := upgradeClaudeHookTimeout(path, command); err != nil {
+	if err := migrateClaudeHookSettings(path, command); err != nil {
 		t.Fatal(err)
 	}
 	updated, _ := os.ReadFile(path)
@@ -132,7 +132,7 @@ func TestClaudePermissionTimeoutUpgradePreservesExistingGlobalSettings(t *testin
 	if string(backup) != string(old) {
 		t.Fatal("backup differs")
 	}
-	if err := upgradeClaudeHookTimeout(path, command); err != nil {
+	if err := migrateClaudeHookSettings(path, command); err != nil {
 		t.Fatal(err)
 	}
 	backups, _ = filepath.Glob(path + ".devjay-backup-*")
@@ -141,7 +141,7 @@ func TestClaudePermissionTimeoutUpgradePreservesExistingGlobalSettings(t *testin
 	}
 }
 
-func TestClaudePermissionTimeoutUpgradeNeverEnablesOrReplacesHook(t *testing.T) {
+func TestClaudePermissionMigrationNeverEnablesOrReplacesCustomHook(t *testing.T) {
 	command := claudeHookCommand("/Applications/DevJay.app/Contents/MacOS/DevJay")
 	for _, input := range []string{
 		`{}`, `{"hooks":{"PermissionRequest":[]}}`,
@@ -149,7 +149,7 @@ func TestClaudePermissionTimeoutUpgradeNeverEnablesOrReplacesHook(t *testing.T) 
 	} {
 		path := filepath.Join(t.TempDir(), "settings.json")
 		os.WriteFile(path, []byte(input), 0600)
-		if err := upgradeClaudeHookTimeout(path, command); err != nil {
+		if err := migrateClaudeHookSettings(path, command); err != nil {
 			t.Fatal(err)
 		}
 		got, _ := os.ReadFile(path)
@@ -158,7 +158,7 @@ func TestClaudePermissionTimeoutUpgradeNeverEnablesOrReplacesHook(t *testing.T) 
 		}
 	}
 	path := filepath.Join(t.TempDir(), "missing", "settings.json")
-	if err := upgradeClaudeHookTimeout(path, command); err != nil {
+	if err := migrateClaudeHookSettings(path, command); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Dir(path)); !os.IsNotExist(err) {
@@ -168,7 +168,7 @@ func TestClaudePermissionTimeoutUpgradeNeverEnablesOrReplacesHook(t *testing.T) 
 	data = []byte(strings.Replace(string(data), `"timeout": 86410`, `"timeout": 90`, 1))
 	path = filepath.Join(t.TempDir(), "settings.json")
 	os.WriteFile(path, data, 0600)
-	if err := upgradeClaudeHookTimeout(path, command); err != nil {
+	if err := migrateClaudeHookSettings(path, command); err != nil {
 		t.Fatal(err)
 	}
 	got, _ := os.ReadFile(path)
@@ -177,7 +177,137 @@ func TestClaudePermissionTimeoutUpgradeNeverEnablesOrReplacesHook(t *testing.T) 
 	}
 	link := filepath.Join(t.TempDir(), "link")
 	os.Symlink(path, link)
-	if err := upgradeClaudeHookTimeout(link, command); err == nil {
+	if err := migrateClaudeHookSettings(link, command); err == nil {
 		t.Fatal("followed symlink")
+	}
+}
+
+func TestClaudePermissionMigrationFollowsActiveAppBundle(t *testing.T) {
+	installed := claudeHookCommand("/Applications/DevJay.app/Contents/MacOS/DevJay")
+	development := claudeHookCommand("/Users/test/DevJay/bin/DevJay.app/Contents/MacOS/DevJay")
+	for _, tc := range []struct{ name, old, current string }{
+		{"install", development, installed},
+		{"development", installed, development},
+		{"moved", claudeHookCommand("/Volumes/DevJay's disk/DevJay.app/Contents/MacOS/DevJay"), installed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			original, _, err := editClaudeHookSettings([]byte(`{"customID":9007199254740993,"permissions":{"ask":["Bash(git push:*)"]},"hooks":{"PermissionRequest":[{"hooks":[{"type":"command","command":"other","timeout":310}]}],"Stop":[{"hooks":[{"type":"command","command":"status"}]}]}}`), tc.old, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var expected map[string]any
+			decoder := json.NewDecoder(strings.NewReader(string(original)))
+			decoder.UseNumber()
+			if err := decoder.Decode(&expected); err != nil {
+				t.Fatal(err)
+			}
+			groups := expected["hooks"].(map[string]any)["PermissionRequest"].([]any)
+			handler := groups[1].(map[string]any)["hooks"].([]any)[0].(map[string]any)
+			handler["timeout"] = 90
+			handler["customField"] = "keep me"
+			original, err = json.Marshal(expected)
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(t.TempDir(), "settings.json")
+			if err := os.WriteFile(path, original, 0600); err != nil {
+				t.Fatal(err)
+			}
+			enabled, err := claudeHookEnabled(path, tc.current)
+			if err != nil || enabled {
+				t.Fatalf("fixture not associated with previous app: %v %v", enabled, err)
+			}
+			if err := migrateClaudeHookSettings(path, tc.current); err != nil {
+				t.Fatal(err)
+			}
+			enabled, err = claudeHookEnabled(path, tc.current)
+			if err != nil || !enabled {
+				t.Fatalf("active app not enabled: %v %v", enabled, err)
+			}
+			if enabled, err := claudeHookEnabled(path, tc.old); err != nil || enabled {
+				t.Fatalf("old app still owns hook: %v %v", enabled, err)
+			}
+			handler["command"] = tc.current
+			want, _ := json.MarshalIndent(expected, "", "  ")
+			got, _ := os.ReadFile(path)
+			if string(got) != string(append(want, '\n')) {
+				t.Fatalf("changed unrelated settings: %s", got)
+			}
+			backups, _ := filepath.Glob(path + ".devjay-backup-*")
+			if len(backups) != 1 {
+				t.Fatal("expected one recoverable migration backup")
+			}
+			backup, _ := os.ReadFile(backups[0])
+			if string(backup) != string(original) {
+				t.Fatal("backup differs")
+			}
+			if err := migrateClaudeHookSettings(path, tc.current); err != nil {
+				t.Fatal(err)
+			}
+			backups, _ = filepath.Glob(path + ".devjay-backup-*")
+			if len(backups) != 1 {
+				t.Fatal("migration repeated")
+			}
+		})
+	}
+}
+
+func TestClaudePermissionMigrationDoesNotAdoptCustomOrDisabledHooks(t *testing.T) {
+	current := claudeHookCommand("/Applications/DevJay.app/Contents/MacOS/DevJay")
+	old := claudeHookCommand("/old/DevJay.app/Contents/MacOS/DevJay")
+	for _, tc := range []struct {
+		name, command, matcher, label string
+		disabled                      bool
+	}{
+		{"disabled", old, "Bash|Edit|Write|MultiEdit", claudeHookLabel, true},
+		{"custom matcher", old, "Bash", claudeHookLabel, false},
+		{"custom label", old, "Bash|Edit|Write|MultiEdit", "Custom handler", false},
+		{"wrapper", claudeHookCommand("/scripts/DevJay"), "Bash|Edit|Write|MultiEdit", claudeHookLabel, false},
+		{"empty command", "' --claude-permission-hook", "Bash|Edit|Write|MultiEdit", claudeHookLabel, false},
+		{"compound", old + "; echo extra", "Bash|Edit|Write|MultiEdit", claudeHookLabel, false},
+		{"injected", `'/old/DevJay.app/Contents/MacOS/DevJay'; echo extra; '' --claude-permission-hook`, "Bash|Edit|Write|MultiEdit", claudeHookLabel, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			data, _ := json.Marshal(map[string]any{"disableAllHooks": tc.disabled, "hooks": map[string]any{"PermissionRequest": []any{map[string]any{"matcher": tc.matcher, "hooks": []any{map[string]any{"type": "command", "command": tc.command, "statusMessage": tc.label, "timeout": 310}}}}}})
+			path := filepath.Join(t.TempDir(), "settings.json")
+			if err := os.WriteFile(path, data, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := migrateClaudeHookSettings(path, current); err != nil {
+				t.Fatal(err)
+			}
+			got, _ := os.ReadFile(path)
+			if string(got) != string(data) {
+				t.Fatalf("changed customized/disabled setup: %s", got)
+			}
+			backups, _ := filepath.Glob(path + ".devjay-backup-*")
+			if len(backups) != 0 {
+				t.Fatal("wrote unnecessary backup")
+			}
+		})
+	}
+}
+
+func TestClaudePermissionMigrationRejectsAmbiguousManagedHooks(t *testing.T) {
+	current := claudeHookCommand("/Applications/DevJay.app/Contents/MacOS/DevJay")
+	data, _, _ := editClaudeHookSettings(nil, claudeHookCommand("/old/DevJay.app/Contents/MacOS/DevJay"), true)
+	var root map[string]any
+	if err := json.Unmarshal(data, &root); err != nil {
+		t.Fatal(err)
+	}
+	hooks := root["hooks"].(map[string]any)
+	groups := hooks["PermissionRequest"].([]any)
+	hooks["PermissionRequest"] = append(groups, groups[0])
+	data, _ = json.Marshal(root)
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := migrateClaudeHookSettings(path, current); err == nil {
+		t.Fatal("accepted duplicate handlers")
+	}
+	got, _ := os.ReadFile(path)
+	if string(got) != string(data) {
+		t.Fatal("changed ambiguous setup")
 	}
 }

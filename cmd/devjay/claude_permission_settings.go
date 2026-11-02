@@ -144,9 +144,28 @@ func setClaudeHookSettings(path, command string, enabled bool) error {
 	return writeClaudeHookSettings(path, data, next)
 }
 
-// Upgrade only this executable's existing, previously enabled hook. Never
-// enable a missing hook, replace another build's hook, or alter custom timeouts.
-func upgradeClaudeHookTimeout(path, command string) error {
+// Recognize only our literal, shell-quoted app-bundle command. Do not adopt a
+// wrapper, a compound shell command, or an unrelated program with our label.
+func claudeBundleHookCommand(command string) bool {
+	const suffix = "' --claude-permission-hook"
+	if len(command) <= len(suffix) || !strings.HasPrefix(command, "'") || !strings.HasSuffix(command, suffix) {
+		return false
+	}
+	executable := strings.ReplaceAll(command[1:len(command)-len(suffix)], `'"'"'`, "'")
+	if claudeHookCommand(executable) != command || !filepath.IsAbs(executable) || filepath.Clean(executable) != executable || strings.ContainsAny(executable, "\r\n\x00") {
+		return false
+	}
+	macos := filepath.Dir(executable)
+	contents := filepath.Dir(macos)
+	bundle := filepath.Dir(contents)
+	return filepath.Base(executable) == "DevJay" && filepath.Base(macos) == "MacOS" && filepath.Base(contents) == "Contents" && strings.HasSuffix(filepath.Base(bundle), ".app")
+}
+
+// An already-enabled integration follows the active app bundle. Single-instance
+// ownership ensures only the running copy does this; the peer check still
+// requires its exact executable. Preserve custom fields/timeouts and never
+// install a missing hook or migrate an unfamiliar/custom command.
+func migrateClaudeHookSettings(path, command string) error {
 	data, err := readClaudeHookSettings(path)
 	if err != nil || len(data) == 0 {
 		return err
@@ -157,9 +176,12 @@ func upgradeClaudeHookTimeout(path, command string) error {
 	if !json.Valid(data) || decoder.Decode(&root) != nil || root == nil {
 		return errors.New("Claude settings must contain a valid JSON object.")
 	}
+	if root["disableAllHooks"] == true {
+		return nil
+	}
 	hooks, _ := root["hooks"].(map[string]any)
 	groups, _ := hooks["PermissionRequest"].([]any)
-	changed := false
+	var managed []map[string]any
 	for _, value := range groups {
 		group, _ := value.(map[string]any)
 		if group["matcher"] != "Bash|Edit|Write|MultiEdit" {
@@ -168,11 +190,24 @@ func upgradeClaudeHookTimeout(path, command string) error {
 		handlers, _ := group["hooks"].([]any)
 		for _, value := range handlers {
 			h, _ := value.(map[string]any)
-			if ownClaudeHook(h, command) && h["timeout"] == json.Number("310") {
-				h["timeout"] = claudeHookTimeoutSeconds
-				changed = true
+			oldCommand, _ := h["command"].(string)
+			if ownClaudeHook(h, command) || (ownClaudeHook(h, oldCommand) && claudeBundleHookCommand(oldCommand) && claudeBundleHookCommand(command)) {
+				managed = append(managed, h)
 			}
 		}
+	}
+	if len(managed) > 1 {
+		return errors.New("Multiple DevJay permission hooks are configured. Enable Claude prompts again in Settings to repair the integration.")
+	}
+	if len(managed) == 0 {
+		return nil
+	}
+	handler := managed[0]
+	changed := handler["command"] != command
+	handler["command"] = command
+	if handler["timeout"] == json.Number("310") {
+		handler["timeout"] = claudeHookTimeoutSeconds
+		changed = true
 	}
 	if !changed {
 		return nil

@@ -48,7 +48,7 @@ func (m *siteManager) updateClaudePermissionSettings(operation string) {
 		command := claudeHookCommand(executable)
 		if err == nil {
 			if operation == "status" {
-				err = upgradeClaudeHookTimeout(path, command)
+				err = migrateClaudeHookSettings(path, command)
 			} else {
 				err = setClaudeHookSettings(path, command, operation == "enable")
 			}
