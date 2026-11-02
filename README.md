@@ -39,6 +39,8 @@ This builds and opens `bin/DevJay.app`. Development and installed builds share S
 
 In Settings, choose a horizontal, vertical, or custom layout, adjust window appearance, and select your preferred editor. Drag cards by their headings while Settings is open to rearrange them. Removing a Site unregisters it after confirmation and leaves its folder untouched.
 
+Choose **System**, **Dark**, or **Light** in **Settings → Windows and layout → Appearance**. System is the default and follows macOS appearance changes automatically. The choice applies to all DevJay windows and Profiles and is remembered between runs.
+
 Settings has sidebar pages for **Sites**, **Profiles**, **IDEs & editors**, **Windows and layout**, and **Keyboard shortcuts**. Profiles remember arrangements for monitor combinations such as Office, Home, and Laptop, and can switch automatically when displays change. Use **Apply changes to** to edit one or several Profiles. See the [Profile guide](docs/USER_GUIDE.md#profiles-and-settings-pages) for setup and placement recovery. Keyboard shortcuts lists the global bindings and lets you record custom combinations or restore defaults.
 
 ## Check your work

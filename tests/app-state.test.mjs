@@ -45,6 +45,7 @@ function app(search='', actionResult=true) {
  const root=new Element('main'),body=new Element('body');
  document={body,activeElement:body,createElement:tag=>new Element(tag),createElementNS:(_namespace,tag)=>new Element(tag),createTextNode:text=>{const n=new Element('text');n.textContent=text;return n;},querySelector:s=>s==='#app'?root:body.querySelector(s),querySelectorAll:s=>body.querySelectorAll(s),addEventListener(name,fn){(documentListeners[name] ||= []).push(fn);},removeEventListener(name,fn){documentListeners[name]=(documentListeners[name] || []).filter(listener=>listener!==fn);}};
  body.append(root);
+ document.documentElement=new Element('html');document.documentElement.append(body);
  const events={},calls=[];
  let drag, bridgeReport;
  const noop=()=>{};
@@ -66,6 +67,53 @@ function app(search='', actionResult=true) {
 const site=(id,branch='main')=>({id,path:`/tmp/${id}`,prefix:'/tmp/',name:id,git:{branch},position:{label:'Desktop 1'},window:{}});
 const state=sites=>({sites,preferences:{},layout:'horizontal',settingsOpen:true});
 const appLabels=view=>view.root.querySelectorAll('.development-app-group').map(group=>group.attrs['aria-label']);
+
+test('appearance updates every window and restores the saved selection after a rejected edit',async()=>{
+ for(const search of ['', '?site=a', '?settings', '?actions=one', '?viewer=one']){
+  const view=app(search);
+  view.snapshot({...state([site('a')]),theme:'light'});
+  assert.equal(view.document.documentElement.dataset.theme,'light');
+  if(search==='?settings'){
+   const choice=view.root.querySelectorAll('select').find(n=>n.attrs['aria-label']==='Appearance');
+   assert.equal(choice.value,'light');
+   choice.value='dark';await choice.onchange();
+   assert.deepEqual(view.calls.at(-1),['devjay:theme','dark']);
+   view.snapshot({...state([site('a')]),theme:'light'});
+   assert.equal(choice.value,'light');
+  }
+  view.snapshot({...state([site('a')]),theme:'dark'});
+  assert.equal(view.document.documentElement.dataset.theme,'dark');
+ }
+});
+
+test('a hidden window applies the newest appearance on reveal',()=>{
+ const view=app('?site=a');view.snapshot(state([site('a')]));
+ view.event('devjay:visibility',false);
+ view.snapshot({...state([site('a')]),theme:'light'});
+ view.event('devjay:visibility',true);
+ assert.equal(view.document.documentElement.dataset.theme,'light');
+});
+
+test('System is the default selection and tracks macOS without changing explicit choices',async()=>{
+ for(const search of ['', '?site=a', '?settings', '?actions=one', '?viewer=one']){
+  const view=app(search);
+  const choice=()=>view.root.querySelectorAll('select').find(n=>n.attrs['aria-label']==='Appearance');
+  for(const resolvedTheme of ['light','dark','light']){
+   view.snapshot({...state([site('a')]),resolvedTheme});
+   assert.equal(view.document.documentElement.dataset.theme,resolvedTheme);
+   if(search==='?settings') assert.equal(choice().value,'system');
+  }
+  if(search==='?settings'){
+   assert.deepEqual(Array.from(choice().children,n=>n.value),['system','dark','light']);
+   choice().value='system';await choice().onchange();
+   assert.deepEqual(view.calls.at(-1),['devjay:theme','system']);
+  }
+  for(const theme of ['dark','light']){
+   view.snapshot({...state([site('a')]),theme,resolvedTheme:theme==='light'?'dark':'light'});
+   assert.equal(view.document.documentElement.dataset.theme,theme);
+  }
+ }
+});
 
 test('Settings sidebar switches pages without rebuilding their controls',()=>{
  const view=app('?settings');view.snapshot(state([site('a')]));

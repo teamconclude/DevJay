@@ -74,6 +74,16 @@ int main(void) {
         BranchReviewLayoutDelegate *delegate = [[[BranchReviewLayoutDelegate alloc] init] autorelease];
         view.navigationDelegate=delegate; window.contentView=view;
         [view loadHTMLString:html baseURL:nil]; spin(&loaded);
+        // Real WebKit styles: syntax must remain legible on both diff fills.
+        evaluate(view,@"document.documentElement.dataset.theme='light';"
+            "const luminance=color=>{const c=color.match(/[\\d.]+/g).slice(0,3).map(n=>{n=Number(n)/255;return n<=.04045?n/12.92:((n+.055)/1.055)**2.4});return c[0]*.2126+c[1]*.7152+c[2]*.0722;};"
+            "const contrast=(a,b)=>{a=luminance(a);b=luminance(b);return (Math.max(a,b)+.05)/(Math.min(a,b)+.05);};"
+            "const sample=document.createElement('div');sample.className='br-code';document.body.append(sample);"
+            "window.appearanceContrasts=[];for(const fill of ['br-add','br-delete']){sample.className='br-code '+fill;for(const syntax of ['syntax-comment','syntax-keyword','syntax-string','syntax-number','syntax-function','syntax-tag']){sample.innerHTML='<span class='+syntax+'>Sample</span>';appearanceContrasts.push(contrast(getComputedStyle(sample.firstChild).color,getComputedStyle(sample).backgroundColor));}}sample.remove();");
+        check(view,@"appearanceContrasts.every(value=>value>=4.5)");
+        check(view,@"getComputedStyle(document.body).backgroundColor==='rgb(255, 255, 255)' && getComputedStyle(document.body).colorScheme==='light'");
+        evaluate(view,@"document.documentElement.dataset.theme='dark'");
+        check(view,@"getComputedStyle(document.body).backgroundColor==='rgb(30, 34, 42)' && getComputedStyle(document.body).colorScheme==='dark'");
 
         for (NSNumber *width in @[@1280,@900,@720]) {
             [window setContentSize:NSMakeSize(width.doubleValue,width.intValue == 720 ? 460 : 700)];
@@ -203,6 +213,7 @@ int main(void) {
             check(view,@"document.querySelectorAll('.br-file').length>0 && document.querySelectorAll('.br-change').length>0");
         }
         NSString *output = NSProcessInfo.processInfo.environment[@"DEVJAY_REVIEW_SNAPSHOT"];
+        if (NSProcessInfo.processInfo.environment[@"DEVJAY_LIGHT_PREVIEW"]) evaluate(view,@"document.documentElement.dataset.theme='light'");
         if (output) {
             __block BOOL done=NO;
             [view takeSnapshotWithConfiguration:nil completionHandler:^(NSImage *image,NSError *error) {

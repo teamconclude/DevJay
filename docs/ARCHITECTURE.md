@@ -31,6 +31,7 @@ DevJay is a macOS-only Go application with Wails v3 beta.23 and embedded HTML/CS
 | Native activation, layout, Spaces | `windows_darwin.*`, `layout_darwin.m`, `layout_geometry.h`, `spaces_darwin.*` |
 | WebKit/wake recovery | `ui_recovery*`, `frontend/ui-ready.js` |
 | Shared UI, events, and styling | `frontend/app.js`, `frontend/bridge.js`, `frontend/index.html`, `frontend/style.css` |
+| Saved System/dark/light appearance, initial document and native colors | `appearance.go`, `appearance_darwin.*`, `frontend/style.css`, `frontend/branch-review.css` |
 | Focused UI helpers | Other `frontend/*.js` modules, paired with `tests/*.test.mjs` |
 | Site path label fitting | `frontend/path-label.js` measures the actual fonts, truncates parent paths from the start and names in the middle, and refits on element/width changes without polling |
 | App updates | `updater*.go`, `native_scripts/update.sh`, `frontend/updater.js` |
@@ -142,7 +143,9 @@ Native layout dictionaries use `DevJay.WindowLayout.Profile.<id>`. First migrati
 
 ## Persistence and native behavior
 
-`sites.go` stores Site registration, ordering, layout, and editor preferences in an atomically replaced JSON file. Invalid configuration is reported and not overwritten. Site IDs remain stable when a registered folder changes path. New IDs normally derive from the canonical path; reusing a moved Site's old path receives a fresh ID. Window geometry, display/desktop identity, and native appearance preferences use macOS preferences.
+The top-level `SiteConfig.theme` preference is global across Profiles and defaults to System when absent or unrecognized. Explicit Dark and Light choices are preserved. Only the Settings sender may submit a System/dark/light change; the manager queue saves it before applying AppKit appearance and window background colors. System clears the application appearance override. Foundation reads the current macOS appearance before window creation; Wails' macOS appearance-change notifications enqueue a fresh reading and repaint when System is selected. Every window's snapshot includes the normalized preference and resolved dark/light palette, so a system change does not replace the saved selection. The asset handler reads an atomic copy to render the initial HTML with the current theme (and disables document caching), preventing a stale dark frame on new windows or WebKit reloads. CSS semantic light colors retain the original dark colors as fallbacks. Native title bars and dialogs inherit the application appearance; already-open layer-backed popovers and compact cards refresh their resolved colors without navigation or geometry changes.
+
+`sites.go` stores Site registration, ordering, layout, appearance, and editor preferences in an atomically replaced JSON file. Invalid configuration is reported and not overwritten. Site IDs remain stable when a registered folder changes path. New IDs normally derive from the canonical path; reusing a moved Site's old path receives a fresh ID. Window geometry, display/desktop identity, and native appearance preferences use macOS preferences.
 
 | Build | Sites file | Bundle/preferences identity |
 | --- | --- | --- |

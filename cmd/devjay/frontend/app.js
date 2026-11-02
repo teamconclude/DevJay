@@ -349,7 +349,7 @@ function details(site, parent, showIDEStatus) {
   }
 }
 
-let list, decoration, layout, siteError, siteErrorTimer, shortcutError, shortcutSettings, addAfter;
+let list, decoration, theme, layout, siteError, siteErrorTimer, shortcutError, shortcutSettings, addAfter;
 if (viewer) {
   const review = params.has('review');
   document.body.className = review ? 'branch-review' : 'git-viewer';
@@ -405,6 +405,14 @@ if (viewer) {
   shortcutError = el('p', 'help error'); shortcutError.hidden = true; shortcutError.setAttribute('role', 'status'); section.append(shortcutError);
   section=pages.windows;
   section.append(el('h2', '', 'Windows and layout'));
+  const themeLabel = el('label', 'decoration-setting', 'Appearance');
+  theme = el('select'); theme.setAttribute('aria-label', 'Appearance');
+  for (const [value, title] of [['system', 'System'], ['dark', 'Dark'], ['light', 'Light']]) {
+    const option = el('option', '', title); option.value = value; theme.append(option);
+  }
+  theme.onchange = () => emit('theme', theme.value);
+  themeLabel.append(theme);
+  section.append(themeLabel, el('p', 'help', 'System follows your macOS appearance. Applies to all windows and Profiles.'));
   const siteWindowsLabel = el('label', 'preference'), siteWindows = el('input');
   siteWindows.type = 'checkbox'; siteWindows.dataset.pref = 'showSiteWindows';
   siteWindows.onchange = () => emit('showSiteWindows', siteWindows.checked);
@@ -579,6 +587,9 @@ function refreshAppTooltip(state) {
   emit('app-tooltip-refresh');
 }
 function render(state) {
+  const preference = state.theme === 'light' || state.theme === 'dark' ? state.theme : 'system';
+  document.documentElement.dataset.theme = preference === 'system' ? (state.resolvedTheme === 'light' ? 'light' : 'dark') : preference;
+  if (theme) theme.value = preference;
   report('snapshot', state);
   if (viewer) { renderViewerSnapshot(state); return; }
   snapshot = state;

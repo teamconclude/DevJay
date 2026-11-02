@@ -41,6 +41,7 @@ static OSStatus testRemove(EventHandlerRef ref) { assert(ref); installedHandler 
 #define UnregisterEventHotKey testUnregister
 #define RemoveEventHandler testRemove
 #include "../cmd/devjay/strip_controls_darwin.m"
+#include "../cmd/devjay/appearance_darwin.m"
 
 static NSString *selectedSite;
 void devjay_shortcut_recorded(unsigned long long token, int code, unsigned int modifiers) {
@@ -189,6 +190,35 @@ int main(void) {
             assert([first.title isEqual:@"Alpha"] && [second.title isEqual:@"Beta"]);
             assert(first.cell.lineBreakMode == NSLineBreakByTruncatingMiddle);
             assert(first.layer.borderWidth == 2 && second.layer.borderWidth == 1);
+            unsigned int appearanceOrders = frontOrders;
+            NSRect compactFrame = stripControls->compact.frame;
+            CGColorRef darkColor = CGColorRetain(first.layer.backgroundColor);
+            for (int light = 1; light >= 0; light--) {
+                devjay_set_appearance(light);
+                devjay_strip_appearance(light);
+                NSString *expected = light ? NSAppearanceNameAqua : NSAppearanceNameDarkAqua;
+                assert(([[window.effectiveAppearance bestMatchFromAppearancesWithNames:@[NSAppearanceNameAqua,NSAppearanceNameDarkAqua]] isEqual:expected]));
+                assert(CGColorEqualToColor(darkColor,first.layer.backgroundColor) == !light);
+                assert(first.layer.borderWidth == 2 && second.layer.borderWidth == 1);
+                assert(NSEqualRects(compactFrame,stripControls->compact.frame) && frontOrders == appearanceOrders);
+            }
+            CGColorRelease(darkColor);
+            devjay_set_appearance(-1);
+            assert(NSApp.appearance == nil); // System relinquishes any override.
+            devjay_strip_appearance(!devjay_system_appearance_dark());
+            assert(first.layer.borderWidth == 2 && second.layer.borderWidth == 1);
+            assert(NSEqualRects(compactFrame,stripControls->compact.frame) && frontOrders == appearanceOrders);
+            // Simulate both OS preference values in this process only.
+            NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+            NSDictionary *arguments = [[defaults volatileDomainForName:NSArgumentDomain] copy];
+            for (NSString *value in @[@"Dark",@"Light"]) {
+                NSMutableDictionary *domain = [NSMutableDictionary dictionaryWithDictionary:arguments];
+                domain[@"AppleInterfaceStyle"] = value;
+                [defaults setVolatileDomain:domain forName:NSArgumentDomain];
+                assert(devjay_system_appearance_dark() == [value isEqual:@"Dark"]);
+            }
+            [defaults setVolatileDomain:arguments forName:NSArgumentDomain];
+            [arguments release];
             assert([first acceptsFirstMouse:nil] && !first.acceptsFirstResponder);
             [second performClick:nil]; assert([selectedSite isEqual:@"site-b"]);
             [first.menu performActionForItemAtIndex:1]; assert(lastAction == 12);

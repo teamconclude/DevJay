@@ -53,6 +53,9 @@ int main(void) {
         [view loadHTMLString:html baseURL:nil];spin(&loaded);
         evaluate(view,@"render({sites:['DevJay','Conclude','c0','c1','c2','c3','Conclude-webdoc','Conclude-webdoc2'].map((name,i)=>({id:String(i),name,path:'~/'+name,prefix:'~/',enabled:i!==7,folderMissing:i===4,needsPlacement:i===5,git:{branch:'hanord/feature-layout'},position:{label:'Desktop '+(i+1)},window:{}})),profiles:{current:'home',profiles:[{id:'home',name:'Home'},{id:'cabin',name:'Cabin'},{id:'laptop',name:'Laptop'}],targets:['home'],automatic:true,displays:[{name:'LG UltraFine',X:-100},{name:'Studio Display',X:0},{name:'ASUS PA27JCV',X:100}]},preferences:{onTop:true,allDesktops:true,showIDEStatus:true},layout:'horizontal',settingsOpen:true});editorSettings.renderEditor({editor:{apps:[],choice:'',useProject:true}})");
         evaluate(view,@"shortcutSettings.render({items:Array.from({length:13},(_,i)=>({id:'shortcut-'+i,title:i<2?'Hide/show Site windows':'Go to Site '+(i+1),label:i===0?'⌃⌥⇧⌘Space':'⌃⌥⌘'+(i%10),default:'⌃⌥⌘D',custom:i===0}))})");
+        for (NSArray *appearance in @[@[@"dark",@"dark"],@[@"light",@"light"],@[@"system",@"dark"],@[@"system",@"light"]]) {
+        evaluate(view,[NSString stringWithFormat:@"render({...snapshot,theme:'%@',resolvedTheme:'%@'})",appearance[0],appearance[1]]);
+        assert([evaluate(view,@"document.querySelector('[aria-label=Appearance]').value===snapshot.theme && getComputedStyle(document.documentElement).colorScheme===snapshot.resolvedTheme") boolValue]);
         for (NSNumber *width in @[@880,@760]) {
             [window setContentSize:NSMakeSize(width.doubleValue,width.intValue==760?440:620)];
             for (NSString *state in @[@"available",@"downloading",@"ready",@"manual",@"error"]) {
@@ -78,6 +81,7 @@ int main(void) {
             evaluate(view,@"document.querySelector('.profile-dialog-actions button').click()");
             assert([evaluate(view,@"document.querySelector('.profile-modal').hidden") boolValue]);
         }
+        }
         // Exercise the real font measurement and card/PR flex widths offscreen.
         evaluate(view,@"var originalRAF=window.requestAnimationFrame,pathFrames=[];window.requestAnimationFrame=fn=>{pathFrames.push(fn);return pathFrames.length;};"
             "var fixture=document.createElement('div');fixture.className='card-heading';fixture.style.cssText='position:fixed;left:0;top:0;width:150px;font-family:monospace';document.body.append(fixture);"
@@ -95,7 +99,7 @@ int main(void) {
         // Optional image for visual inspection; this fixture never shows a window.
         NSString *output=NSProcessInfo.processInfo.environment[@"DEVJAY_SETTINGS_SNAPSHOT"];
         if(output) {
-            [window setContentSize:NSMakeSize(880,620)];evaluate(view,@"settingsNavigation.show('shortcuts');render({...snapshot,update:{state:'ready',version:'0.8.1'}})");
+            [window setContentSize:NSMakeSize(880,620)];evaluate(view,@"settingsNavigation.show('windows');render({...snapshot,update:{state:'idle'}})");
             __block BOOL done=NO;
             [view takeSnapshotWithConfiguration:nil completionHandler:^(NSImage *image,NSError *error){
                 assert(image&&!error);NSBitmapImageRep *bitmap=[NSBitmapImageRep imageRepWithData:image.TIFFRepresentation];

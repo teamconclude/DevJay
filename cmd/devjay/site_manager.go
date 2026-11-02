@@ -38,6 +38,8 @@ type SiteView struct {
 	DevelopmentAppsKnown bool             `json:"developmentAppsKnown"`
 }
 type appSnapshot struct {
+	Theme            string                   `json:"theme"`
+	ResolvedTheme    string                   `json:"resolvedTheme"`
 	Update           UpdateStatus             `json:"update"`
 	ShortcutSettings *ShortcutSettingsView    `json:"shortcutSettings,omitempty"`
 	ShortcutLabels   []string                 `json:"shortcutLabels,omitempty"`
@@ -60,6 +62,8 @@ type appSnapshot struct {
 	Error            string                   `json:"error"`
 }
 type siteManager struct {
+	appearanceAssets                                               *appearanceAssets
+	systemDark                                                     bool
 	updater                                                        *appUpdater
 	updateStatus                                                   UpdateStatus
 	updateFound                                                    *updateRelease
@@ -121,6 +125,7 @@ func (m *siteManager) send(fn func()) {
 	}
 }
 func (m *siteManager) run() {
+	m.applyAppearance()
 	m.startUpdater()
 	defer func() {
 		if m.updater.staged != "" && m.updateStatus.State != "installing" {
@@ -226,7 +231,7 @@ func (m *siteManager) openSettings() {
 	}
 }
 func (m *siteManager) createWindow(site Site) {
-	window := m.app.Window.NewWithOptions(application.WebviewWindowOptions{Name: "site-" + site.ID, Title: "DevJay Site · " + filepath.Base(site.Path), URL: "/?site=" + site.ID, Hidden: m.config.SiteWindowsHidden, Width: 290, Height: 174, Frameless: m.config.decoration() != "normal", X: 160, Y: 260, InitialPosition: application.WindowXY, DisableResize: true, CloseButtonState: application.ButtonDisabled, MaximiseButtonState: application.ButtonDisabled, BackgroundColour: application.NewRGB(20, 24, 32), Mac: application.MacWindow{CornerType: application.MacWindowCornerTypeRounded, CollectionBehavior: application.MacWindowCollectionBehaviorManaged | application.MacWindowCollectionBehaviorFullScreenNone, TabbingMode: application.MacWindowTabbingModeDisallowed}})
+	window := m.app.Window.NewWithOptions(application.WebviewWindowOptions{Name: "site-" + site.ID, Title: "DevJay Site · " + filepath.Base(site.Path), URL: "/?site=" + site.ID, Hidden: m.config.SiteWindowsHidden, Width: 290, Height: 174, Frameless: m.config.decoration() != "normal", X: 160, Y: 260, InitialPosition: application.WindowXY, DisableResize: true, CloseButtonState: application.ButtonDisabled, MaximiseButtonState: application.ButtonDisabled, BackgroundColour: m.config.backgroundColour(m.systemDark), Mac: application.MacWindow{CornerType: application.MacWindowCornerTypeRounded, CollectionBehavior: application.MacWindowCollectionBehaviorManaged | application.MacWindowCollectionBehaviorFullScreenNone, TabbingMode: application.MacWindowTabbingModeDisallowed}})
 	m.watchView("site-"+site.ID, window)
 	m.mu.Lock()
 	m.runtime[site.ID] = &siteRuntime{Site: site, Window: window, Git: GitStatus{Summary: "Checking repository…", Tone: "muted"}}
@@ -265,7 +270,7 @@ func (m *siteManager) snapshot() appSnapshot {
 	preferences["showSiteWindows"] = !m.config.SiteWindowsHidden
 	m.observeDevelopmentApps(m.monitor.windowNumbers, positions)
 	settingsOpen := m.monitor.settingsOpen
-	result := appSnapshot{Update: m.updateStatus, ShortcutSettings: m.shortcutSettingsView(), ShortcutLabels: m.shortcutLabels(), Profiles: m.profilesView(), StripMode: m.stripMode, ShortcutError: m.shortcutError, ShortcutHints: m.shortcutHints, QuitMessage: m.quitMessage, Layout: m.config.layout(), Placements: m.config.Placements, SettingsOpen: settingsOpen, Decoration: m.config.decoration(), Sites: []SiteView{}, Manual: m.config.Manual, Preferences: preferences}
+	result := appSnapshot{Theme: m.config.theme(), ResolvedTheme: m.config.resolvedTheme(m.systemDark), Update: m.updateStatus, ShortcutSettings: m.shortcutSettingsView(), ShortcutLabels: m.shortcutLabels(), Profiles: m.profilesView(), StripMode: m.stripMode, ShortcutError: m.shortcutError, ShortcutHints: m.shortcutHints, QuitMessage: m.quitMessage, Layout: m.config.layout(), Placements: m.config.Placements, SettingsOpen: settingsOpen, Decoration: m.config.decoration(), Sites: []SiteView{}, Manual: m.config.Manual, Preferences: preferences}
 	if m.configError != nil {
 		result.Error = "Cannot read saved Sites. Configuration has not been overwritten: " + m.configError.Error()
 	}
@@ -492,6 +497,7 @@ func (m *siteManager) browse(after string) {
 	}()
 }
 func (m *siteManager) registerEvents() {
+	m.registerAppearanceEvents()
 	m.registerClaudePermissionSettings()
 	m.registerShortcutEvents()
 	m.registerFolderEvents()

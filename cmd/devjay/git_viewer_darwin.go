@@ -175,7 +175,7 @@ func (m *siteManager) openViewer(req viewerRequest, parent *application.WebviewW
 	w := m.app.Window.NewWithOptions(application.WebviewWindowOptions{
 		Name: id, Title: "DevJay · " + filepath.Base(site.Site.Path) + " · " + title, URL: url,
 		Width: 1100, Height: 740, MinWidth: 720, MinHeight: 460, Hidden: true,
-		BackgroundColour: application.NewRGB(20, 24, 32),
+		BackgroundColour: m.config.backgroundColour(m.systemDark),
 		Mac:              application.MacWindow{CollectionBehavior: application.MacWindowCollectionBehaviorMoveToActiveSpace | application.MacWindowCollectionBehaviorFullScreenNone, TabbingMode: application.MacWindowTabbingModeDisallowed},
 	})
 	state := &GitView{SiteID: req.SiteID, Name: filepath.Base(site.Site.Path), Path: site.Site.Path, File: -1, RemoteNote: site.Git.RemoteNote, Rebased: site.Git.Rebased}

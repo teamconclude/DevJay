@@ -42,10 +42,12 @@ func main() {
 		return
 	}
 	var manager *siteManager
+	index, _ := assets.ReadFile("frontend/index.html")
+	appearance := &appearanceAssets{index: index, fallback: application.BundledAssetFileServer(assets)}
 	app := application.New(application.Options{
 		Name: "DevJay", Description: "Your parallel development workspace",
 		Icon:   bundledIcon(),
-		Assets: application.AssetOptions{Handler: application.BundledAssetFileServer(assets)},
+		Assets: application.AssetOptions{Handler: appearance},
 		// Hiding the last ordinary Site window can trigger AppKit termination
 		// even while the nonactivating strip panel remains visible. Keep global
 		// shortcuts alive when every window is hidden; explicit Quit and the
@@ -63,15 +65,18 @@ func main() {
 	})
 	config, err := loadSites(siteConfigPath())
 	manager = newSiteManager(app, config, err)
+	manager.appearanceAssets = appearance
+	manager.systemDark = systemAppearanceDark()
+	appearance.light.Store(manager.config.resolvedTheme(manager.systemDark) == "light")
 	strip := app.Window.NewWithOptions(application.WebviewWindowOptions{
 		Name: "strip", Title: "DevJay", URL: "/", Width: 900, Height: 174, MinWidth: 234, MinHeight: 120, Frameless: manager.config.decoration() != "normal",
 		X: 120, Y: 80, InitialPosition: application.WindowXY, CloseButtonState: application.ButtonEnabled, MaximiseButtonState: application.ButtonDisabled,
-		BackgroundColour: application.NewRGB(20, 24, 32),
+		BackgroundColour: manager.config.backgroundColour(manager.systemDark),
 		Mac:              application.MacWindow{CornerType: application.MacWindowCornerTypeRounded, WindowClass: application.MacWindowClassPanel, PanelPreferences: application.MacPanelPreferences{NonActivating: true, FloatingPanel: true}, CollectionBehavior: application.MacWindowCollectionBehaviorCanJoinAllSpaces | application.MacWindowCollectionBehaviorStationary | application.MacWindowCollectionBehaviorIgnoresCycle | application.MacWindowCollectionBehaviorFullScreenNone, TabbingMode: application.MacWindowTabbingModeDisallowed},
 	})
 	manager.strip = strip
 	manager.watchView("strip", strip)
-	settings := app.Window.NewWithOptions(application.WebviewWindowOptions{Name: "settings", EnableFileDrop: true, Title: "DevJay Settings", URL: "/?settings", Width: 880, Height: 620, MinWidth: 760, MinHeight: 440, Hidden: true, MaximiseButtonState: application.ButtonDisabled, BackgroundColour: application.NewRGB(20, 24, 32), Mac: application.MacWindow{CornerType: application.MacWindowCornerTypeRounded, CollectionBehavior: application.MacWindowCollectionBehaviorMoveToActiveSpace | application.MacWindowCollectionBehaviorFullScreenNone, TabbingMode: application.MacWindowTabbingModeDisallowed}})
+	settings := app.Window.NewWithOptions(application.WebviewWindowOptions{Name: "settings", EnableFileDrop: true, Title: "DevJay Settings", URL: "/?settings", Width: 880, Height: 620, MinWidth: 760, MinHeight: 440, Hidden: true, MaximiseButtonState: application.ButtonDisabled, BackgroundColour: manager.config.backgroundColour(manager.systemDark), Mac: application.MacWindow{CornerType: application.MacWindowCornerTypeRounded, CollectionBehavior: application.MacWindowCollectionBehaviorMoveToActiveSpace | application.MacWindowCollectionBehaviorFullScreenNone, TabbingMode: application.MacWindowTabbingModeDisallowed}})
 	manager.settings = settings
 	manager.watchView("settings", settings)
 	settings.OnWindowEvent(events.Common.WindowFilesDropped, func(e *application.WindowEvent) {

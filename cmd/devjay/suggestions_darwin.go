@@ -124,7 +124,7 @@ func (m *siteManager) ensureActionDialog(siteID string) *actionDialog {
 		Name: id, Title: "Confirm action", URL: "/?actions",
 		Width: 460, Height: 470, MinWidth: 400, MinHeight: 340, Hidden: true, Frameless: true,
 		MaximiseButtonState: application.ButtonDisabled,
-		BackgroundColour:    application.NewRGB(20, 24, 32),
+		BackgroundColour:    m.config.backgroundColour(m.systemDark),
 		Mac:                 application.MacWindow{CornerType: application.MacWindowCornerTypeRounded, CollectionBehavior: application.MacWindowCollectionBehaviorMoveToActiveSpace | application.MacWindowCollectionBehaviorFullScreenNone, TabbingMode: application.MacWindowTabbingModeDisallowed},
 	})
 	d := &actionDialog{id: id, siteID: siteID, window: w}

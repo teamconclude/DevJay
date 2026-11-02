@@ -193,6 +193,7 @@ enum { DevJayStripFull, DevJayStripCompact, DevJayStripHidden };
 @interface DevJayStripRestoreButton : NSButton
 @property(nonatomic, copy) NSString *siteID;
 @property(nonatomic) NSUInteger shortcutNumber;
+@property(nonatomic) BOOL activeSite;
 @end
 @implementation DevJayStripRestoreButton
 - (BOOL)acceptsFirstMouse:(NSEvent *)event { (void)event; return YES; }
@@ -221,7 +222,9 @@ enum { DevJayStripFull, DevJayStripCompact, DevJayStripHidden };
 - (void)dealloc { [_siteID release]; [super dealloc]; }
 @end
 
+static BOOL stripLightAppearance;
 static NSColor *strip_background(void) {
+    if (stripLightAppearance) return [NSColor colorWithSRGBRed:246/255.0 green:248/255.0 blue:251/255.0 alpha:1];
     return [NSColor colorWithRed:0.078 green:0.094 blue:0.125 alpha:1];
 }
 static DevJayMinimalStrip *strip_panel(NSSize size, NSString *title) {
@@ -243,6 +246,7 @@ static DevJayMinimalStrip *strip_panel(NSSize size, NSString *title) {
     return panel;
 }
 static void style_strip_button(NSButton *button, BOOL active) {
+    ((DevJayStripRestoreButton *)button).activeSite = active;
     button.bordered = NO;
     button.wantsLayer = YES;
     button.layer.cornerRadius = 7;
@@ -254,6 +258,15 @@ static void style_strip_button(NSButton *button, BOOL active) {
         ? [NSColor colorWithRed:0.541 green:0.710 blue:1 alpha:1]
         : [NSColor colorWithRed:0.235 green:0.282 blue:0.361 alpha:1]).CGColor;
     button.contentTintColor = [NSColor colorWithRed:0.93 green:0.95 blue:0.98 alpha:1];
+    if (stripLightAppearance) {
+        button.layer.backgroundColor = (active
+            ? [NSColor colorWithSRGBRed:219/255.0 green:233/255.0 blue:252/255.0 alpha:1]
+            : NSColor.whiteColor).CGColor;
+        button.layer.borderColor = (active
+            ? [NSColor colorWithSRGBRed:36/255.0 green:98/255.0 blue:179/255.0 alpha:1]
+            : [NSColor colorWithSRGBRed:190/255.0 green:200/255.0 blue:214/255.0 alpha:1]).CGColor;
+        button.contentTintColor = [NSColor colorWithSRGBRed:31/255.0 green:41/255.0 blue:55/255.0 alpha:1];
+    }
     button.font = [NSFont systemFontOfSize:16 weight:NSFontWeightSemibold];
     button.cell.lineBreakMode = NSLineBreakByTruncatingMiddle;
 }
@@ -409,6 +422,16 @@ static void style_strip_button(NSButton *button, BOOL active) {
 @end
 
 static DevJayStripControls *stripControls;
+
+void devjay_strip_appearance(int light) {
+    stripLightAppearance = light != 0;
+    if (!stripControls) return;
+    stripControls->scroll.backgroundColor = strip_background();
+    for (DevJayStripRestoreButton *button in stripControls->scroll.documentView.subviews) {
+        style_strip_button(button, button.activeSite);
+        button.needsDisplay = YES;
+    }
+}
 
 void devjay_set_site_windows_hidden(int hidden) {
     if (![NSThread isMainThread]) return;

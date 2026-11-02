@@ -29,6 +29,7 @@ type CardPlacement struct {
 	Z int `json:"z"`
 }
 type SiteConfig struct {
+	Theme             string                     `json:"theme,omitempty"`
 	SiteWindowsHidden bool                       `json:"siteWindowsHidden,omitempty"`
 	Shortcuts         map[string]ShortcutBinding `json:"shortcuts,omitempty"`
 	Profiles          []Profile                  `json:"profiles,omitempty"`
@@ -51,6 +52,26 @@ type SiteConfig struct {
 
 func (c SiteConfig) useProjectEditor() bool { return c.UseProjectEditor == nil || *c.UseProjectEditor }
 func (c SiteConfig) showIDEStatus() bool    { return c.ShowIDEStatus == nil || *c.ShowIDEStatus }
+
+func validTheme(value string) bool { return value == "system" || value == "dark" || value == "light" }
+
+// Configurations without a saved choice follow macOS, as do unknown values.
+func (c SiteConfig) theme() string {
+	if validTheme(c.Theme) {
+		return c.Theme
+	}
+	return "system"
+}
+
+func (c SiteConfig) resolvedTheme(systemDark bool) string {
+	if c.theme() != "system" {
+		return c.theme()
+	}
+	if systemDark {
+		return "dark"
+	}
+	return "light"
+}
 
 type DesktopPosition struct {
 	Known    bool    `json:"known"`
