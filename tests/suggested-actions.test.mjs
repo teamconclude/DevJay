@@ -264,6 +264,27 @@ test('optional merged-branch deletion requires a newly prepared confirmation',()
  nodes(root).find(n=>n.tag==='button'&&n.textContent==='Return to develop & delete branch').onclick();assert.deepEqual(calls[1],['action-confirm','new']);
 }));
 
+test('return discloses default replacement and preserves both recovery references',()=>withDocument(()=>{
+ const root=new Element('root'),calls=[];
+ const render=mountSuggestedActions(root,()=>{},(...args)=>calls.push(args));
+ const site={id:'site',name:'site',git:{branch:'feature',defaultBranch:'develop'}};
+ const plan={id:'return',kind:'merged',branch:'feature',head:'oldhead12',target:'develop',targetHead:'newhead12',deleteBranch:true,replaceDefault:true,remoteTarget:'origin/develop',localAhead:2};
+ const state={suggestedSite:'site',sites:[site],action:{siteID:'site',kind:'merged',status:'ready',plan}};
+ render(state);
+ assert.equal(calls.length,0);
+ assert.ok(nodes(root).some(n=>n.textContent?.includes('Local develop has 2 commits outside origin/develop')));
+ assert.match(suggestionSteps(plan,true).join(' '),/Preserve the current develop tip.*replace develop with the confirmed origin\/develop/);
+ assert.equal(nodes(root).find(n=>n.className?.includes('action-countdown')).hidden,true);
+ nodes(root).find(n=>n.tag==='button'&&n.textContent==='Return to develop & delete branch').onclick();
+ assert.deepEqual(calls,[['action-confirm','return']]);
+ for(const status of ['failed','complete']) {
+  render({...state,action:{...state.action,status,recovery:'refs/devjay/backups/return',defaultRecovery:'refs/devjay/default-backups/return'}});
+  assert.ok(nodes(root).some(n=>n.textContent==='Recovery: refs/devjay/backups/return'));
+  assert.ok(nodes(root).some(n=>n.textContent==='Default branch recovery: refs/devjay/default-backups/return'));
+ }
+ render.dispose();
+}));
+
 test('verified remote rewrites offer replacement instead of an unsafe update or push',()=>{
  const git={branch:'solo',head:'old',tracking:'origin/solo',ahead:3,behind:10,canReplaceRemote:true,base:{branch:'develop',behind:4}};
  const [s]=siteSuggestions({git});

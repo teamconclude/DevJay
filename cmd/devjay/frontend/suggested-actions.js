@@ -113,7 +113,8 @@ export function suggestionSteps(suggestion, deleteBranch) {
   ];
   return [
     'Check that local work is saved and refresh the remote status.',
-    `Switch to ${suggestion.target} and update it only if it can be fast-forwarded.`,
+    suggestion.replaceDefault ? `Preserve the current ${suggestion.target} tip in a recovery reference, then replace ${suggestion.target} with the confirmed ${suggestion.remoteTarget} version and switch to it.` :
+      `Switch to ${suggestion.target} and fast-forward it to the confirmed remote version.`,
     deleteBranch ? `Delete local branch ${suggestion.branch} after the switch succeeds.` : `Keep local branch ${suggestion.branch}.`,
   ];
 }
@@ -410,6 +411,7 @@ export function mountSuggestedActions(root, close, actionEvent) {
       const revisions = p.kind === 'push' || p.kind === 'publish' ? `${p.targetHead.slice(0,8)} → ${p.head.slice(0,8)}` : `${p.head.slice(0,8)} → ${p.targetHead.slice(0,8)}`;
       plan.replaceChildren(el('p', 'help copyable', revisions), list);
       if (p.deleteBranch) plan.append(el('p', 'warning', `This also deletes local branch ${p.branch}. A recovery reference will retain its commits.`));
+      if (p.kind === 'merged' && p.replaceDefault) plan.append(el('p', 'warning default-return', `Local ${p.target} has ${p.localAhead} ${p.localAhead === 1 ? 'commit' : 'commits'} outside ${p.remoteTarget}'s history. Their changes may already exist upstream under different commit IDs. All current ${p.target} commits will be retained in a separate recovery reference; only the remote version will be used for ${p.target}.`));
       if (p.kind === 'replace') plan.append(el('p', 'warning', 'The local branch will use the rewritten remote history. Its old commits will be kept in a recovery reference.'));
       if (p.kind === 'rebase') plan.append(el('p', 'warning', 'Rebasing rewrites commit IDs. Review the result before pushing.'));
       if (p.kind === 'publish') plan.append(el('p', 'warning', 'Remote commit IDs will change. Git conflict checks do not replace tests or code review.'));
@@ -425,6 +427,7 @@ export function mountSuggestedActions(root, close, actionEvent) {
       if (action?.files?.length) { const files=el('ul','copyable'); for(const file of action.files) files.append(el('li','',file)); plan.append(files); }
       if (action?.currentHead) plan.append(el('p','help copyable',`Current checkout: ${action.currentBranch} · ${action.currentHead.slice(0,8)}`));
       if (action?.recovery) plan.append(el('p','help copyable',`Recovery: ${action.recovery}`));
+      if (action?.defaultRecovery) plan.append(el('p','help copyable default-return',`Default branch recovery: ${action.defaultRecovery}`));
     }
   };
   render.escape = () => {

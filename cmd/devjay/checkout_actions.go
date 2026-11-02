@@ -36,6 +36,7 @@ type CheckoutPlan struct {
 	Target                                                             string    `json:"target"`
 	TargetHead                                                         string    `json:"targetHead"`
 	DeleteBranch                                                       bool      `json:"deleteBranch"`
+	ReplaceDefault                                                     bool      `json:"replaceDefault,omitempty"`
 	Expires                                                            time.Time `json:"expires"`
 	path, remote, remoteURL, remoteRef, trackingRef, targetLocalHead   string
 	gitDir                                                             string
@@ -56,18 +57,19 @@ type CheckoutPlan struct {
 }
 
 type CheckoutAction struct {
-	ID             string         `json:"id,omitempty"`
-	Kind           string         `json:"kind,omitempty"`
-	CurrentBranch  string         `json:"currentBranch,omitempty"`
-	CurrentHead    string         `json:"currentHead,omitempty"`
-	SiteID         string         `json:"siteID"`
-	Status         string         `json:"status"`
-	Message        string         `json:"message"`
-	Plan           *CheckoutPlan  `json:"plan,omitempty"`
-	Files          []string       `json:"files,omitempty"`
-	RemoteRecovery string         `json:"remoteRecovery,omitempty"`
-	Recovery       string         `json:"recovery,omitempty"`
-	Branches       []BranchChoice `json:"branches,omitempty"`
+	ID              string         `json:"id,omitempty"`
+	Kind            string         `json:"kind,omitempty"`
+	CurrentBranch   string         `json:"currentBranch,omitempty"`
+	CurrentHead     string         `json:"currentHead,omitempty"`
+	SiteID          string         `json:"siteID"`
+	Status          string         `json:"status"`
+	Message         string         `json:"message"`
+	Plan            *CheckoutPlan  `json:"plan,omitempty"`
+	Files           []string       `json:"files,omitempty"`
+	RemoteRecovery  string         `json:"remoteRecovery,omitempty"`
+	Recovery        string         `json:"recovery,omitempty"`
+	DefaultRecovery string         `json:"defaultRecovery,omitempty"`
+	Branches        []BranchChoice `json:"branches,omitempty"`
 }
 
 func actionGit(ctx context.Context, path string, args ...string) ([]byte, error) {
@@ -210,7 +212,8 @@ func prepareCheckoutAction(ctx context.Context, path string, req ActionRequest, 
 			if !mergedPRMatchesBranch(merged, m) || merged.Base != p.Target {
 				return nil, errors.New("This branch does not exactly match a PR merged into the default branch. No checkout changes were made.")
 			}
-			p.targetLocalHead, err = refHead(ctx, path, "refs/heads/"+p.Target)
+			p.switchTarget, err = readSwitchBranch(ctx, path, p.Target)
+			p.targetLocalHead = p.switchTarget.head
 			if err != nil {
 				return nil, errors.New("Could not read the local default branch.")
 			}
@@ -264,7 +267,27 @@ func prepareCheckoutAction(ctx context.Context, path string, req ActionRequest, 
 	}
 	if p.Kind != "rebase" && !isPushAction(p.Kind) && p.Kind != "replace" && old != "" {
 		if _, err := git(ctx, path, "merge-base", "--is-ancestor", old, p.TargetHead); err != nil {
-			return nil, errors.New("The local branch cannot be fast-forwarded. Update it manually; no checkout changes were made.")
+			if p.Kind != "merged" || !exitedWith(err, 1) {
+				branch := p.Branch
+				if p.Kind == "merged" {
+					branch = p.Target
+				}
+				return nil, fmt.Errorf("Local branch %s cannot be fast-forwarded. Update it manually; no checkout changes were made.", branch)
+			}
+			// Returning after a verified merge may replace a stale default branch,
+			// but the confirmation must disclose the replacement and retain its tip.
+			p.ReplaceDefault = true
+			p.RemoteTarget = strings.TrimPrefix(p.trackingRef, "refs/remotes/")
+			out, err := git(ctx, path, "rev-list", "--left-right", "--count", old+"..."+p.TargetHead, "--")
+			if err != nil {
+				return nil, errors.New("Could not compare the local default branch with its remote.")
+			}
+			if n, err := fmt.Sscanf(string(out), "%d %d", &p.LocalAhead, &p.RemoteAhead); err != nil || n != 2 || p.LocalAhead <= 0 || p.RemoteAhead < 0 {
+				return nil, errors.New("Could not read the default branch commit counts.")
+			}
+			if err := safeSwitchTree(ctx, path, p.TargetHead); err != nil {
+				return nil, err
+			}
 		}
 	}
 	if p.Kind == "rebase" {
@@ -334,8 +357,8 @@ func validateCheckoutPlan(ctx context.Context, p *CheckoutPlan, checkRemote bool
 		}
 	}
 	if p.Kind == "merged" {
-		head, err := refHead(ctx, p.path, "refs/heads/"+p.Target)
-		if err != nil || head != p.targetLocalHead || branchInOtherWorktree(ctx, p.path, p.Target) {
+		target, err := readSwitchBranch(ctx, p.path, p.Target)
+		if err != nil || target != p.switchTarget || branchInOtherWorktree(ctx, p.path, p.Target) {
 			return errors.New("The local default branch changed or is in use elsewhere. Review the action again.")
 		}
 	}
@@ -525,7 +548,11 @@ func applyCheckoutAction(ctx context.Context, p *CheckoutPlan) (result CheckoutA
 		result.Status, result.Message = "complete", "Replaced "+p.Branch+" with the confirmed "+p.Target+" history. Original commits remain in the recovery reference. Nothing was pushed."
 		return result
 	}
-	if p.Kind == "merged" {
+	if p.Kind == "merged" && p.ReplaceDefault {
+		if err := replaceDefaultForReturn(ctx, p, &result); err != nil {
+			return fail(err)
+		}
+	} else if p.Kind == "merged" {
 		args := []string{"switch", "--no-guess", "--no-overwrite-ignore", "--no-recurse-submodules"}
 		if p.targetLocalHead == "" {
 			args = append(args, "--create", p.Target, "--no-track", p.TargetHead)
@@ -544,16 +571,21 @@ func applyCheckoutAction(ctx context.Context, p *CheckoutPlan) (result CheckoutA
 	expectedBranch, expectedHead := p.Branch, p.Head
 	if p.Kind == "merged" {
 		expectedBranch, expectedHead = p.Target, p.targetLocalHead
-		if expectedHead == "" {
+		if expectedHead == "" || p.ReplaceDefault {
 			expectedHead = p.TargetHead
 		}
 	}
 	_, current, err := cleanCheckout(ctx, p.path)
 	if err != nil || current.Branch != expectedBranch || current.OID != expectedHead {
+		if p.ReplaceDefault {
+			return fail(fmt.Errorf("The checkout changed after updating %s. The merged branch was kept and the previous default tip is preserved in its recovery reference. Inspect the checkout manually.", p.Target))
+		}
 		return fail(errors.New("The checkout changed during the operation. Stopped before updating or deleting any branch."))
 	}
-	if _, err := actionGit(ctx, p.path, "-c", "branch."+expectedBranch+".mergeOptions=", "merge", "--ff-only", "--no-squash", "--no-autostash", "--no-overwrite-ignore", "--no-edit", p.TargetHead); err != nil {
-		return fail(fmt.Errorf("Could not fast-forward %s. Local work was not discarded and the old branch was kept. Inspect the checkout before retrying.", expectedBranch))
+	if !p.ReplaceDefault {
+		if _, err := actionGit(ctx, p.path, "-c", "branch."+expectedBranch+".mergeOptions=", "merge", "--ff-only", "--no-squash", "--no-autostash", "--no-overwrite-ignore", "--no-edit", p.TargetHead); err != nil {
+			return fail(fmt.Errorf("Could not fast-forward %s. Local work was not discarded and the old branch was kept. Inspect the checkout before retrying.", expectedBranch))
+		}
 	}
 	if p.DeleteBranch {
 		state, current, err := cleanCheckout(ctx, p.path)
@@ -564,13 +596,16 @@ func applyCheckoutAction(ctx context.Context, p *CheckoutPlan) (result CheckoutA
 		if err != nil || current.Branch != p.Target || current.OID != p.TargetHead || branchInOtherWorktree(ctx, p.path, p.Branch) {
 			return fail(errors.New("The default branch was updated, but the old branch could not safely be deleted. It was kept."))
 		}
-		if _, err := actionGit(ctx, p.path, "update-ref", "-d", "refs/heads/"+p.Branch, p.Head); err != nil {
+		if _, err := actionGit(ctx, p.path, "update-ref", "--no-deref", "-d", "refs/heads/"+p.Branch, p.Head); err != nil {
 			return fail(errors.New("The default branch was updated, but the old branch changed and was kept."))
 		}
 		// Removing the ref is compare-and-swap guarded. Leave branch config alone:
 		// another Git client may already be recreating a branch with the same name.
 	}
 	result.Status, result.Message = "complete", "Updated "+expectedBranch+" from the remote. Nothing was pushed."
+	if p.ReplaceDefault {
+		result.Message += " The previous " + p.Target + " tip remains in its default-branch recovery reference."
+	}
 	if p.DeleteBranch {
 		result.Message += " Deleted local branch " + p.Branch + "; its commits remain in the recovery reference."
 	}

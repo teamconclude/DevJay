@@ -86,6 +86,14 @@ int main(void) {
             evaluate(view,@"advance(1)");
             assert([evaluate(view,@"closed.length===1 && closed[0].generation===7") boolValue]);
         }
+        for (NSNumber *width in @[@460,@400]) {
+            [window setContentSize:NSMakeSize(width.doubleValue,width.intValue == 400 ? 340 : 470)];
+            evaluate(view,@"var returnPlan={id:'return',kind:'merged',branch:'hanord/msgsync',target:'develop',head:'1234567890abcdef',targetHead:'abcdef1234567890',deleteBranch:true,replaceDefault:true,localAhead:2,remoteTarget:'origin/develop'};var returnState={suggestedSite:'c1',sites:[site],action:{siteID:'c1',kind:'merged',status:'ready',plan:returnPlan}};render(returnState);void 0");
+            assert([evaluate(view,@"document.body.scrollWidth<=innerWidth+1 && document.body.scrollHeight<=innerHeight+1 && document.querySelector('.suggestion-primary').getBoundingClientRect().bottom<=innerHeight") boolValue]);
+            assert([evaluate(view,@"document.querySelector('.suggestion-plan').textContent.includes('Local develop has 2 commits outside origin/develop') && document.querySelector('.suggestion-plan').textContent.includes('Preserve the current develop tip') && document.querySelector('.action-countdown').hidden") boolValue]);
+            evaluate(view,@"render({...returnState,action:{...returnState.action,status:'failed',message:'The checkout changed. Both branches were kept.',recovery:'refs/devjay/backups/0123456789abcdef0123456789abcdef',defaultRecovery:'refs/devjay/default-backups/0123456789abcdef0123456789abcdef'}});void 0");
+            assert([evaluate(view,@"document.body.scrollWidth<=innerWidth+1 && document.body.scrollHeight<=innerHeight+1 && document.querySelector('.suggestion-plan').textContent.includes('Default branch recovery: refs/devjay/default-backups/')") boolValue]);
+        }
         puts("Action dialog WebKit layout and countdown checks passed");
     }
     return 0;
