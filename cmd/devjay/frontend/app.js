@@ -405,6 +405,11 @@ if (viewer) {
   shortcutError = el('p', 'help error'); shortcutError.hidden = true; shortcutError.setAttribute('role', 'status'); section.append(shortcutError);
   section=pages.windows;
   section.append(el('h2', '', 'Windows and layout'));
+  const siteWindowsLabel = el('label', 'preference'), siteWindows = el('input');
+  siteWindows.type = 'checkbox'; siteWindows.dataset.pref = 'showSiteWindows';
+  siteWindows.onchange = () => emit('showSiteWindows', siteWindows.checked);
+  siteWindowsLabel.append(siteWindows, document.createTextNode('Show Site windows'));
+  section.append(siteWindowsLabel, el('p', 'help', 'Show the independent window on each Site’s desktop. Applies to all Profiles and is saved across restarts.'));
   for (const [key, title] of [['allDesktops', 'Strip on all desktops'], ['onTop', 'Show all windows on top']]) {
     const label = el('label', 'preference'); const box = el('input'); box.type = 'checkbox'; box.dataset.pref = key; box.onchange = () => emit(key, box.checked);
     label.append(box, document.createTextNode(title)); section.append(label);

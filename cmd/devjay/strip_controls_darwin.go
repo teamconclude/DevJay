@@ -217,6 +217,7 @@ func (m *siteManager) setSiteWindowsHidden(hidden bool) {
 	c.SiteWindowsHidden = hidden
 	if err := m.save(c); err != nil {
 		showMessageDialog(m.strip, nil, "Could not change Site window visibility", err.Error())
+		m.broadcast()
 		return
 	}
 	m.applySiteWindowsVisibility()

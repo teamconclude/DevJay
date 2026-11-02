@@ -81,6 +81,24 @@ test('Settings sidebar switches pages without rebuilding their controls',()=>{
  assert.equal(pages.filter(p=>!p.hidden)[0].id,'settings-page-profiles');
 });
 
+test('Site window visibility in Settings follows snapshots and sends explicit show/hide choices',async()=>{
+ const view=app('?settings');
+ const snapshot=visible=>view.snapshot({...state([]),preferences:{showSiteWindows:visible}});
+ snapshot(false);
+ const box=view.root.querySelectorAll('[data-pref]').find(n=>n.dataset.pref==='showSiteWindows');
+ assert.equal(box.closest('.settings-page').id,'settings-page-windows');
+ assert.equal(box.checked,false);
+ for(const visible of [true,false]){
+  box.checked=visible;box.onchange();await Promise.resolve();
+  assert.equal(view.calls.at(-1)[0],'devjay:showSiteWindows');assert.equal(view.calls.at(-1)[1],visible);
+  snapshot(visible);assert.equal(box.checked,visible);
+ }
+ // Menu/shortcut changes and failed saves restore the manager's saved state.
+ box.checked=true;snapshot(false);assert.equal(box.checked,false);
+ snapshot(true);assert.equal(box.checked,true);
+ assert.match(box.closest('.settings-page').textContent,/Applies to all Profiles/);
+});
+
 test('Locate folder retains the Site ID and renamed folders update Settings labels',async()=>{
  const view=app('?settings'),item={...site('a'),folderMissing:true};view.snapshot(state([item]));
  view.root.querySelector('.locate-site').onclick();await Promise.resolve();

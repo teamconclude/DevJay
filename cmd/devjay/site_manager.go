@@ -262,6 +262,7 @@ func (m *siteManager) snapshot() appSnapshot {
 	positions, states := m.monitor.positions, m.monitor.states
 	preferences := maps.Clone(m.monitor.preferences)
 	preferences["showIDEStatus"] = m.config.showIDEStatus()
+	preferences["showSiteWindows"] = !m.config.SiteWindowsHidden
 	m.observeDevelopmentApps(m.monitor.windowNumbers, positions)
 	settingsOpen := m.monitor.settingsOpen
 	result := appSnapshot{Update: m.updateStatus, ShortcutSettings: m.shortcutSettingsView(), ShortcutLabels: m.shortcutLabels(), Profiles: m.profilesView(), StripMode: m.stripMode, ShortcutError: m.shortcutError, ShortcutHints: m.shortcutHints, QuitMessage: m.quitMessage, Layout: m.config.layout(), Placements: m.config.Placements, SettingsOpen: settingsOpen, Decoration: m.config.decoration(), Sites: []SiteView{}, Manual: m.config.Manual, Preferences: preferences}
@@ -504,6 +505,14 @@ func (m *siteManager) registerEvents() {
 		}
 	})
 	m.registerEditorSettingsEvents()
+	m.app.Event.On("devjay:showSiteWindows", func(e *application.CustomEvent) {
+		if e.Sender != "settings" {
+			return
+		}
+		if visible, ok := e.Data.(bool); ok {
+			m.send(func() { m.setSiteWindowsHidden(!visible) })
+		}
+	})
 	m.app.Event.On("devjay:app-tooltip-refresh", func(e *application.CustomEvent) {
 		m.send(func() {
 			if e.Sender == "strip" && m.stripReady {
