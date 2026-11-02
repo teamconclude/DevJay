@@ -188,11 +188,11 @@ int main(void) {
                 assert([[bitmap representationUsingType:NSBitmapImageFileTypePNG properties:@{}] writeToFile:output atomically:YES]);done=YES;
             }]; spin(&done);
         }
-        // Branch controls share one row. Refresh stays square immediately
+        // Branch controls are centered in the header. Refresh stays square
         // after Switch, including alongside warnings and suggested actions.
         evaluate(view,@"review.destroy();void 0");
         check(view,@"!optionKey(document.body,'ArrowRight')");
-        evaluate(view,@"document.body.className='git-viewer';var legacyRoot=document.querySelector('#app');var renderLegacy=mountGitViewer(legacyRoot,data=>requests.push(data),null,async()=>{});renderLegacy({...fixture,kind:'edits',counts:{edits:2},diff:fixture.review.selected.diff,commits:[]});var checkBranchControls=()=>{const nodes=[...document.querySelector('.git-branch-name').children,document.querySelector('.git-review-branch')],rects=nodes.map(n=>n.getBoundingClientRect()),[branch,change,refresh,review]=rects;return nodes.length===4&&Math.abs(review.right-(innerWidth-18))<1&&nodes[1].classList.contains('git-switch-branch')&&nodes[2].classList.contains('git-refresh')&&nodes[3].classList.contains('git-review-branch')&&branch.width>20&&Math.abs(refresh.width-refresh.height)<1&&refresh.width===28&&rects.every((r,i)=>r.left>=0&&r.right<=innerWidth&&(i===0||rects[i-1].right<=r.left)&&Math.abs((r.top+r.bottom)-(branch.top+branch.bottom))<2)};void 0");
+        evaluate(view,@"document.body.className='git-viewer';var legacyRoot=document.querySelector('#app');var renderLegacy=mountGitViewer(legacyRoot,data=>requests.push(data),null,async()=>{});renderLegacy({...fixture,kind:'edits',counts:{edits:2},diff:fixture.review.selected.diff,commits:[]});var checkBranchControls=()=>{const nodes=[...document.querySelector('.git-branch-name').children,document.querySelector('.git-review-branch')],rects=nodes.map(n=>n.getBoundingClientRect()),[branch,change,refresh,review]=rects,header=document.querySelector('.git-view-header').getBoundingClientRect();return !document.querySelector('.git-toolbar-label')&&Math.abs((document.querySelector('.git-view-title strong').getBoundingClientRect().top+document.querySelector('.git-view-title strong').getBoundingClientRect().bottom)-(header.top+header.bottom))<2&&nodes.length===4&&Math.abs(review.right-(innerWidth-18))<1&&nodes[1].classList.contains('git-switch-branch')&&nodes[2].classList.contains('git-refresh')&&nodes[3].classList.contains('git-review-branch')&&branch.width>20&&Math.abs(refresh.width-refresh.height)<1&&refresh.width===28&&rects.every((r,i)=>r.left>=0&&r.right<=innerWidth&&(i===0||rects[i-1].right<=r.left)&&Math.abs((r.top+r.bottom)-(header.top+header.bottom))<2)};void 0");
         evaluate(view,@"document.activeElement.blur();void 0");
         check(view,@"document.activeElement===document.body && optionKey(document.body,'ArrowDown') && document.querySelector('.git-diff-position').textContent.includes('2 / 2')");
         check(view,@"optionKey(document.querySelector('.git-diff'),'ArrowUp') && document.querySelector('.git-diff-position').textContent.includes('1 / 2')");
@@ -202,7 +202,7 @@ int main(void) {
         check(view,@"document.querySelector('.diff-find').hidden && document.activeElement===document.querySelector('.git-diff')");
         for (NSNumber *width in @[@1100,@900,@720]) {
             [window setContentSize:NSMakeSize(width.doubleValue,600)];
-            check(view,@"checkBranchControls() && document.body.scrollWidth<=innerWidth");
+            check(view,@"checkBranchControls() && document.body.scrollWidth<=innerWidth && document.querySelector('.git-view-header').getBoundingClientRect().height<=50");
         }
         evaluate(view,@"var suggestionFixture=document.createElement('section');suggestionFixture.className='git-view-suggestions';var suggestionWarning=document.createElement('p');suggestionWarning.className='git-suggestion-warning';var warningCopy=document.createElement('span');warningCopy.textContent='Local edits must be committed before rebasing this branch.';suggestionWarning.append(warningCopy);var actionHeader=document.createElement('div');actionHeader.className='git-suggestion-header';var actionButtons=document.createElement('div');actionButtons.className='git-suggestion-buttons';for(const title of ['Fetch updates','Rebase and push','Push 3 commits']){const action=document.createElement('button');action.textContent=title;actionButtons.append(action)}actionHeader.append(actionButtons);suggestionFixture.append(actionHeader,suggestionWarning);document.querySelector('.git-view-header').append(suggestionFixture);void 0");
         for (NSNumber *width in @[@1100,@900,@720]) {
@@ -214,6 +214,17 @@ int main(void) {
         for (NSNumber *width in @[@1100,@720]) {
             [window setContentSize:NSMakeSize(width.doubleValue,600)];
             check(view,@"checkBranchControls() && document.body.scrollWidth<=innerWidth && actionHeader.getBoundingClientRect().right<=innerWidth");
+        }
+        // Rebase and View diffs must share the branch controls' vertical center,
+        // both with and without guidance between them.
+        evaluate(view,@"var rebaseButton=actionButtons.firstElementChild;rebaseButton.textContent='Rebase';actionButtons.replaceChildren(rebaseButton);void 0");
+        for (NSNumber *warning in @[@NO,@YES]) {
+            evaluate(view,warning.boolValue ? @"suggestionFixture.append(suggestionWarning);void 0" : @"suggestionWarning.remove();void 0");
+            for (NSNumber *width in @[@1100,@900,@720]) {
+                [window setContentSize:NSMakeSize(width.doubleValue,600)];
+                check(view,@"checkBranchControls() && document.body.scrollWidth<=innerWidth");
+                check(view,@"(()=>{const rebase=rebaseButton.getBoundingClientRect(),review=document.querySelector('.git-review-branch').getBoundingClientRect();return document.querySelector('.git-view-header').getBoundingClientRect().height<=50&&rebase.right<=review.left&&Math.abs((rebase.top+rebase.bottom)-(review.top+review.bottom))<2})()");
+            }
         }
         evaluate(view,@"document.querySelector('.git-review-branch').click();void 0");
         check(view,@"requests.some(r=>r.operation==='review-open')");

@@ -210,7 +210,7 @@ export function mountGitViewer(root, request, suggestions, openBranches) {
   const header=el('header','git-view-header');
   const title=el('div','git-view-title');
   const name=el('strong',''),branch=el('span','git-current-branch');
-  title.append(el('span','git-toolbar-label','Repository'),name);
+  title.append(name);
   let openingBranches=false;
   const canSwitch=()=>!!openBranches && !!state?.head && !!state?.branch && !['Detached HEAD','(detached)'].includes(state.branch);
   const updateBranchButton=()=>{switchBranch.hidden=!canSwitch();switchBranch.disabled=openingBranches||!!state?.loading;};
@@ -224,7 +224,7 @@ export function mountGitViewer(root, request, suggestions, openBranches) {
   switchBranch.setAttribute('aria-haspopup','dialog');switchBranch.setAttribute('aria-label','Switch branch');switchBranch.title='Switch branch';switchBranch.hidden=true;
   const branchRow=el('div','git-view-branch');
   const branchName=el('div','git-branch-name');branchName.append(branch,switchBranch);
-  branchRow.append(el('span','git-toolbar-label','Current branch'),branchName);
+  branchRow.append(branchName);
   const tabs=el('nav','git-view-tabs');tabs.setAttribute('aria-label','Changes to inspect');
   for(const [kind,label] of [['edits','Changes'],['branch','History']]) {
     const tab=button('',()=>{tab.focus({preventScroll:true});send('mode',{kind});});tab.dataset.kind=kind;
