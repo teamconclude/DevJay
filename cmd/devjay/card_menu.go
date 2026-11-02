@@ -18,6 +18,7 @@ type cardMenuRequest struct {
 	GitAction      string      `json:"gitAction,omitempty"`
 	appName        string
 	hasViewer      bool    // Captured from manager state, never supplied by the frontend.
+	viewDiffs      bool    // Captured eligibility for the branch-review menu item.
 	X              float64 `json:"x"`
 	Y              float64 `json:"y"`
 }
@@ -55,6 +56,7 @@ const (
 	cardMenuHide
 	cardMenuHideSites
 	cardMenuShowSites
+	cardMenuViewDiffs
 )
 
 func normalizeCardMenuRequest(req cardMenuRequest) (cardMenuRequest, bool) {
@@ -296,7 +298,18 @@ func cardMenuViewKind(kind string, git GitStatus) string {
 
 func (m *siteManager) resolveCardMenuRequest(req cardMenuRequest, git GitStatus) cardMenuRequest {
 	req.hasViewer = m.existingViewer(viewerRequest{SiteID: req.SiteID, Kind: cardMenuViewKind(req.Kind, git)}) != nil
+	req.viewDiffs = cardMenuOffersDiffs(req, git)
 	return req
+}
+
+func cardMenuOffersDiffs(req cardMenuRequest, git GitStatus) bool {
+	if req.Kind == "strip" || req.Number > 0 || req.BundleID != "" || git.Head == "" || git.LocalNote != "" {
+		return false
+	}
+	// Feature branches can differ from their base even when their upstream is
+	// in sync. Default branches need evidence of edits or differing history.
+	return !git.IsMainBranch || git.Changes > 0 || git.Conflicts > 0 || git.Ahead > 0 || git.Behind > 0 ||
+		(git.Comparison != nil && (git.Comparison.Ahead > 0 || git.Comparison.Behind > 0))
 }
 
 func cardMenuLabels(req cardMenuRequest) [4]string {
@@ -329,6 +342,9 @@ func cardMenuLabels(req cardMenuRequest) [4]string {
 func validCardMenuSelection(req cardMenuRequest, action cardMenuAction, originalPR PullRequestLink, status GitStatus) bool {
 	if action == cardMenuSettings || action == cardMenuQuit {
 		return true
+	}
+	if action == cardMenuViewDiffs {
+		return req.viewDiffs && cardMenuOffersDiffs(req, status)
 	}
 	if action != cardMenuView && action != cardMenuViewNew {
 		return false

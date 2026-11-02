@@ -22,7 +22,7 @@ static WKWebView *card_menu_webview(NSView *view) {
 
 // Invoked on AppKit's main thread. The target and menu belong to this single
 // tracking loop; no registrations or callbacks survive its return.
-int devjay_card_menu(void *pointer, double x, double y, const char *first, const char *second, const char *settings, const char *quit, const char *action, const char *actionDisabled, const char *hint, int strip, int siteWindowsHidden) {
+int devjay_card_menu(void *pointer, double x, double y, const char *first, const char *second, const char *settings, const char *quit, const char *action, const char *actionDisabled, const char *hint, int strip, int siteWindowsHidden, int viewDiffs) {
     if (![NSThread isMainThread] || !pointer || !isfinite(x) || !isfinite(y)) return 0;
     @autoreleasepool {
         NSWindow *window = (NSWindow *)pointer;
@@ -41,18 +41,19 @@ int devjay_card_menu(void *pointer, double x, double y, const char *first, const
         DevJayCardMenuSelection *selection = [[[DevJayCardMenuSelection alloc] init] autorelease];
         NSMenu *menu = [[[NSMenu alloc] initWithTitle:@""] autorelease];
         menu.autoenablesItems = NO;
-        NSArray<NSString *> *titles = @[actionTitle, firstTitle, secondTitle, strip ? @"Minimize strip" : @"", strip ? @"Hide strip" : @"", strip ? (siteWindowsHidden ? @"Show site windows" : @"Hide site windows") : @"", settingsTitle, quitTitle];
-        const NSInteger tags[] = {5, 1, 2, 6, 7, siteWindowsHidden ? 9 : 8, 3, 4};
+        NSArray<NSString *> *titles = @[actionTitle, firstTitle, secondTitle, viewDiffs ? @"View diffs" : @"", strip ? @"Minimize strip" : @"", strip ? @"Hide strip" : @"", strip ? (siteWindowsHidden ? @"Show site windows" : @"Hide site windows") : @"", settingsTitle, quitTitle];
+        const NSInteger tags[] = {5, 1, 2, 10, 6, 7, siteWindowsHidden ? 9 : 8, 3, 4};
         for (NSUInteger index = 0; index < titles.count; index++) {
             if (!titles[index].length) continue;
-            if ((index == 3 || (index == 6 && !strip)) && menu.numberOfItems) [menu addItem:[NSMenuItem separatorItem]];
+            if ((tags[index] == 6 || (tags[index] == 3 && !strip)) && menu.numberOfItems) [menu addItem:[NSMenuItem separatorItem]];
             NSMenuItem *item = [[[NSMenuItem alloc] initWithTitle:titles[index] action:@selector(selectItem:) keyEquivalent:@""] autorelease];
             item.target = selection;
             item.tag = tags[index];
-            if (index == 3) item.toolTip = @"Show a single row of Site names";
-            if (index == 4) item.toolTip = @"Hide the strip completely";
-            if (index == 5) item.toolTip = @"Hide or restore independent Site windows without changing the strip";
-            if (index == 0) {
+            if (item.tag == 10) item.toolTip = @"Compare the branch fork point with current files, including uncommitted edits";
+            if (item.tag == 6) item.toolTip = @"Show a single row of Site names";
+            if (item.tag == 7) item.toolTip = @"Hide the strip completely";
+            if (item.tag == 8 || item.tag == 9) item.toolTip = @"Hide or restore independent Site windows without changing the strip";
+            if (item.tag == 5) {
                 item.enabled = !disabledReason.length;
                 item.toolTip = disabledReason.length ? disabledReason : hintText;
             }

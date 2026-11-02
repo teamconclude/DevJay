@@ -301,6 +301,64 @@ func TestCardMenuChoosesChangesOrHistoryWithoutChangingGitActionTargets(t *testi
 	}
 }
 
+func TestCardMenuOffersDiffsForLikelyBranchChanges(t *testing.T) {
+	m := &siteManager{}
+	for _, test := range []struct {
+		name   string
+		status GitStatus
+		want   bool
+	}{
+		{"synced main", GitStatus{Branch: "main", Head: "head", IsMainBranch: true, Tracking: "origin/main"}, false},
+		{"synced custom default", GitStatus{Branch: "trunk", Head: "head", IsMainBranch: true}, false},
+		{"synced feature", GitStatus{Branch: "feature", Head: "head", Tracking: "origin/feature"}, true},
+		{"unpublished feature", GitStatus{Branch: "feature", Head: "head"}, true},
+		{"main edits", GitStatus{Branch: "main", Head: "head", IsMainBranch: true, Changes: 2}, true},
+		{"main conflicts", GitStatus{Branch: "main", Head: "head", IsMainBranch: true, Conflicts: 1}, true},
+		{"main ahead", GitStatus{Branch: "main", Head: "head", IsMainBranch: true, Ahead: 1}, true},
+		{"main behind", GitStatus{Branch: "main", Head: "head", IsMainBranch: true, Behind: 1}, true},
+		{"untracked main ahead", GitStatus{Branch: "main", Head: "head", IsMainBranch: true, Comparison: &HistoryComparison{Ahead: 1}}, true},
+		{"untracked main behind", GitStatus{Branch: "main", Head: "head", IsMainBranch: true, Comparison: &HistoryComparison{Behind: 1}}, true},
+		{"untracked main synced", GitStatus{Branch: "main", Head: "head", IsMainBranch: true, Comparison: &HistoryComparison{}}, false},
+		{"unborn branch", GitStatus{Branch: "feature", Changes: 1}, false},
+		{"unavailable status", GitStatus{Branch: "feature", Head: "head", LocalNote: "Unavailable"}, false},
+		{"no repository", GitStatus{}, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			for _, kind := range []string{"site", "auto", "edits", "branch", "local", "remote"} {
+				req := m.resolveCardMenuRequest(cardMenuRequest{SiteID: "a", Kind: kind}, test.status)
+				if req.viewDiffs != test.want || validCardMenuSelection(req, cardMenuViewDiffs, PullRequestLink{}, test.status) != test.want {
+					t.Errorf("%s: View diffs eligibility = %v, want %v", kind, req.viewDiffs, test.want)
+				}
+			}
+		})
+	}
+}
+
+func TestCardMenuDiffsRevalidatesEligibilityAndKeepsDedicatedMenus(t *testing.T) {
+	m := &siteManager{}
+	status := GitStatus{Branch: "feature", Head: "head"}
+	for _, req := range []cardMenuRequest{
+		{Kind: "strip"}, {Kind: "branch", Number: 42}, {Kind: "site", BundleID: "com.example.editor"},
+	} {
+		req = m.resolveCardMenuRequest(req, status)
+		if req.viewDiffs || validCardMenuSelection(req, cardMenuViewDiffs, PullRequestLink{}, status) {
+			t.Fatalf("View diffs offered on a dedicated menu: %+v", req)
+		}
+	}
+	req := cardMenuRequest{SiteID: "a", Kind: "branch"}
+	if validCardMenuSelection(req, cardMenuViewDiffs, PullRequestLink{}, status) {
+		t.Fatal("accepted an item that was not offered")
+	}
+	req = m.resolveCardMenuRequest(req, status)
+	for _, current := range []GitStatus{
+		{}, {Branch: "main", Head: "head", IsMainBranch: true}, {Branch: "feature", Head: "head", LocalNote: "Unavailable"},
+	} {
+		if validCardMenuSelection(req, cardMenuViewDiffs, PullRequestLink{}, current) {
+			t.Fatalf("accepted stale diff eligibility: %+v", current)
+		}
+	}
+}
+
 func TestCardMenuSourceValidatesSenderAndSite(t *testing.T) {
 	strip, window := &application.WebviewWindow{}, &application.WebviewWindow{}
 	site := &siteRuntime{Ready: true, Window: window, Git: GitStatus{PullRequests: []PullRequestLink{{Number: 123, URL: "https://github.com/owner/repo/pull/123"}}}}

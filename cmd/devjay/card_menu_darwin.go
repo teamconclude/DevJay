@@ -3,7 +3,7 @@ package main
 /*
 #cgo LDFLAGS: -framework AppKit -framework WebKit
 #include <stdlib.h>
-int devjay_card_menu(void *window, double x, double y, const char *first, const char *second, const char *settings, const char *quit, const char *action, const char *disabledReason, const char *hint, int strip, int siteWindowsHidden);
+int devjay_card_menu(void *window, double x, double y, const char *first, const char *second, const char *settings, const char *quit, const char *action, const char *disabledReason, const char *hint, int strip, int siteWindowsHidden, int viewDiffs);
 */
 import "C"
 
@@ -40,9 +40,13 @@ func showCardMenu(window *application.WebviewWindow, req cardMenuRequest, option
 	if siteWindowsHidden {
 		sitesHidden = 1
 	}
+	var viewDiffs C.int
+	if req.viewDiffs {
+		viewDiffs = 1
+	}
 	var selected C.int
 	application.InvokeSync(func() {
-		selected = C.devjay_card_menu(window.NativeWindow(), C.double(req.X), C.double(req.Y), first, second, settings, quit, actionLabel, disabled, hint, stripMenu, sitesHidden)
+		selected = C.devjay_card_menu(window.NativeWindow(), C.double(req.X), C.double(req.Y), first, second, settings, quit, actionLabel, disabled, hint, stripMenu, sitesHidden, viewDiffs)
 	})
 	return cardMenuAction(selected)
 }
@@ -168,6 +172,8 @@ func (m *siteManager) registerCardMenuEvents() {
 						return
 					}
 					switch selected {
+					case cardMenuViewDiffs:
+						m.openViewer(viewerRequest{SiteID: req.SiteID, Kind: "review", Anchor: req.Anchor}, parent, site)
 					case cardMenuView, cardMenuViewNew:
 						if req.Number > 0 {
 							m.openPR(prOpenRequest{SiteID: req.SiteID, Number: req.Number, NewTab: selected == cardMenuViewNew, Anchor: req.Anchor}, sender)

@@ -16,6 +16,7 @@ static NSPoint expectedPoint;
 static BOOL singleAction, stripMenu, stripBackground, chooseHide, chooseSites, sitesHidden;
 static BOOL rebaseAction, rebaseDisabled, publishAction, directPublish, mergedAction;
 static NSString *syncTitle, *singleTitle;
+static BOOL viewDiffs;
 
 // Exercise the real menu, targets and cleanup without displaying or tracking
 // a menu in the user's desktop. Actual inactive-window behavior needs UI QA.
@@ -28,9 +29,17 @@ static BOOL selectTestItem(NSMenu *menu, SEL selector, NSMenuItem *item, NSPoint
         assert(rebase.toolTip.length > 0);
         if (!rebaseDisabled) assert([rebase.toolTip isEqualToString:@"Check remote before confirmation."]);
     }
+    if (viewDiffs) {
+        NSInteger diffsIndex = (directPublish ? 0 : singleAction ? 1 : 2) + (rebaseAction ? 1 : 0);
+        NSMenuItem *diffs = [menu itemAtIndex:diffsIndex];
+        assert([diffs.title isEqualToString:@"View diffs"] && diffs.tag == 10 && diffs.enabled);
+        assert(diffs.toolTip.length > 0);
+    } else {
+        assert([menu itemWithTag:10] == nil);
+    }
     if (stripMenu) {
-        assert(menu.numberOfItems == (stripBackground ? 5 : 8) + (rebaseAction ? 1 : 0));
-        NSInteger controls = (stripBackground ? 0 : 3) + (rebaseAction ? 1 : 0);
+        assert(menu.numberOfItems == (stripBackground ? 5 : 8) + (rebaseAction ? 1 : 0) + (viewDiffs ? 1 : 0) - (singleAction ? 1 : 0));
+        NSInteger controls = (stripBackground ? 0 : 3) + (rebaseAction ? 1 : 0) + (viewDiffs ? 1 : 0) - (singleAction ? 1 : 0);
         NSMenuItem *minimal = [menu itemAtIndex:controls];
         assert([minimal.title isEqual:@"Minimize strip"] && minimal.tag == 6 && minimal.toolTip.length);
         NSMenuItem *hide = [menu itemAtIndex:controls + 1];
@@ -38,16 +47,16 @@ static BOOL selectTestItem(NSMenu *menu, SEL selector, NSMenuItem *item, NSPoint
         NSMenuItem *sites = [menu itemAtIndex:controls + 2];
         assert([sites.title isEqual:sitesHidden ? @"Show site windows" : @"Hide site windows"]);
         assert(sites.tag == (sitesHidden ? 9 : 8));
-        [menu performActionForItemAtIndex:controls + (chooseSites ? 2 : chooseHide ? 1 : 0)];
+        [menu performActionForItemAtIndex:viewDiffs ? chosenIndex : controls + (chooseSites ? 2 : chooseHide ? 1 : 0)];
         return YES;
     }
-    assert(menu.numberOfItems == (directPublish ? 4 : (singleAction ? 4 : 5) + (rebaseAction ? 1 : 0)));
+    assert(menu.numberOfItems == (directPublish ? 4 : (singleAction ? 4 : 5) + (rebaseAction ? 1 : 0)) + (viewDiffs ? 1 : 0));
     if (!directPublish) {
         NSInteger navigation = rebaseAction ? 1 : 0;
         assert([[menu itemAtIndex:navigation].title isEqualToString:mergedAction ? @"Open PR #42 in browser" : singleAction ? (singleTitle ?: @"Show GoLand") : @"View branch"]);
         if (!singleAction) assert([[menu itemAtIndex:navigation + 1].title isEqualToString:mergedAction ? @"Open PR #42 in new browser tab" : @"View branch in new window"]);
     }
-    NSInteger separator = directPublish ? 1 : (singleAction ? 1 : 2) + (rebaseAction ? 1 : 0);
+    NSInteger separator = (directPublish ? 1 : (singleAction ? 1 : 2) + (rebaseAction ? 1 : 0)) + (viewDiffs ? 1 : 0);
     assert([menu itemAtIndex:separator].separatorItem);
     assert([[menu itemAtIndex:separator + 1].title isEqualToString:@"DevJay settings…"]);
     assert([[menu itemAtIndex:separator + 2].title isEqualToString:@"Quit DevJay"]);
@@ -77,85 +86,102 @@ int main(void) {
             if (index == 2) continue;
             chosenIndex = index;
             int expected = index < 0 ? 0 : (index >= 3 ? (int)index : (int)index + 1);
-            assert(devjay_card_menu(window, 22, 41, first, second, settings, quit, "", "", "Check remote before confirmation.", 0, sitesHidden) == expected);
+            assert(devjay_card_menu(window, 22, 41, first, second, settings, quit, "", "", "Check remote before confirmation.", 0, sitesHidden, viewDiffs) == expected);
         }
         assert(popupCount == 5);
         singleAction = YES;
         for (NSInteger index = 0; index < 4; index++) {
             if (index == 1) continue;
             chosenIndex = index;
-            assert(devjay_card_menu(window, 22, 41, "Show GoLand", "", settings, quit, "", "", "Check remote before confirmation.", 0, sitesHidden) == index + 1);
+            assert(devjay_card_menu(window, 22, 41, "Show GoLand", "", settings, quit, "", "", "Check remote before confirmation.", 0, sitesHidden, viewDiffs) == index + 1);
         }
         assert(popupCount == 8);
         singleAction = NO;
-        assert(devjay_card_menu(NULL, 22, 41, first, second, settings, quit, "", "", "Check remote before confirmation.", 0, sitesHidden) == 0);
-        assert(devjay_card_menu(window, -1, 41, first, second, settings, quit, "", "", "Check remote before confirmation.", 0, sitesHidden) == 0);
-        assert(devjay_card_menu(window, 301, 41, first, second, settings, quit, "", "", "Check remote before confirmation.", 0, sitesHidden) == 0);
-        assert(devjay_card_menu(window, 22, 181, first, second, settings, quit, "", "", "Check remote before confirmation.", 0, sitesHidden) == 0);
-        assert(devjay_card_menu(window, NAN, 41, first, second, settings, quit, "", "", "Check remote before confirmation.", 0, sitesHidden) == 0);
-        assert(devjay_card_menu(window, 22, 41, "\xff", second, settings, quit, "", "", "Check remote before confirmation.", 0, sitesHidden) == 0);
+        assert(devjay_card_menu(NULL, 22, 41, first, second, settings, quit, "", "", "Check remote before confirmation.", 0, sitesHidden, viewDiffs) == 0);
+        assert(devjay_card_menu(window, -1, 41, first, second, settings, quit, "", "", "Check remote before confirmation.", 0, sitesHidden, viewDiffs) == 0);
+        assert(devjay_card_menu(window, 301, 41, first, second, settings, quit, "", "", "Check remote before confirmation.", 0, sitesHidden, viewDiffs) == 0);
+        assert(devjay_card_menu(window, 22, 181, first, second, settings, quit, "", "", "Check remote before confirmation.", 0, sitesHidden, viewDiffs) == 0);
+        assert(devjay_card_menu(window, NAN, 41, first, second, settings, quit, "", "", "Check remote before confirmation.", 0, sitesHidden, viewDiffs) == 0);
+        assert(devjay_card_menu(window, 22, 41, "\xff", second, settings, quit, "", "", "Check remote before confirmation.", 0, sitesHidden, viewDiffs) == 0);
         assert(popupCount == 8);
         rebaseAction = YES;
         const int results[] = {5, 1, 2, 0, 3, 4};
         for (NSInteger index = 0; index < 6; index++) {
             if (index == 3) continue;
             chosenIndex = index;
-            assert(devjay_card_menu(window, 22, 41, first, second, settings, quit, "Rebase and push…", "", "Check remote before confirmation.", 0, sitesHidden) == results[index]);
+            assert(devjay_card_menu(window, 22, 41, first, second, settings, quit, "Rebase and push…", "", "Check remote before confirmation.", 0, sitesHidden, viewDiffs) == results[index]);
         }
         rebaseDisabled = YES; chosenIndex = -1;
-        assert(devjay_card_menu(window, 22, 41, first, second, settings, quit, "Rebase and push…", "Commit or stash local work first.", "Check remote before confirmation.", 0, sitesHidden) == 0);
+        assert(devjay_card_menu(window, 22, 41, first, second, settings, quit, "Rebase and push…", "Commit or stash local work first.", "Check remote before confirmation.", 0, sitesHidden, viewDiffs) == 0);
         assert(popupCount == 14);
         publishAction = YES; rebaseDisabled = NO; chosenIndex = 0;
-        assert(devjay_card_menu(window, 22, 41, first, second, settings, quit, "Push rebased branch…", "", "Check remote before confirmation.", 0, sitesHidden) == 5);
+        assert(devjay_card_menu(window, 22, 41, first, second, settings, quit, "Push rebased branch…", "", "Check remote before confirmation.", 0, sitesHidden, viewDiffs) == 5);
         rebaseDisabled = YES; chosenIndex = -1;
-        assert(devjay_card_menu(window, 22, 41, first, second, settings, quit, "Push rebased branch…", "Commit or stash local work first.", "Check remote before confirmation.", 0, sitesHidden) == 0);
+        assert(devjay_card_menu(window, 22, 41, first, second, settings, quit, "Push rebased branch…", "Commit or stash local work first.", "Check remote before confirmation.", 0, sitesHidden, viewDiffs) == 0);
         assert(popupCount == 16);
         directPublish = YES; rebaseDisabled = NO; chosenIndex = 0;
-        assert(devjay_card_menu(window, 22, 41, "", "", settings, quit, "Push rebased branch…", "", "Check remote before confirmation.", 0, sitesHidden) == 5);
+        assert(devjay_card_menu(window, 22, 41, "", "", settings, quit, "Push rebased branch…", "", "Check remote before confirmation.", 0, sitesHidden, viewDiffs) == 5);
         rebaseDisabled = YES; chosenIndex = -1;
-        assert(devjay_card_menu(window, 22, 41, "", "", settings, quit, "Push rebased branch…", "Commit or stash local work first.", "Check remote before confirmation.", 0, sitesHidden) == 0);
-        assert(devjay_card_menu(window, 22, 41, "", "", settings, quit, "", "", "Check remote before confirmation.", 0, sitesHidden) == 0);
+        assert(devjay_card_menu(window, 22, 41, "", "", settings, quit, "Push rebased branch…", "Commit or stash local work first.", "Check remote before confirmation.", 0, sitesHidden, viewDiffs) == 0);
+        assert(devjay_card_menu(window, 22, 41, "", "", settings, quit, "", "", "Check remote before confirmation.", 0, sitesHidden, viewDiffs) == 0);
         assert(popupCount == 18);
         directPublish = NO; mergedAction = YES; rebaseDisabled = NO; chosenIndex = 0;
-        assert(devjay_card_menu(window, 22, 41, "Open PR #42 in browser", "Open PR #42 in new browser tab", settings, quit, "Return to develop & delete branch…", "", "Check remote before confirmation.", 0, sitesHidden) == 5);
+        assert(devjay_card_menu(window, 22, 41, "Open PR #42 in browser", "Open PR #42 in new browser tab", settings, quit, "Return to develop & delete branch…", "", "Check remote before confirmation.", 0, sitesHidden, viewDiffs) == 5);
         rebaseDisabled = YES; chosenIndex = -1;
-        assert(devjay_card_menu(window, 22, 41, "Open PR #42 in browser", "Open PR #42 in new browser tab", settings, quit, "Return to develop & delete branch…", "Commit or stash local work first.", "Check remote before confirmation.", 0, sitesHidden) == 0);
+        assert(devjay_card_menu(window, 22, 41, "Open PR #42 in browser", "Open PR #42 in new browser tab", settings, quit, "Return to develop & delete branch…", "Commit or stash local work first.", "Check remote before confirmation.", 0, sitesHidden, viewDiffs) == 0);
         assert(popupCount == 20);
         mergedAction = NO; publishAction = NO; rebaseDisabled = NO; chosenIndex = 0;
         syncTitle = @"Fetch and update develop…";
-        assert(devjay_card_menu(window, 22, 41, first, second, settings, quit, syncTitle.UTF8String, "", "Check remote before confirmation.", 0, sitesHidden) == 5);
+        assert(devjay_card_menu(window, 22, 41, first, second, settings, quit, syncTitle.UTF8String, "", "Check remote before confirmation.", 0, sitesHidden, viewDiffs) == 5);
         rebaseDisabled = YES; chosenIndex = -1;
-        assert(devjay_card_menu(window, 22, 41, first, second, settings, quit, syncTitle.UTF8String, "Commit or stash local edits before updating this branch.", "", 0, sitesHidden) == 0);
+        assert(devjay_card_menu(window, 22, 41, first, second, settings, quit, syncTitle.UTF8String, "Commit or stash local edits before updating this branch.", "", 0, sitesHidden, viewDiffs) == 0);
         syncTitle = @"Push 2 commits…"; rebaseDisabled = NO; chosenIndex = 0;
-        assert(devjay_card_menu(window, 22, 41, first, second, settings, quit, syncTitle.UTF8String, "", "Check remote before confirmation.", 0, sitesHidden) == 5);
+        assert(devjay_card_menu(window, 22, 41, first, second, settings, quit, syncTitle.UTF8String, "", "Check remote before confirmation.", 0, sitesHidden, viewDiffs) == 5);
         assert(popupCount == 23);
         singleAction = YES; singleTitle = @"View branch"; syncTitle = @"Replace from remote…";
         // Omitting the second viewer choice must preserve the Git action tag.
         chosenIndex = 0;
-        assert(devjay_card_menu(window, 22, 41, singleTitle.UTF8String, "", settings, quit, syncTitle.UTF8String, "", "Check remote before confirmation.", 0, sitesHidden) == 5);
+        assert(devjay_card_menu(window, 22, 41, singleTitle.UTF8String, "", settings, quit, syncTitle.UTF8String, "", "Check remote before confirmation.", 0, sitesHidden, viewDiffs) == 5);
         chosenIndex = 1;
-        assert(devjay_card_menu(window, 22, 41, singleTitle.UTF8String, "", settings, quit, syncTitle.UTF8String, "", "Check remote before confirmation.", 0, sitesHidden) == 1);
+        assert(devjay_card_menu(window, 22, 41, singleTitle.UTF8String, "", settings, quit, syncTitle.UTF8String, "", "Check remote before confirmation.", 0, sitesHidden, viewDiffs) == 1);
         rebaseDisabled = YES; chosenIndex = -1;
-        assert(devjay_card_menu(window, 22, 41, singleTitle.UTF8String, "", settings, quit, syncTitle.UTF8String, "Commit or stash local edits before replacing this branch.", "", 0, sitesHidden) == 0);
+        assert(devjay_card_menu(window, 22, 41, singleTitle.UTF8String, "", settings, quit, syncTitle.UTF8String, "Commit or stash local edits before replacing this branch.", "", 0, sitesHidden, viewDiffs) == 0);
         singleAction = NO; rebaseAction = NO; rebaseDisabled = NO;
         stripMenu = YES;
-        assert(devjay_card_menu(window, 22, 41, first, second, settings, quit, "", "", "", 1, sitesHidden) == 6);
+        assert(devjay_card_menu(window, 22, 41, first, second, settings, quit, "", "", "", 1, sitesHidden, viewDiffs) == 6);
         stripBackground = YES;
-        assert(devjay_card_menu(window, 22, 41, "", "", settings, quit, "", "", "", 1, sitesHidden) == 6);
+        assert(devjay_card_menu(window, 22, 41, "", "", settings, quit, "", "", "", 1, sitesHidden, viewDiffs) == 6);
         chooseHide = YES;
-        assert(devjay_card_menu(window, 22, 41, "", "", settings, quit, "", "", "", 1, sitesHidden) == 7);
+        assert(devjay_card_menu(window, 22, 41, "", "", settings, quit, "", "", "", 1, sitesHidden, viewDiffs) == 7);
         chooseSites = YES;
         for (int background = 0; background < 2; background++) {
             stripBackground = background;
             for (int hidden = 0; hidden < 2; hidden++) {
                 sitesHidden = hidden;
                 assert(devjay_card_menu(window, 22, 41, background ? "" : first, background ? "" : second,
-                    settings, quit, "", "", "", 1, sitesHidden) == (hidden ? 9 : 8));
+                    settings, quit, "", "", "", 1, sitesHidden, viewDiffs) == (hidden ? 9 : 8));
             }
         }
         rebaseAction = YES; stripBackground = NO;
         assert(devjay_card_menu(window, 22, 41, first, second, settings, quit, syncTitle.UTF8String,
-            "", "Check remote before confirmation.", 1, sitesHidden) == 9);
+            "", "Check remote before confirmation.", 1, sitesHidden, viewDiffs) == 9);
+        // The review item has its own stable action tag with or without a
+        // Git action, an existing viewer, and the strip's window controls.
+        stripBackground = NO; singleTitle = @"View branch"; viewDiffs = YES;
+        syncTitle = @"Push 2 commits…";
+        for (int strip = 0; strip < 2; strip++) {
+            stripMenu = strip;
+            for (int single = 0; single < 2; single++) {
+                singleAction = single;
+                for (int action = 0; action < 2; action++) {
+                    rebaseAction = action;
+                    chosenIndex = (singleAction ? 1 : 2) + (rebaseAction ? 1 : 0);
+                    assert(devjay_card_menu(window, 22, 41, first, singleAction ? "" : second, settings, quit,
+                        rebaseAction ? syncTitle.UTF8String : "", "", "Check remote before confirmation.",
+                        stripMenu, sitesHidden, viewDiffs) == 10);
+                }
+            }
+        }
         method_setImplementation(method, original);
         puts("Native card menu regressions passed");
     }
