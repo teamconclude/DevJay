@@ -105,12 +105,10 @@ func TestCardMenuActionLabels(t *testing.T) {
 		{cardMenuRequest{Kind: "auto"}, [4]string{"View branch", "", "DevJay settings…", "Quit DevJay"}},
 		{cardMenuRequest{Kind: "edits"}, [4]string{"View branch", "", "DevJay settings…", "Quit DevJay"}},
 		{cardMenuRequest{Kind: "branch"}, [4]string{"View branch", "", "DevJay settings…", "Quit DevJay"}},
-		{cardMenuRequest{Kind: "edits", hasViewer: true}, [4]string{"View branch", "View branch in new window", "DevJay settings…", "Quit DevJay"}},
-		{cardMenuRequest{Kind: "branch", hasViewer: true}, [4]string{"View branch", "View branch in new window", "DevJay settings…", "Quit DevJay"}},
 		{cardMenuRequest{Kind: "site"}, [4]string{"Go to Site desktop", "", "DevJay settings…", "Quit DevJay"}},
 		{cardMenuRequest{BundleID: "com.jetbrains.goland", appName: "GoLand"}, [4]string{"Show GoLand", "", "DevJay settings…", "Quit DevJay"}},
-		{cardMenuRequest{Kind: "local", hasViewer: true}, [4]string{"View local commits", "View local commits in new window", "DevJay settings…", "Quit DevJay"}},
-		{cardMenuRequest{Kind: "remote", hasViewer: true}, [4]string{"View remote commits", "View remote commits in new window", "DevJay settings…", "Quit DevJay"}},
+		{cardMenuRequest{Kind: "local"}, [4]string{"View local commits", "", "DevJay settings…", "Quit DevJay"}},
+		{cardMenuRequest{Kind: "remote"}, [4]string{"View remote commits", "", "DevJay settings…", "Quit DevJay"}},
 		{cardMenuRequest{Kind: "edits", Number: 123}, [4]string{"Open PR #123 in browser", "Open PR #123 in new browser tab", "DevJay settings…", "Quit DevJay"}},
 	} {
 		if got := cardMenuLabels(test.req); got != test.labels {
@@ -119,30 +117,30 @@ func TestCardMenuActionLabels(t *testing.T) {
 	}
 }
 
-func TestCardMenuNewWindowRequiresAnExistingViewerForThisSite(t *testing.T) {
+func TestCardMenuLeavesNewWindowsToFileMenu(t *testing.T) {
 	m := &siteManager{viewers: map[string]*gitViewerWindow{
 		"other": {state: &GitView{SiteID: "other", Kind: "branch"}},
 	}}
-	check := func(wantNewWindow bool) {
+	check := func() {
 		t.Helper()
 		for _, kind := range []string{"auto", "edits", "branch", "local", "remote"} {
 			req := m.resolveCardMenuRequest(cardMenuRequest{SiteID: "site", Kind: kind}, GitStatus{Branch: "feature"})
 			labels := cardMenuLabels(req)
-			if labels[0] == "" || (labels[1] != "") != wantNewWindow {
+			if labels[0] == "" || labels[1] != "" {
 				t.Fatalf("wrong viewer choices for %s: %v", kind, labels)
 			}
 			if !validCardMenuSelection(req, cardMenuView, PullRequestLink{}, GitStatus{}) ||
-				validCardMenuSelection(req, cardMenuViewNew, PullRequestLink{}, GitStatus{}) != wantNewWindow {
+				validCardMenuSelection(req, cardMenuViewNew, PullRequestLink{}, GitStatus{}) {
 				t.Fatalf("selection does not match the displayed choices for %s", kind)
 			}
 		}
 	}
-	check(false)
-	// A viewer in another category is still reused, even while loading.
+	check()
+	// An existing viewer must not put the removed action back in a card menu.
 	m.viewers["own"] = &gitViewerWindow{state: &GitView{SiteID: "site", Kind: "edits", Loading: true}}
-	check(true)
+	check()
 	delete(m.viewers, "own")
-	check(false)
+	check()
 }
 
 func TestMergedCardMenuPreparesDeletionAndRejectsChangedState(t *testing.T) {
@@ -327,7 +325,7 @@ func TestCardMenuOffersDiffsForLikelyBranchChanges(t *testing.T) {
 			for _, kind := range []string{"site", "auto", "edits", "branch", "local", "remote"} {
 				req := m.resolveCardMenuRequest(cardMenuRequest{SiteID: "a", Kind: kind}, test.status)
 				if req.viewDiffs != test.want || validCardMenuSelection(req, cardMenuViewDiffs, PullRequestLink{}, test.status) != test.want {
-					t.Errorf("%s: View diffs eligibility = %v, want %v", kind, req.viewDiffs, test.want)
+					t.Errorf("%s: Review eligibility = %v, want %v", kind, req.viewDiffs, test.want)
 				}
 			}
 		})
@@ -342,7 +340,7 @@ func TestCardMenuDiffsRevalidatesEligibilityAndKeepsDedicatedMenus(t *testing.T)
 	} {
 		req = m.resolveCardMenuRequest(req, status)
 		if req.viewDiffs || validCardMenuSelection(req, cardMenuViewDiffs, PullRequestLink{}, status) {
-			t.Fatalf("View diffs offered on a dedicated menu: %+v", req)
+			t.Fatalf("Review offered on a dedicated menu: %+v", req)
 		}
 	}
 	req := cardMenuRequest{SiteID: "a", Kind: "branch"}

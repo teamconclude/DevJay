@@ -28,7 +28,7 @@ const siteID = params.get('site');
 const settings = params.has('settings');
 const actions = params.has('actions');
 const viewer = params.has('viewer');
-let renderSuggestedActions, renderViewerSnapshot, editorSettings, settingsNavigation, profileSettings;
+let renderSuggestedActions, renderViewerSnapshot, setViewerVisible, editorSettings, settingsNavigation, profileSettings;
 const root = document.querySelector('#app');
 let updateBar, updateButton, updateNote;
 if (!viewer && !actions) installPathLabels(document.body);
@@ -37,6 +37,7 @@ let sitePublishPending = null;
 let nativeVisible = true, renderedSnapshot = false, deferredSnapshot = null;
 function updateMonitoringVisibility() {
   const visible = nativeVisible && !document.hidden;
+  setViewerVisible?.(visible);
   document.body.dataset.monitorVisible = String(visible);
   if (!visible) {
     // A brief attention pulse must not resume minutes later after unhiding.
@@ -359,10 +360,12 @@ if (viewer) {
   const updateOverview = () => { if (!review) updateSuggestions(currentSnapshot.sites.find(site => site.id === currentView?.siteID), currentSnapshot.action); };
   renderViewerSnapshot = state => { currentSnapshot = state; updateOverview(); };
   const branchReview = review ? createBranchReview(root, data => emit('viewer-request', data)) : null;
+  if (branchReview) { setViewerVisible = branchReview.setVisible; setViewerVisible(nativeVisible && !document.hidden); }
   const renderViewer = branchReview ? view => branchReview.render(view) : mountGitViewer(root, data => emit('viewer-request', data), suggestions, (siteID, anchor) => emit('branches-open', {siteID, anchor}));
   Events.On(`devjay:viewer-state:${params.get('viewer')}`, event => {
     currentView = event.data; renderViewer(currentView); updateOverview(); reportUIReady();
   });
+  if (branchReview) Events.On(`devjay:review-prefetch:${params.get('viewer')}`, event => branchReview.prefetch(event.data));
   if (branchReview) window.addEventListener('pagehide', () => branchReview.destroy());
   else {
     window.addEventListener('pagehide', () => renderViewer.destroy());
@@ -418,7 +421,7 @@ if (viewer) {
   siteWindows.onchange = () => emit('showSiteWindows', siteWindows.checked);
   siteWindowsLabel.append(siteWindows, document.createTextNode('Show Site windows'));
   section.append(siteWindowsLabel, el('p', 'help', 'Show the independent window on each Site’s desktop. Applies to all Profiles and is saved across restarts.'));
-  for (const [key, title] of [['allDesktops', 'Strip on all desktops'], ['onTop', 'Show all windows on top']]) {
+  for (const [key, title] of [['allDesktops', 'Strip on all desktops'], ['onTop', 'Keep strip and Site windows on top']]) {
     const label = el('label', 'preference'); const box = el('input'); box.type = 'checkbox'; box.dataset.pref = key; box.onchange = () => emit(key, box.checked);
     label.append(box, document.createTextNode(title)); section.append(label);
   }

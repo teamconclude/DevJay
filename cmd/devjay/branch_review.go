@@ -207,7 +207,8 @@ func branchReviewIdentity(ctx context.Context, v *GitView) error {
 	if err != nil || strings.TrimSpace(string(head)) != v.Head {
 		return errors.New("The branch changed. Refresh before continuing.")
 	}
-	branch := gitString(ctx, v.root, "symbolic-ref", "--quiet", "--short", "HEAD")
+	branchOutput, _ := viewerGit(ctx, v.root, "symbolic-ref", "--quiet", "--short", "HEAD")
+	branch := strings.TrimSpace(string(branchOutput))
 	if branch == "" {
 		branch = "(detached)"
 	}

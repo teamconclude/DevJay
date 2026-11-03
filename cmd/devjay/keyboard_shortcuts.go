@@ -105,6 +105,20 @@ func updatedShortcutOverrides(current map[string]ShortcutBinding, id string, b S
 	return next
 }
 
+func validateFileMenuShortcuts(current, next map[string]ShortcutBinding) error {
+	for id, binding := range next {
+		// Preserve assignments saved before these menu commands existed.
+		if binding == current[id] {
+			continue
+		}
+		if (binding.KeyCode == 45 && (binding.Modifiers == 8 || binding.Modifiers == 12)) ||
+			(binding.KeyCode == 13 && binding.Modifiers == 8) {
+			return userMessage("That combination is reserved for a DevJay File menu command. Add another modifier.")
+		}
+	}
+	return nil
+}
+
 // Register before saving. Conflicts and persistence failures restore the previous
 // registrations and never publish a new configuration. The returned mask also
 // reports any old binding that could not be reacquired during rollback.

@@ -61,9 +61,11 @@ const state=overrides=>({siteID:'one',name:'one',kind:'edits',version:1,loading:
   commit:'',commits:[],files:[file()],file:0,counts:{edits:1,local:1,remote:5},
   diff:'@@ -1 +1 @@\n-old\n+selected contents',...overrides});
 
-test('View diffs opens a dedicated window from the current branch toolbar',()=>{
+test('Review opens a dedicated window from the current branch toolbar',()=>{
   const view=viewer();view.render(state({head:'abc123'}));
   const button=view.root.querySelector('.git-review-branch');
+  assert.equal(button.textContent,'Review');
+  assert.equal(button.attrs['aria-label'],'Review');
   assert.equal(button.disabled,false);button.click();
   assert.equal(view.requests.length,1);
   assert.equal(view.requests[0].operation,'review-open');
@@ -361,8 +363,13 @@ test('arrow selection keeps history rows and surrounding text steady while the d
  const list=view.root.querySelector('.git-view-commits').querySelector('.git-scroll-list');
  const rows=list.querySelectorAll('button'),context=view.root.querySelector('.git-view-context'),status=view.root.querySelector('.git-view-status');
  const contextNode=context.children[0],statusText=status.textContent,diff=view.root.querySelector('.git-diff'),line=diff.children[0];
+ const fullHistory=view.root.querySelector('.git-full-history'),previousDiff=control(view,'Previous difference');
+ assert.equal(fullHistory.disabled,false);assert.equal(previousDiff.disabled,true);
  list.scrollTop=80;
  key(list,'ArrowDown');view.render({...initial,version:2,loading:true,editor:null});
+ assert.equal(fullHistory.disabled,true);assert.equal(fullHistory.classList.contains('git-read-pending'),true);
+ assert.equal(previousDiff.disabled,true);assert.equal(previousDiff.classList.contains('git-read-pending'),false);
+ fullHistory.click();assert.equal(view.requests.length,1);
  assert.equal(context.children[0],contextNode);assert.equal(status.textContent,statusText);assert.equal(diff.children[0],line);
  assert.deepEqual(list.querySelectorAll('button'),rows);assert.equal(list.scrollTop,80);
  view.render({...initial,version:2,commit:'b',message:'Next commit',diff:'@@ -1 +1 @@\n-new commit'});
@@ -370,9 +377,22 @@ test('arrow selection keeps history rows and surrounding text steady while the d
  assert.equal(rows[0].attrs['aria-selected'],'false');assert.equal(list.scrollTop,80);
  assert.match(view.root.querySelector('.git-commit-detail').textContent,/Next commit/);
  assert.match(diff.textContent,/new commit/);
+ assert.equal(fullHistory.disabled,false);assert.equal(fullHistory.classList.contains('git-read-pending'),false);
+ assert.equal(context.children[0],contextNode);assert.equal(status.textContent,statusText);
+ // The later editor-discovery emission must not rebuild the same history.
+ const detail=view.root.querySelector('.git-commit-detail').children[0],nextLine=diff.children[0];
+ view.render({...initial,version:2,commit:'b',message:'Next commit',diff:'@@ -1 +1 @@\n-new commit',editor:{resolved:{name:'Editor'},canOpen:true}});
+ assert.equal(context.children[0],contextNode);assert.equal(view.root.querySelector('.git-commit-detail').children[0],detail);assert.equal(diff.children[0],nextLine);
  // An actual history change still replaces the rows and updates their labels.
  view.render({...initial,version:3,commits:[{id:'new',subject:'New remote commit',presence:'incoming'},...initial.commits]});
  assert.notEqual(list.querySelectorAll('button')[0],rows[0]);assert.match(list.textContent,/New remote commit/);
+ // New overview data must still replace the cached status/header.
+ view.render({...initial,version:4,incomingCount:3});
+ assert.notEqual(context.children[0],contextNode);assert.match(context.textContent,/3 remote only/);
+ view.render({...initial,version:5,loading:true});
+ view.render({...initial,version:5,error:'Could not read commit'});
+ assert.equal(fullHistory.disabled,false);assert.equal(fullHistory.classList.contains('git-read-pending'),false);
+ assert.match(view.root.querySelector('.git-view-error').textContent,/Could not read commit/);
 });
 
 test('file selection reuses rows while preserving staged and working selection intents',()=>{
@@ -411,6 +431,39 @@ test('history arrows select across incoming/shared rows, retain focus through lo
  view.render({...initial,version:4});
  key(list,'ArrowUp');assert.equal(view.requests.length,4);
  key(list,'End');assert.equal(view.requests[4].commit,'older');
+});
+
+test('history and file arrows recover document focus without taking over other controls',()=>{
+ const view=viewer(),initial=state({kind:'branch',commit:'a',commits:[{id:'a',subject:'First'},{id:'b',subject:'Second'}],files:[file('a.go'),file('b.go')]});
+ view.render(initial);
+ const list=view.root.querySelector('.git-view-commits').querySelector('.git-scroll-list');
+ list.querySelector('button').click();view.document.body.focus();
+ assert.equal(key(view.document.body,'ArrowDown'),true);assert.equal(view.requests.at(-1).commit,'b');assert.equal(view.document.activeElement,list);
+ view.render({...initial,version:2,commit:'b'});view.document.body.focus();
+ assert.equal(key(view.document.body,'ArrowUp'),true);assert.equal(view.requests.at(-1).commit,'a');
+ const files=view.root.querySelector('.git-view-files').querySelector('.git-scroll-list');
+ files.querySelector('button').click();view.document.body.focus();
+ assert.equal(key(view.document.body,'ArrowDown'),true);assert.equal(view.requests.at(-1).file,1);assert.equal(view.document.activeElement,files);
+ const diff=view.root.querySelector('.git-diff');diff.dispatchEvent({type:'pointerdown',bubbles:true});view.document.body.focus();
+ assert.equal(key(view.document.body,'ArrowDown'),false);
+ files.focus();assert.equal(key(view.root.querySelector('.diff-find-input'),'ArrowDown'),false);
+ view.render.destroy();view.document.body.focus();assert.equal(key(view.document.body,'ArrowUp'),false);
+});
+
+test('history arrows queue the latest selection during a read and use the completed version',()=>{
+ const view=viewer(),initial=state({kind:'branch',commit:'a',commits:['a','b','c','d'].map(id=>({id,subject:id}))});view.render(initial);
+ const list=view.root.querySelector('.git-view-commits').querySelector('.git-scroll-list');
+ list.querySelector('button').click();assert.equal(view.requests.length,0); // Focus the current row without rereading it.
+ key(list,'ArrowDown');assert.equal(view.requests.at(-1).commit,'b');
+ view.render({...initial,version:2,loading:true});
+ key(list,'ArrowDown');key(list,'ArrowDown');key(list,'ArrowUp');
+ assert.equal(view.requests.length,1);
+ view.render({...initial,version:2,commit:'b'});
+ assert.equal(view.requests.length,2);assert.equal(view.requests.at(-1).commit,'c');assert.equal(view.requests.at(-1).version,2);
+ view.render({...initial,version:3,loading:true,commit:'b'});key(list,'ArrowDown');
+ view.render({...initial,version:3,commit:'c',error:'Could not read diff'});assert.equal(view.requests.length,2);
+ view.render({...initial,version:4,loading:true,commit:'c'});key(list,'Home');
+ view.render({...initial,version:4,commit:'new',commits:[{id:'new',subject:'new'}]});assert.equal(view.requests.length,2);
 });
 
 test('file arrows follow displayed paths, not backend indices or staged duplicates',()=>{

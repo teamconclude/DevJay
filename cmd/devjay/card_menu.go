@@ -17,7 +17,6 @@ type cardMenuRequest struct {
 	PublishButton  bool        `json:"publishButton,omitempty"`
 	GitAction      string      `json:"gitAction,omitempty"`
 	appName        string
-	hasViewer      bool    // Captured from manager state, never supplied by the frontend.
 	viewDiffs      bool    // Captured eligibility for the branch-review menu item.
 	X              float64 `json:"x"`
 	Y              float64 `json:"y"`
@@ -297,7 +296,6 @@ func cardMenuViewKind(kind string, git GitStatus) string {
 }
 
 func (m *siteManager) resolveCardMenuRequest(req cardMenuRequest, git GitStatus) cardMenuRequest {
-	req.hasViewer = m.existingViewer(viewerRequest{SiteID: req.SiteID, Kind: cardMenuViewKind(req.Kind, git)}) != nil
 	req.viewDiffs = cardMenuOffersDiffs(req, git)
 	return req
 }
@@ -330,11 +328,7 @@ func cardMenuLabels(req cardMenuRequest) [4]string {
 		return [4]string{"Go to Site desktop", "", "DevJay settings…", "Quit DevJay"}
 	}
 	subject := map[string]string{"auto": "branch", "edits": "branch", "branch": "branch", "local": "local commits", "remote": "remote commits"}[req.Kind]
-	second := ""
-	if req.hasViewer {
-		second = "View " + subject + " in new window"
-	}
-	return [4]string{"View " + subject, second, "DevJay settings…", "Quit DevJay"}
+	return [4]string{"View " + subject, "", "DevJay settings…", "Quit DevJay"}
 }
 
 // Site/window membership is checked separately for every action. App actions
@@ -353,7 +347,7 @@ func validCardMenuSelection(req cardMenuRequest, action cardMenuAction, original
 		return action == cardMenuView
 	}
 	if req.Number == 0 {
-		return action == cardMenuView || req.hasViewer
+		return action == cardMenuView
 	}
 	current, ok := requestedPR(status, req.Number)
 	return ok && current.URL == originalPR.URL

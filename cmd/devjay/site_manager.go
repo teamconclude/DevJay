@@ -96,6 +96,7 @@ type siteManager struct {
 	appActivationGeneration                                        uint64
 	viewers                                                        map[string]*gitViewerWindow
 	viewerSequence                                                 uint64
+	lastWindowSiteID                                               string
 	prOpening                                                      bool
 	actionDialogs                                                  map[string]*actionDialog
 	actionDialogSequence                                           uint64
@@ -319,6 +320,7 @@ func (m *siteManager) activate(id string) {
 	if r == nil || !r.Ready {
 		return
 	}
+	m.lastWindowSiteID = id
 	// Focus is transient and cannot reliably confirm a desktop switch.
 	// Request activation without treating a later focus sample as a failure.
 	focusSite(r.Window)

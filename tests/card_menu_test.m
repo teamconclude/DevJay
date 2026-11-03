@@ -32,7 +32,7 @@ static BOOL selectTestItem(NSMenu *menu, SEL selector, NSMenuItem *item, NSPoint
     if (viewDiffs) {
         NSInteger diffsIndex = (directPublish ? 0 : singleAction ? 1 : 2) + (rebaseAction ? 1 : 0);
         NSMenuItem *diffs = [menu itemAtIndex:diffsIndex];
-        assert([diffs.title isEqualToString:@"View diffs"] && diffs.tag == 10 && diffs.enabled);
+        assert([diffs.title isEqualToString:@"Review"] && diffs.tag == 10 && diffs.enabled);
         assert(diffs.toolTip.length > 0);
     } else {
         assert([menu itemWithTag:10] == nil);

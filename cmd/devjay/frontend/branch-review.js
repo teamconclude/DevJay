@@ -3,7 +3,17 @@ import { findTextMatches, filterSearchRows, appendSearchSyntax } from './diff-se
 // Branch Review owns presentation and selection per window. Repository data is
 // provided by the bounded, read-only Git reader; source text is never HTML.
 const reviewRowLimit = 5000;
-const reviewCacheLimit = 24;
+const reviewPreloadBatchSize = 8;
+
+// Source payloads stay available for the whole comparison. Keep only a few
+// expanded/tokenized models, which can be much larger than their source text.
+function reviewModelCache() {
+  const entries = new Map();
+  return {
+    get(key) { const value = entries.get(key); if (value) { entries.delete(key); entries.set(key, value); } return value; },
+    set(key, value) { entries.delete(key); entries.set(key, value); if (entries.size > 4) entries.delete(entries.keys().next().value); },
+  };
+}
 
 export function reviewTextLines(text = '') {
   if (!text) return [];
@@ -80,16 +90,55 @@ export function reviewFileMatches(file, query) {
   return terms.every(term => path.includes(term));
 }
 
+export const defaultReviewIgnorePatterns = '*_test.go\n*_gen.go';
+
+// Filename patterns apply in every folder; path patterns are repository-relative.
+// ** crosses folders, while * and ? match within one path component.
+export function reviewIgnoreMatchers(value) {
+  return value.split(/[,\n]/).map(pattern => pattern.trim()).filter(Boolean).map(pattern => {
+    const rooted = pattern.startsWith('/');
+    pattern = pattern.replace(/^\//, '');
+    const directory = pattern.endsWith('/');
+    if (directory) pattern = pattern.slice(0, -1);
+    const anywhere = !rooted && !pattern.includes('/');
+    let source = '';
+    for (let i = 0; i < pattern.length; i++) {
+      const char = pattern[i];
+      if (char === '*') {
+        if (pattern[i + 1] === '*') {
+          while (pattern[i + 1] === '*') i++;
+          if (pattern[i + 1] === '/') { source += '(?:.*/)?'; i++; }
+          else source += '.*';
+        } else source += '[^/]*';
+      } else if (char === '?') source += '[^/]';
+      else source += char.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    }
+    return new RegExp((anywhere ? '(?:^|/)' : '^') + source + (directory ? '/.*$' : '$'));
+  });
+}
+
+export function reviewFileIgnored(file, matchers) {
+  // A rename out of an ignored name must remain reviewable.
+  return matchers.some(pattern => pattern.test(file.path));
+}
+
 export function createBranchReview(root, request) {
+  const setText = (node, value) => { if (node.textContent !== value) node.textContent = value; };
+  const setDisabled = (node, value) => { if (node.disabled !== !!value) node.disabled = !!value; };
   const el = (tag, cls = '', text) => { const node = document.createElement(tag); node.className = cls; if (text !== undefined) node.textContent = text; return node; };
   const button = (text, title, run, cls = '') => { const node = el('button', cls, text); node.type = 'button'; node.title = title; node.setAttribute('aria-label', title); node.onclick = run; return node; };
   let view = null, snapshotKey = '', selectedPath = '', activeChange = 0, layout = 'split', presentation = 'file', wrap = false;
   let highlighting = true;
   let revealPath = '', revealEdge = '';
   let scrollFrame = 0, selectionScrollTop = null;
-  const syntaxCache = new WeakMap();
-  const searchCache = new WeakMap();
-  let cache = new Map(), cards = new Map(), expanded = new Map(), pages = new Map(), wanted = new Set(), forced = new Set(), failed = new Set(), pendingPath = '', pendingVersion = 0, renderKey = '';
+  let prefetchFrame = 0, prefetchSequence = 0, prefetchBatch = null, visible = true, navigationFrame = 0;
+  let loadingTimer = 0, loadingKey = '', displayedPath = '', displayedSnapshot = '';
+  const syntaxCache = reviewModelCache();
+  const searchCache = reviewModelCache();
+  const modelCache = reviewModelCache();
+  const visibleCards = new Set();
+  let filesRenderKey = '';
+  let cache = new Map(), cards = new Map(), expanded = new Map(), pages = new Map(), wanted = new Set(), failed = new Set(), pendingPath = '', renderKey = '';
   let editing = null, beginningEdit = '', beginningVersion = 0, finishingEdit = false, saving = false, saveVersion = 0, destroyed = false, observer = null, orphanVersion = -1;
   const draftKey = 'devjay-branch-review-draft';
   const frame = el('section', 'branch-review');
@@ -119,12 +168,12 @@ export function createBranchReview(root, request) {
   const unifiedButton = button('☰', 'Unified', () => setLayout('unified'));
   const layouts = el('div', 'br-segmented'); layouts.append(splitButton, unifiedButton);
   const settings = el('details', 'br-options');
-  const summary = el('summary', '', '⚙'); summary.title = 'Diff options'; summary.setAttribute('aria-label', 'Diff options');
+  const summary = el('summary', '', '⚙'); summary.title = 'Review options'; summary.setAttribute('aria-label', 'Review options');
   const optionsPanel = el('div', 'br-options-panel');
   const whitespaceLabel = el('label'); const whitespace = el('input'); whitespace.type = 'checkbox'; whitespaceLabel.append(whitespace, el('span', '', 'Ignore whitespace'));
   const wrapLabel = el('label'); const wrapInput = el('input'); wrapInput.type = 'checkbox'; wrapLabel.append(wrapInput, el('span', '', 'Wrap long lines'));
   const syntaxLabel = el('label'); const syntaxInput = el('input'); syntaxInput.type = 'checkbox'; syntaxInput.checked = true; syntaxLabel.append(syntaxInput, el('span', '', 'Syntax highlighting'));
-  optionsPanel.append(el('strong', '', 'Diff options'), whitespaceLabel, wrapLabel, syntaxLabel);
+  optionsPanel.append(el('strong', '', 'Review options'), whitespaceLabel, wrapLabel, syntaxLabel);
   settings.append(summary, optionsPanel);
   const editButton = button('Edit', 'Edit current working file', startEdit, 'br-edit-button');
   const refreshButton = button('↻', 'Refresh branch review', () => send('refresh'));
@@ -143,28 +192,50 @@ export function createBranchReview(root, request) {
   const filesHeader = el('div', 'br-files-header');
   const filesTitle = el('div', 'br-files-title', 'Files');
   const filter = el('input', 'br-filter'); filter.type = 'search'; filter.placeholder = 'Filter files…'; filter.setAttribute('aria-label', 'Filter changed files');
-  filesHeader.append(filesTitle, filter);
+  const ignoreOptions = el('details', 'br-ignore-options');
+  const ignoreSummary = el('summary', '', 'Ignored files');
+  const patternsLabel = el('label', 'br-ignore-label', 'Ignore patterns');
+  const ignorePatterns = el('textarea', 'br-ignore-patterns'); ignorePatterns.rows = 3; ignorePatterns.maxLength = 4096;
+  ignorePatterns.setAttribute('aria-label', 'Ignore file patterns'); ignorePatterns.spellcheck = false;
+  ignorePatterns.value = defaultReviewIgnorePatterns;
+  patternsLabel.append(ignorePatterns);
+  const showIgnoredLabel = el('label', 'br-show-ignored');
+  const showIgnored = el('input'); showIgnored.type = 'checkbox'; showIgnored.setAttribute('aria-label', 'Show ignored files');
+  showIgnoredLabel.append(showIgnored, el('span', '', 'Show ignored files'));
+  const ignoreHelp = el('p', 'br-ignore-help', 'Separate patterns with commas or new lines. Names match in any folder; use folder/ for a folder, or ** to match across folders. Saved for this repository.');
+  ignoreOptions.append(ignoreSummary, showIgnoredLabel, patternsLabel, ignoreHelp);
+  filesHeader.append(filesTitle, filter, ignoreOptions);
+  let ignoreMatchers = reviewIgnoreMatchers(ignorePatterns.value), ignoreStorageKey = '';
   const filesList = el('div', 'br-files'); filesList.setAttribute('role', 'listbox'); filesList.setAttribute('aria-label', 'Changed files'); filesList.tabIndex = 0;
+  let listNavigation = false;
+  filesList.onfocus = () => { listNavigation = true; };
   const commitPanel = el('section', 'br-commit-panel'); commitPanel.setAttribute('aria-label', 'Selected change commits');
   sidebar.append(filesHeader, filesList, commitPanel);
   const content = el('div', 'br-content'); content.tabIndex = 0; content.setAttribute('aria-label', 'Branch differences');
-  body.append(sidebar, content);
+  const fileLoading = el('div', 'br-file-loading', 'Loading…'); fileLoading.hidden = true; fileLoading.setAttribute('role', 'status');
+  body.append(sidebar, content, fileLoading);
   const footer = el('footer', 'br-footer');
   const comparisonLabel = el('span', 'br-comparison');
-  footer.append(comparisonLabel);
+  const preloadStatus = el('span', 'br-preload-status');
+  footer.append(comparisonLabel, preloadStatus);
   frame.append(toolbar, notice, findBar, body, footer); root.replaceChildren(frame);
 
   function send(operation, data = {}) {
     if (!view || destroyed) return;
     return request({operation, version:view.version, ...data});
   }
-  function selectedFile() { return (view?.files || []).find(file => file.path === selectedPath); }
+  function selectedFile() { return matchingFiles().find(file => file.path === selectedPath); }
   function selectedData() { return cache.get(selectedPath); }
-  function matchingFiles() { return (view?.files || []).filter(file => reviewFileMatches(file, filter.value || '')); }
+  function matchingFiles() { return (view?.files || []).filter(file => (showIgnored.checked || !reviewFileIgnored(file, ignoreMatchers)) && reviewFileMatches(file, filter.value || '')); }
+  function diffModel(data) {
+    let model = modelCache.get(data);
+    if (!model) { model = reviewDiffModel(data); modelCache.set(data, model); }
+    return model;
+  }
   function searchResult(data) {
     let result = searchCache.get(data);
     if (!result || result.query !== findInput.value) {
-      result = {query:findInput.value, ...filterSearchRows(reviewDiffModel(data).rows, findInput.value, row => [row.before?.text || '', row.after?.text || ''])};
+      result = {query:findInput.value, ...filterSearchRows(diffModel(data).rows, findInput.value, row => [row.before?.text || '', row.after?.text || ''])};
       searchCache.set(data, result);
     }
     return result;
@@ -176,7 +247,7 @@ export function createBranchReview(root, request) {
   }
   function displayedRows(data, path) {
     if (findInput.value) return searchResult(data).rows;
-    const model = reviewDiffModel(data);
+    const model = diffModel(data);
     return presentation === 'continuous' ? reviewVisibleRows(model.rows, expanded.get(path) || new Set()) : model.rows;
   }
   function updateFindStatus() {
@@ -199,27 +270,36 @@ export function createBranchReview(root, request) {
     const files = matchingFiles(), index = files.findIndex(file => file.path === selectedPath), data = selectedData();
     const changes = changeIndices(data), count = changes.length, changeIndex = changes.indexOf(activeChange);
     const locked = !!editing || !!beginningEdit;
-    position.textContent = files.length ? `${Math.max(0, index + 1)} / ${files.length}` : '0 / 0';
+    setText(position, files.length ? `${Math.max(0, index + 1)} / ${files.length}` : '0 / 0');
     position.title = 'File position in the filtered list';
     position.setAttribute('aria-label', `File ${Math.max(0, index + 1)} of ${files.length}`);
-    previousFile.disabled = locked || view?.loading || index <= 0;
-    nextFile.disabled = locked || view?.loading || index < 0 || index >= files.length - 1;
-    const changeNavigationLocked = locked || !!view?.loading || index < 0 || (!data && !failed.has(selectedPath));
-    previousChange.disabled = changeNavigationLocked || (!changes.some(change => change < activeChange) && index <= 0);
-    nextChange.disabled = changeNavigationLocked || (!changes.some(change => change > activeChange) && index >= files.length - 1);
-    changePosition.textContent = `${changeIndex + 1} / ${count}`;
+    setDisabled(previousFile, locked || index <= 0);
+    setDisabled(nextFile, locked || index < 0 || index >= files.length - 1);
+    const changeNavigationLocked = locked || index < 0 || (!data && !failed.has(selectedPath));
+    setDisabled(previousChange, changeNavigationLocked || (!changes.some(change => change < activeChange) && index <= 0));
+    setDisabled(nextChange, changeNavigationLocked || (!changes.some(change => change > activeChange) && index >= files.length - 1));
+    setText(changePosition, `${changeIndex + 1} / ${count}`);
     changePosition.setAttribute('aria-label', `Change ${changeIndex + 1} of ${count} in current file`);
-    editButton.disabled = locked || !!view?.loading || !!pendingPath || !data?.editable;
+    setDisabled(editButton, locked || !!view?.loading || !!pendingPath || !data?.editable);
     editButton.title = data?.editable ? 'Edit current working file' : 'Only complete, regular working text files can be edited';
-    baseSelect.disabled = whitespace.disabled = refreshButton.disabled = locked || !!view?.loading;
-    modeSelect.disabled = splitButton.disabled = unifiedButton.disabled = locked;
-    syntaxInput.disabled = locked;
+    for (const control of [baseSelect, whitespace, refreshButton]) setDisabled(control, locked || !!view?.loading);
+    for (const control of [modeSelect, splitButton, unifiedButton, syntaxInput, filter, ignorePatterns, showIgnored, findInput, findClose]) setDisabled(control, locked);
     splitButton.setAttribute('aria-pressed', String(layout === 'split'));
     unifiedButton.setAttribute('aria-pressed', String(layout === 'unified'));
-    filter.disabled = locked;
-    findInput.disabled = findClose.disabled = locked;
     frame.classList.toggle('br-loading', !!view?.loading);
     frame.setAttribute('aria-busy', String(!!view?.loading));
+    updateFileLoading();
+  }
+  function updateFileLoading() {
+    const waiting = visible && !destroyed && !editing && !beginningEdit && selectedPath && !cache.has(selectedPath) && !failed.has(selectedPath);
+    const key = waiting ? JSON.stringify([snapshotKey, selectedPath]) : '';
+    if (key === loadingKey) return;
+    if (loadingTimer) clearTimeout(loadingTimer);
+    loadingTimer = 0; loadingKey = key; fileLoading.hidden = true;
+    if (key) loadingTimer = setTimeout(() => {
+      loadingTimer = 0;
+      if (!destroyed && visible && loadingKey === key) fileLoading.hidden = false;
+    }, 250);
   }
   function updateNotice(extra = '') {
     const messages = [view?.error, extra || view?.review?.note, view?.filesLimited ? 'The file list is limited. Narrow the comparison in your Git client for omitted files.' : ''].filter(Boolean);
@@ -227,11 +307,22 @@ export function createBranchReview(root, request) {
     notice.classList.toggle('br-error', !!view?.error);
   }
   function renderFiles() {
+    const hadFocus = filesList.contains(document.activeElement);
     const files = matchingFiles();
-    filesTitle.textContent = `${files.length}${filter.value ? ' / ' + (view?.files?.length || 0) : ''} ${files.length === 1 ? 'file' : 'files'}`;
+    const total = view?.files?.length || 0;
+    const ignored = (view?.files || []).filter(file => reviewFileIgnored(file, ignoreMatchers)).length;
+    ignoreSummary.textContent = `Ignored files · ${showIgnored.checked ? 0 : ignored} hidden`;
+    filesTitle.textContent = `${files.length}${files.length !== total ? ' / ' + total : ''} ${files.length === 1 ? 'file' : 'files'}`;
+    const emptyText = files.length ? '' : view?.loading ? 'Loading branch changes…' : view?.error ? 'Branch comparison unavailable.' : total ? 'No files match your filters. Adjust the search or show ignored files.' : 'No changes since the branch fork point.';
+    const key = JSON.stringify([files.map(file => [file.path, file.oldPath, file.status, file.binary, file.statsKnown, file.added, file.removed]), emptyText]);
+    if (key === filesRenderKey) {
+      for (const row of filesList.querySelectorAll('.br-file')) row.setAttribute('aria-selected', String(row.dataset.path === selectedPath));
+      updateControls(); return;
+    }
+    filesRenderKey = key;
     const fragment = document.createDocumentFragment();
     for (const file of files) {
-      const row = button('', file.oldPath ? `${file.oldPath} → ${file.path}` : file.path, () => selectFile(file.path), 'br-file');
+      const row = button('', file.oldPath ? `${file.oldPath} → ${file.path}` : file.path, () => { if (editing || beginningEdit) return; listNavigation = true; selectFile(file.path); filesList.focus({preventScroll:true}); }, 'br-file');
       row.dataset.path = file.path; row.setAttribute('role', 'option'); row.setAttribute('aria-selected', String(file.path === selectedPath)); row.tabIndex = -1;
       const path = el('span', 'br-file-path');
       const slash = file.path.lastIndexOf('/');
@@ -243,11 +334,13 @@ export function createBranchReview(root, request) {
       row.append(el('span', `br-file-status br-status-${file.status?.[0] || 'M'}`, file.status?.[0] || 'M'), path, stats);
       fragment.append(row);
     }
-    if (!files.length) fragment.append(el('p', 'br-empty', filter.value ? 'No matching files.' : view?.loading ? 'Loading branch changes…' : view?.error ? 'Branch comparison unavailable.' : 'No changes since the branch fork point.'));
+    if (!files.length) fragment.append(el('p', 'br-empty', emptyText));
     filesList.replaceChildren(fragment);
+    if (hadFocus) filesList.focus({preventScroll:true});
     updateControls();
   }
   function renderCommits() {
+    if (presentation === 'file' && !selectedData() && !failed.has(selectedPath) && displayedPath && displayedSnapshot === snapshotKey) return;
     const data = selectedData(), hunk = changeIndices(data).includes(activeChange) ? data?.hunks?.[activeChange] : null;
     const heading = el('div', 'br-commit-heading', 'Change details');
     const nodes = [heading];
@@ -313,7 +406,7 @@ export function createBranchReview(root, request) {
     }
     for (const node of content.querySelectorAll('.br-change')) node.classList.toggle('br-current-change', node.dataset.path === path && Number(node.dataset.change) === activeChange);
     renderCommits(); updateControls();
-    if (!cache.has(path) && !failed.has(path)) { wanted.add(path); pump(); }
+    if (!cache.has(path) && !failed.has(path)) { wanted.add(path); schedulePrefetch(); }
   }
   function scheduleVisibleFile() {
     if (destroyed || presentation !== 'continuous' || scrollFrame) return;
@@ -321,20 +414,31 @@ export function createBranchReview(root, request) {
   }
   function trackScroll(event) { if (event.target === content) scheduleVisibleFile(); }
   content.addEventListener('scroll', trackScroll, {passive:true});
-  function selectFile(path, scroll = true, edge = '') {
+  function selectFile(path, scroll = true, edge = '', deferPaint = false) {
     if (editing || beginningEdit || !view?.files?.some(file => file.path === path)) return;
     const changed = selectedPath !== path;
+    if (!changed) { if (failed.delete(path)) { updateFileLoading(); schedulePrefetch(); } return; }
     selectedPath = path;
     if (changed) {
       const available = changeIndices(cache.get(path));
       activeChange = (edge === 'last' ? available.at(-1) : available[0]) || 0;
       revealPath = path; revealEdge = edge;
     }
-    renderFiles(); renderCommits();
-    if (presentation === 'file') { renderContent(); if (changed) content.scrollTop = 0; }
-    else if (scroll) revealNode(cards.get(path), 'start');
-    failed.delete(path); wanted.add(path); forced.add(path); pump();
-    if (cache.has(path) && changed) { revealPath = ''; revealEdge = ''; selectChange(activeChange, presentation === 'file' || !!edge); }
+    // A held key moves the selection immediately but paints only its latest
+    // target per frame. Skipped files never become foreground Git reads.
+    wanted.clear(); failed.delete(path);
+    renderFiles();
+    const paint = () => {
+      renderCommits();
+      if (presentation === 'file') { if (renderContent() && changed) content.scrollTop = 0; }
+      else if (scroll) revealNode(cards.get(selectedPath), 'start');
+      if (cache.has(selectedPath) && changed) { revealPath = ''; revealEdge = ''; selectChange(activeChange, presentation === 'file' || !!edge); }
+    };
+    if (navigationFrame) cancelAnimationFrame(navigationFrame);
+    navigationFrame = 0;
+    if (deferPaint) navigationFrame = requestAnimationFrame(() => { navigationFrame = 0; paint(); });
+    else paint();
+    schedulePrefetch();
   }
   function moveFile(direction) {
     const files = matchingFiles(), index = files.findIndex(file => file.path === selectedPath), next = files[index + direction];
@@ -372,32 +476,81 @@ export function createBranchReview(root, request) {
   function setLayout(value) { if (editing) return; layout = value; renderContent(); updateControls(); selectChange(activeChange, true); }
   function remember(path, data) {
     cache.delete(path); cache.set(path, data);
-    while (cache.size > reviewCacheLimit) {
-      const victim = [...cache.keys()].find(key => key !== selectedPath && key !== path);
-      if (!victim) break;
-      cache.delete(victim);
-      if (presentation === 'continuous') renderCard(victim);
+    // Retain the complete comparison until its snapshot changes. Both the
+    // file list and individual source payloads are bounded by the Git reader.
+  }
+  function snapshotIdentity(value) {
+    const review = value?.review;
+    return JSON.stringify([value?.path, value?.head, value?.captured, review?.worktreeFingerprint, review?.base, review?.ignoreWhitespace]);
+  }
+  function schedulePrefetch() {
+    if (destroyed || prefetchFrame || !visible || !view?.review || !matchingFiles().some(file => !cache.has(file.path) && !failed.has(file.path))) return;
+    prefetchFrame = requestAnimationFrame(() => {
+      prefetchFrame = 0;
+      if (!visible || !view?.review || view.loading || view.error || prefetchBatch || editing || beginningEdit || destroyed) return;
+      const files = matchingFiles(), eligible = new Set(files.map(file => file.path));
+      const paths = [...new Set([selectedPath, ...wanted, ...eligible])].filter(path => eligible.has(path) && !cache.has(path) && !failed.has(path)).slice(0, reviewPreloadBatchSize);
+      updatePreloadStatus();
+      if (!paths.length) return;
+      const indices = paths.map(path => view.files.findIndex(file => file.path === path));
+      const batch = {id:++prefetchSequence, version:view.version, paths:new Set(paths)};
+      prefetchBatch = batch;
+      const failedRequest = () => {
+        if (prefetchBatch !== batch) return;
+        for (const path of batch.paths) failed.add(path);
+        prefetchBatch = null; updatePreloadStatus(); showSelectedReadFailure(); schedulePrefetch();
+      };
+      Promise.resolve(send('review-prefetch', {prefetchID:batch.id, prefetch:indices})).then(result => { if (result === false) failedRequest(); }).catch(failedRequest);
+    });
+  }
+  function updatePreloadStatus() {
+    const files = matchingFiles(), loaded = files.filter(file => cache.has(file.path)).length, unavailable = files.filter(file => failed.has(file.path)).length;
+    const label = !files.length ? '' : loaded === files.length ? `${loaded} files ready` : `${loaded} / ${files.length} files ready${unavailable ? ` · ${unavailable} unavailable` : ' · Loading review…'}`;
+    if (preloadStatus.textContent !== label) preloadStatus.textContent = label;
+  }
+  function showSelectedReadFailure() {
+    if (failed.has(selectedPath) && !cache.has(selectedPath)) {
+      if (presentation === 'file') renderContent(); else renderCard(selectedPath);
+      renderCommits(); updateControls();
     }
   }
-  function pump() {
-    if (!view || view.loading || pendingPath || editing || beginningEdit || destroyed) return;
-    const needsRead = path => !failed.has(path) && (forced.has(path) || !cache.has(path));
-    const path = wanted.has(selectedPath) && needsRead(selectedPath) ? selectedPath : [...wanted].find(needsRead);
-    if (!path) return;
-    wanted.delete(path); forced.delete(path);
-    const index = view.files.findIndex(file => file.path === path);
-    if (index < 0) return;
-    pendingPath = path; pendingVersion = view.version; updateControls();
-    Promise.resolve(send('review-file', {file:index})).then(result => {
-      if (result === false && pendingPath === path) { pendingPath = ''; failed.add(path); updateControls(); updateNotice('Could not load this file. Select it again or refresh.'); }
-    }).catch(() => { if (pendingPath === path) pendingPath = ''; failed.add(path); updateControls(); updateNotice('Could not load this file. Select it again or refresh.'); });
+  function prefetch(next) {
+    const data = next?.review?.selected;
+    if (destroyed || !visible || editing || beginningEdit || !prefetchBatch || next?.prefetchID !== prefetchBatch.id || snapshotIdentity(next) !== snapshotKey) return;
+    if (next.done) {
+      // Missing results are failures, not an infinite automatic retry loop.
+      for (const path of prefetchBatch.paths) if (!cache.has(path)) failed.add(path);
+      prefetchBatch = null; updatePreloadStatus(); showSelectedReadFailure(); schedulePrefetch(); return;
+    }
+    if (!data?.path || !prefetchBatch.paths.has(data.path) || !view.files.some(file => file.path === data.path && (file.oldPath || '') === (data.oldPath || ''))) return;
+    prefetchBatch.paths.delete(data.path);
+    if (next.error) failed.add(data.path);
+    else if (!cache.has(data.path)) remember(data.path, data);
+    wanted.delete(data.path); updatePreloadStatus();
+    // Cache every file, but do not paint off-screen cards as preload results
+    // arrive. The viewport observer renders them when they come into view.
+    if (data.path === selectedPath && presentation === 'file' && displayedPath !== selectedPath) renderContent();
+    else if (data.path === selectedPath || (presentation === 'continuous' && (visibleCards.has(data.path) || typeof IntersectionObserver === 'undefined'))) renderCard(data.path);
+    if (data.path === selectedPath) {
+      renderCommits(); updateControls();
+      if (revealPath === selectedPath && cache.has(selectedPath)) {
+        const edge = revealEdge; revealPath = ''; revealEdge = '';
+        selectChange(edge === 'last' ? Math.max(0, (data.hunks?.length || 0) - 1) : activeChange, presentation === 'file' || !!edge);
+      }
+    }
   }
   function observeCards() {
     observer?.disconnect();
     if (presentation !== 'continuous' || typeof IntersectionObserver === 'undefined') return;
     observer = new IntersectionObserver(entries => {
-      for (const entry of entries) if (entry.isIntersecting && !cache.has(entry.target.dataset.path) && !failed.has(entry.target.dataset.path)) wanted.add(entry.target.dataset.path);
-      pump();
+      for (const entry of entries) {
+        const path = entry.target.dataset.path;
+        if (!entry.isIntersecting) { visibleCards.delete(path); continue; }
+        const wasVisible = visibleCards.has(path); visibleCards.add(path);
+        if (cache.has(path)) { if (!wasVisible) renderCard(path); }
+        else if (!failed.has(path)) wanted.add(path);
+      }
+      schedulePrefetch();
     }, {root:content, rootMargin:'250px'});
     for (const card of cards.values()) observer.observe(card);
   }
@@ -406,22 +559,29 @@ export function createBranchReview(root, request) {
     return JSON.stringify([signature, presentation, layout, presentation === 'file' ? selectedPath : '', snapshotKey]);
   }
   function renderContent() {
-    if (editing) return;
+    if (editing) return false;
+    const files = presentation === 'continuous' ? matchingFiles() : (selectedFile() ? [selectedFile()] : []);
+    // Keep the actual displayed file/header, DOM and scroll position until the
+    // requested file is ready. A quick read never flashes a placeholder.
+    if (presentation === 'file' && files.length && !cache.has(selectedPath) && !failed.has(selectedPath) && displayedPath && displayedSnapshot === snapshotKey) return false;
     const oldScroll = content.scrollTop;
+    visibleCards.clear();
     cards = new Map(); content.classList.toggle('br-continuous', presentation === 'continuous');
     content.classList.toggle('br-wrap', wrap);
-    const files = presentation === 'continuous' ? matchingFiles() : (selectedFile() ? [selectedFile()] : []);
+    displayedPath = presentation === 'file' && cache.has(selectedPath) ? selectedPath : '';
+    displayedSnapshot = snapshotKey;
     const fragment = document.createDocumentFragment();
     for (const file of files) {
       const card = el('article', 'br-file-card'); card.dataset.path = file.path; cards.set(file.path, card); fragment.append(card);
     }
-    if (!files.length) fragment.append(el('div', 'br-empty-state', view?.loading ? 'Loading branch comparison…' : filter.value ? 'No files match your filter.' : view?.error ? 'Refresh to retry the branch comparison.' : 'There are no changes to review.'));
+    if (!files.length) fragment.append(el('div', 'br-empty-state', view?.loading ? 'Loading branch comparison…' : view?.error ? 'Refresh to retry the branch comparison.' : view?.files?.length ? 'No files match your filters. Adjust the search or show ignored files.' : 'There are no changes to review.'));
     content.replaceChildren(fragment);
     for (const file of files) renderCard(file.path);
     content.scrollTop = oldScroll;
     renderKey = contentKey();
     updateFindStatus();
     observeCards();
+    return true;
   }
   function renderCard(path) {
     const card = cards.get(path); if (!card) return;
@@ -433,8 +593,8 @@ export function createBranchReview(root, request) {
     if (file?.oldPath) heading.append(el('span', 'br-muted', `← ${file.oldPath}`));
     const nodes = [heading];
     if (!data) {
-      const load = button('Load diff', `Load diff for ${path}`, () => { failed.delete(path); wanted.add(path); pump(); }, 'br-load-file');
-      nodes.push(el('p', 'br-empty', 'Scroll here or choose Load diff to inspect this file.'), load); card.replaceChildren(...nodes); return;
+      if (failed.has(path)) nodes.push(el('p', 'br-empty', 'Could not load this file.'), button('Retry', `Retry loading ${path}`, () => { failed.delete(path); wanted.add(path); updateFileLoading(); schedulePrefetch(); }, 'br-load-file'));
+      card.replaceChildren(...nodes); return;
     }
     if (data.note) nodes.push(el('p', 'br-file-note', data.note));
     if (data.binary || data.limited) {
@@ -454,7 +614,7 @@ export function createBranchReview(root, request) {
       }
     } else labels.append(el('span', '', `Fork point · ${view.review.base?.slice(0, 8) || ''}`), el('span', '', 'Current working file'));
     nodes.push(labels);
-    const model = reviewDiffModel(data);
+    const model = diffModel(data);
     let syntax = null;
     if (highlighting) {
       syntax = syntaxCache.get(data);
@@ -543,9 +703,9 @@ export function createBranchReview(root, request) {
   }
   function startEdit() {
     const data = selectedData(); if (!data?.editable || view?.loading || pendingPath || editing || beginningEdit) return;
-    // Continuous prefetch may have selected a different backend file. Capture
-    // a fresh payload for this exact path before acquiring the native guard.
-    beginningEdit = selectedPath; beginningVersion = view.version; wanted.clear(); pendingPath = selectedPath; pendingVersion = view.version;
+    // The displayed cached file need not be the backend selection. Capture a
+    // fresh payload for this exact path before acquiring the native guard.
+    beginningEdit = selectedPath; beginningVersion = view.version; wanted.clear(); pendingPath = selectedPath;
     const index = view.files.findIndex(file => file.path === selectedPath);
     Promise.resolve(send('review-file', {file:index})).then(result => { if (result === false) { beginningEdit = ''; pendingPath = ''; updateControls(); } });
     updateControls();
@@ -598,7 +758,7 @@ export function createBranchReview(root, request) {
     editing.guardVersion = view.version; send('review-edit', {editing:false});
   }
   function endEditor() {
-    clearDraft(); editing = null; finishingEdit = false; renderKey = ''; renderContent(); renderFiles(); renderCommits(); updateControls();
+    clearDraft(); editing = null; finishingEdit = false; renderKey = ''; applyFileFilters();
   }
   function cancelEdit() {
     if (!editing || !editing.acknowledged || finishingEdit || saving) return;
@@ -608,17 +768,29 @@ export function createBranchReview(root, request) {
     discard.append(el('span', '', 'Discard your unsaved edits?'), button('Keep editing', 'Keep editing', () => { discard.remove(); editing.discard = null; editing.textarea.focus(); }), button('Discard edits', 'Discard unsaved edits', finishEdit, 'br-discard-confirm'));
     editing.discard = discard; content.querySelector('.br-editor').append(discard);
   }
-  filter.oninput = () => {
-    renderFiles();
-    if (presentation === 'continuous') renderContent();
+  function applyFileFilters() {
+    if (editing || beginningEdit) return;
     const files = matchingFiles();
-    if (files.length && !files.some(file => file.path === selectedPath)) selectFile(files[0].path, false);
+    if (!files.some(file => file.path === selectedPath)) { selectedPath = files[0]?.path || ''; activeChange = 0; revealPath = selectedPath; revealEdge = ''; }
+    wanted.clear();
+    renderFiles(); renderContent(); renderCommits(); updateControls();
+    if (selectedPath && !cache.has(selectedPath)) wanted.add(selectedPath);
+    updatePreloadStatus();
+    schedulePrefetch();
+  }
+  filter.oninput = applyFileFilters;
+  ignorePatterns.oninput = () => {
+    if (editing || beginningEdit) return;
+    ignoreMatchers = reviewIgnoreMatchers(ignorePatterns.value);
+    try { if (ignoreStorageKey) localStorage.setItem(ignoreStorageKey, ignorePatterns.value); } catch {}
+    applyFileFilters();
   };
+  showIgnored.onchange = applyFileFilters;
   filesList.onkeydown = event => {
-    if (editing || event.metaKey || event.ctrlKey || event.altKey) return;
+    if (editing || beginningEdit || event.defaultPrevented || event.isComposing || event.shiftKey || event.metaKey || event.ctrlKey || event.altKey) return;
     const files = matchingFiles(), index = files.findIndex(file => file.path === selectedPath);
     const next = event.key === 'Home' ? 0 : event.key === 'End' ? files.length - 1 : event.key === 'ArrowDown' ? Math.min(files.length - 1, index + 1) : event.key === 'ArrowUp' ? Math.max(0, index - 1) : -1;
-    if (next < 0 || !files[next]) return; event.preventDefault(); selectFile(files[next].path);
+    if (next < 0 || !files[next]) return; event.preventDefault(); selectFile(files[next].path, true, '', !!event.repeat);
     [...filesList.querySelectorAll('.br-file')].find(node => node.dataset.path === selectedPath)?.scrollIntoView({block:'nearest'});
   };
   const handleKeydown = event => {
@@ -630,6 +802,10 @@ export function createBranchReview(root, request) {
     }
     if (event.key === 'Escape' && !findBar.hidden && !editing && !beginningEdit) { event.preventDefault(); closeFind(); return; }
     if (event.key === 'Escape') { if (editing) { event.preventDefault(); cancelEdit(); } else settings.open = false; return; }
+    if (!editing && !beginningEdit && listNavigation && !event.altKey && !event.metaKey && !event.ctrlKey && !event.shiftKey &&
+      ['ArrowUp','ArrowDown','Home','End'].includes(event.key) && [document.body, document.documentElement, root].includes(event.target)) {
+      filesList.focus({preventScroll:true}); filesList.onkeydown(event); return;
+    }
     if (editing || beginningEdit || !event.altKey || event.metaKey || event.ctrlKey || event.shiftKey) return;
     if (['INPUT', 'TEXTAREA', 'SELECT'].includes(event.target?.tagName) || event.target?.isContentEditable) return;
     const control = {ArrowUp:previousChange, ArrowDown:nextChange, ArrowLeft:previousFile, ArrowRight:nextFile}[event.key];
@@ -638,6 +814,8 @@ export function createBranchReview(root, request) {
   // macOS WebKit can leave focus on BODY when a window opens or a clicked
   // control is replaced. Such key events never pass through the inner frame.
   document.addEventListener('keydown', handleKeydown);
+  const rememberList = event => { listNavigation = filesList.contains(event.target); };
+  document.addEventListener('pointerdown', rememberList);
   baseSelect.onchange = () => { if (!editing) send('review-options', {baseRef:baseSelect.value, ignoreWhitespace:whitespace.checked}); };
   whitespace.onchange = () => { if (!editing) send('review-options', {baseRef:view.review.baseRef, ignoreWhitespace:whitespace.checked}); };
   wrapInput.onchange = () => { wrap = wrapInput.checked; content.classList.toggle('br-wrap', wrap); };
@@ -655,7 +833,16 @@ export function createBranchReview(root, request) {
 
   function render(next) {
     if (destroyed) return;
+    if (prefetchBatch && (next.version !== prefetchBatch.version || next.loading)) prefetchBatch = null;
     view = next;
+    const storageKey = 'devjay-branch-review-ignore:' + (view.path || view.siteID || '');
+    if (storageKey !== ignoreStorageKey && !editing && !beginningEdit) {
+      ignoreStorageKey = storageKey;
+      let saved = null;
+      try { saved = localStorage.getItem(storageKey); } catch {}
+      ignorePatterns.value = saved ?? defaultReviewIgnorePatterns;
+      ignoreMatchers = reviewIgnoreMatchers(ignorePatterns.value);
+    }
     const review = view.review;
     branchLabel.textContent = view.branch || view.name || 'Branch review'; branchLabel.title = `${view.path || ''}\n${view.branch || ''}`;
     updateNotice();
@@ -670,23 +857,22 @@ export function createBranchReview(root, request) {
     comparisonLabel.textContent = `Fork point ${review.base?.slice(0, 8) || 'unavailable'} → working tree${review.ignoreWhitespace ? ' · whitespace ignored' : ''}`;
     comparisonLabel.title = `${review.baseRef || 'Base branch'} · ${review.base || ''}\nIncludes committed, staged, unstaged and untracked changes.`;
     if (view.loading) { updateControls(); return; }
-    const key = JSON.stringify([view.path, view.head, view.captured, review.worktreeFingerprint, review.base, review.ignoreWhitespace]);
+    const key = snapshotIdentity(view);
     const changedSnapshot = key !== snapshotKey;
     if (changedSnapshot) {
       // A refreshed file starts on page zero. Keep a selected change on a later
       // page reachable; otherwise preserve the reader's position in context.
       if ((pages.get(selectedPath) || 0) > 0) revealPath = selectedPath;
-      cache.clear(); wanted.clear(); forced.clear(); failed.clear(); pendingPath = ''; expanded.clear(); pages.clear(); snapshotKey = key; renderKey = '';
+      cache.clear(); wanted.clear(); failed.clear(); pendingPath = ''; expanded.clear(); pages.clear(); snapshotKey = key; renderKey = ''; prefetchBatch = null;
     }
     const data = review.selected;
     if (view.error && pendingPath) { failed.add(pendingPath); pendingPath = ''; }
-    if (pendingPath && view.version > pendingVersion && data?.path !== pendingPath) {
-      wanted.add(pendingPath); forced.add(pendingPath); pendingPath = '';
-    }
     if (data?.path) { remember(data.path, data); if (pendingPath === data.path) pendingPath = ''; }
     else if (view.error) pendingPath = '';
-    const currentExists = view.files?.some(file => file.path === selectedPath);
-    if (!currentExists) { selectedPath = data?.path || view.files?.[0]?.path || ''; activeChange = 0; revealPath = selectedPath; revealEdge = ''; }
+    const visibleFiles = matchingFiles();
+    const currentExists = visibleFiles.some(file => file.path === selectedPath);
+    if (view.reviewEditing && !editing && !beginningEdit && data?.path) selectedPath = data.path;
+    if (!currentExists && !editing && !beginningEdit && !view.reviewEditing) { selectedPath = visibleFiles.find(file => file.path === data?.path)?.path || visibleFiles[0]?.path || ''; activeChange = 0; revealPath = selectedPath; revealEdge = ''; }
     if (data?.path === selectedPath) activeChange = Math.min(activeChange, Math.max(0, (data.hunks?.length || 0) - 1));
     if (data?.path === selectedPath && findInput.value) {
       const available = changeIndices(data);
@@ -709,7 +895,7 @@ export function createBranchReview(root, request) {
       else if (!view.files?.some(file => file.path === beginningEdit)) { beginningEdit = ''; pendingPath = ''; updateNotice('The selected file is no longer in this comparison.'); }
       else if (data?.path === beginningEdit && view.files?.[view.file]?.path === beginningEdit) openEditor(data);
       else if (view.version > beginningVersion) {
-        beginningVersion = view.version; pendingPath = beginningEdit; pendingVersion = view.version;
+        beginningVersion = view.version; pendingPath = beginningEdit;
         send('review-file', {file:view.files.findIndex(file => file.path === beginningEdit)});
       }
     }
@@ -743,10 +929,16 @@ export function createBranchReview(root, request) {
       selectChange(edge === 'last' ? Math.max(0, (data.hunks?.length || 0) - 1) : activeChange, presentation === 'file' || !!edge);
     }
     if (selectedPath && !cache.has(selectedPath) && !failed.has(selectedPath) && !view.error) wanted.add(selectedPath);
-    pump();
+    updatePreloadStatus(); schedulePrefetch();
     // A file read can finish after the reader has scrolled elsewhere while
     // loading. Reconcile against the final layout, never the returned path.
     scheduleVisibleFile();
   }
-  return {render, destroy() { destroyed = true; document.removeEventListener('keydown', handleKeydown); content.removeEventListener('scroll', trackScroll); if (scrollFrame) cancelAnimationFrame(scrollFrame); observer?.disconnect(); frame.remove(); }};
+  function setVisible(value) {
+    visible = !!value;
+    updateFileLoading();
+    if (!visible) { prefetchBatch = null; if (prefetchFrame) cancelAnimationFrame(prefetchFrame); prefetchFrame = 0; }
+    else schedulePrefetch();
+  }
+  return {render, prefetch, setVisible, destroy() { destroyed = true; if (loadingTimer) clearTimeout(loadingTimer); document.removeEventListener('keydown', handleKeydown); document.removeEventListener('pointerdown', rememberList); content.removeEventListener('scroll', trackScroll); if (scrollFrame) cancelAnimationFrame(scrollFrame); if (prefetchFrame) cancelAnimationFrame(prefetchFrame); if (navigationFrame) cancelAnimationFrame(navigationFrame); observer?.disconnect(); frame.remove(); }};
 }

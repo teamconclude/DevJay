@@ -10,7 +10,7 @@ export function mountShortcutSettings(root, request) {
   root.append(make('p','Site numbers follow the card order. Hold a Site shortcut’s modifiers to preview its key on visible cards. Escape or a click cancels recording; a hidden strip stays hidden.','help'));
   root.append(make('h3','Menu shortcuts'));
   const menu=make('ul','','shortcut-menu-list');
-  for(const [key,title] of [['⌘,','Open Settings'],['⌘0','Restore full strip'],['⌘1–9','Go to a Site'],['⌘Q','Quit DevJay']]) {
+  for(const [key,title] of [['⌘N','New Window'],['⇧⌘N','New Review Window'],['⌘W','Close Window'],['⌘,','Open Settings'],['⌘0','Restore full strip'],['⌘1–9','Go to a Site'],['⌘Q','Quit DevJay']]) {
     const item=make('li');item.append(make('span',title),make('kbd',key));menu.append(item);
   }
   root.append(menu,make('p','Menu shortcuts apply while DevJay has keyboard focus and keep their standard bindings.','help'));

@@ -45,6 +45,7 @@ func (m *siteManager) handleReviewRequest(id string, req viewerRequest) {
 		r.state = &next
 		if req.Editing {
 			r.cancelViewerRefresh()
+			r.cancelPrefetch()
 		} else {
 			m.lifecycle.finishDraft()
 			r.refresh.pending = true
@@ -59,6 +60,8 @@ func (m *siteManager) handleReviewRequest(id string, req viewerRequest) {
 		return
 	}
 	switch req.Operation {
+	case "review-prefetch":
+		m.prefetchReviewFiles(id, req.PrefetchID, req.Prefetch)
 	case "refresh":
 		m.viewerLoad(id, refreshGitView)
 	case "review-options":

@@ -28,15 +28,20 @@
 .br-options-panel input{accent-color:var(--accent, #7ca8ef)}
 .br-notice{flex:none;padding:8px 14px;background:var(--warning-bg, #302d25);color:var(--warning, #e5ca93);border-bottom:1px solid var(--warning-border, #494331);line-height:1.4;max-height:90px;overflow:auto}
 .br-error{color:var(--error, #ffb0ab)!important}
-.br-body{display:flex;flex:1;min-height:0;overflow:hidden}
+.br-body{display:flex;flex:1;min-height:0;overflow:hidden;position:relative}
+.br-file-loading{position:absolute;right:14px;top:7px;z-index:6;padding:4px 9px;border-radius:4px;background:var(--panel, #292e38);color:var(--muted, #8f9db3);font-size:11px;pointer-events:none}
 .br-sidebar{width:270px;min-width:190px;max-width:38%;display:flex;flex-direction:column;flex:none;background:var(--panel, #242932);border-right:1px solid var(--border, #3d4451);resize:horizontal;overflow:auto}
 .br-files-header{padding:12px 11px 9px;flex:none}
 .br-files-title{color:var(--text-secondary, #b4bdcb);font-size:11px;font-weight:600;padding:0 2px 10px}
 .branch-review input.br-filter{width:100%;padding:6px 9px;background:var(--surface, #1c2129);border:1px solid var(--border, #454d5d);border-radius:5px;color:var(--text, #e0e6f1);font-size:12px}
-.br-files{overflow:auto;min-height:80px;flex:1;padding:0 6px 9px;outline:none}
-.branch-review .br-file{width:100%;display:flex;align-items:center;text-align:left;gap:8px;min-height:43px;margin:1px 0;padding:6px 7px;white-space:normal;border-radius:4px}
-.br-file[aria-selected=true]{background:var(--selection, #384557)}
-.br-file[aria-selected=true]:hover{background:var(--selection-hover, #3d4b60)}
+.br-files{overflow:auto;min-height:80px;flex:1;padding:0 0 9px;outline:none}
+.br-ignore-options{margin-top:9px;font-size:11px;color:var(--text-secondary, #b4bdcb)}
+.br-ignore-options summary{cursor:pointer;padding:3px 0}
+.br-show-ignored{display:flex;align-items:center;gap:6px;margin:9px 0}
+.br-ignore-label{display:block}
+.branch-review .br-ignore-patterns{display:block;width:100%;resize:vertical;min-height:56px;max-height:120px;margin-top:5px;padding:6px 8px;border:1px solid var(--border, #454d5d);border-radius:5px;background:var(--surface, #1c2129);color:var(--text, #e0e6f1);font:11px/17px ui-monospace,SFMono-Regular,Menlo,monospace}
+.br-ignore-help{margin:6px 0 0;color:var(--muted, #8995a9);font-size:10px;line-height:1.4}
+.branch-review .br-file{width:100%;display:flex;align-items:center;text-align:left;gap:8px;min-height:43px;margin:0;padding:6px 13px;white-space:normal;border:0;border-radius:0}
 .br-file-path{min-width:0;flex:1;display:flex;flex-direction:column;gap:2px}
 .br-file-name{color:var(--info, #b8d0f5);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .br-file-directory{color:var(--muted, #8995a9);font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -94,6 +99,7 @@
 .br-footer{display:flex;justify-content:space-between;gap:15px;min-height:27px;padding:6px 12px;border-top:1px solid var(--border, #363e4a);background:var(--panel, #232831);color:var(--muted, #8f9db3);font-size:10px;flex:none}
 .br-comparison{overflow:hidden;white-space:nowrap;text-overflow:ellipsis}.br-change-position{white-space:nowrap}
 .br-loading .br-footer::after{content:'Reading…';color:var(--info, #a6bee8)}
+.br-preload-status{white-space:nowrap;font-variant-numeric:tabular-nums}
 .br-editor{display:flex;flex-direction:column;height:100%;min-height:250px;position:relative}
 .br-editor-bar{display:flex;gap:9px;align-items:center;padding:9px 12px;flex:none;background:var(--panel, #2a303b);border-bottom:1px solid var(--border, #414958)}
 .br-editor-bar strong{font-size:12px;font-weight:500;flex:1;min-width:0;overflow-wrap:anywhere}

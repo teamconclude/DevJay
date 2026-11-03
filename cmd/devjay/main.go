@@ -154,6 +154,7 @@ func main() {
 	devjay.AddRole(application.UnHide)
 	devjay.AddSeparator()
 	devjay.AddRole(application.Quit)
+	manager.addFileMenu(menu)
 	menu.AddRole(application.EditMenu)
 	view := menu.AddSubmenu("View")
 	manager.minimalItem = view.AddCheckbox("Minimize strip", false).OnClick(func(ctx *application.Context) {
@@ -174,7 +175,7 @@ func main() {
 	manager.allDesktopsItem = view.AddCheckbox("Strip on all desktops", true).OnClick(func(ctx *application.Context) {
 		manager.send(manager.userCommand(func() { manager.setViewPreference("allDesktops", ctx.IsChecked()) }))
 	})
-	manager.onTopItem = view.AddCheckbox("Show all windows on top", true).OnClick(func(ctx *application.Context) {
+	manager.onTopItem = view.AddCheckbox("Keep strip and Site windows on top", true).OnClick(func(ctx *application.Context) {
 		manager.send(manager.userCommand(func() { manager.setViewPreference("onTop", ctx.IsChecked()) }))
 	})
 	view.Add("Reload windows").OnClick(func(*application.Context) {

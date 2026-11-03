@@ -41,7 +41,7 @@ int devjay_card_menu(void *pointer, double x, double y, const char *first, const
         DevJayCardMenuSelection *selection = [[[DevJayCardMenuSelection alloc] init] autorelease];
         NSMenu *menu = [[[NSMenu alloc] initWithTitle:@""] autorelease];
         menu.autoenablesItems = NO;
-        NSArray<NSString *> *titles = @[actionTitle, firstTitle, secondTitle, viewDiffs ? @"View diffs" : @"", strip ? @"Minimize strip" : @"", strip ? @"Hide strip" : @"", strip ? (siteWindowsHidden ? @"Show site windows" : @"Hide site windows") : @"", settingsTitle, quitTitle];
+        NSArray<NSString *> *titles = @[actionTitle, firstTitle, secondTitle, viewDiffs ? @"Review" : @"", strip ? @"Minimize strip" : @"", strip ? @"Hide strip" : @"", strip ? (siteWindowsHidden ? @"Show site windows" : @"Hide site windows") : @"", settingsTitle, quitTitle];
         const NSInteger tags[] = {5, 1, 2, 10, 6, 7, siteWindowsHidden ? 9 : 8, 3, 4};
         for (NSUInteger index = 0; index < titles.count; index++) {
             if (!titles[index].length) continue;

@@ -358,22 +358,27 @@ void devjay_all_desktops(void *pointer, int enabled) {
 }
 
 
+static void devjay_set_window_level(NSWindow *window, BOOL onTop) {
+    BOOL eligible = [window.identifier isEqual:@"strip"] || [window.identifier hasPrefix:@"site-"];
+    NSInteger level = onTop && eligible ? NSFloatingWindowLevel : NSNormalWindowLevel;
+    if ([window isKindOfClass:NSPanel.class]) [(NSPanel *)window setFloatingPanel:level != NSNormalWindowLevel];
+    window.level = level;
+}
+
 void devjay_all_windows_on_top(int enabled) {
-    NSInteger level = enabled ? NSFloatingWindowLevel : NSNormalWindowLevel;
     NSUInteger updated = 0;
     for (NSWindow *window in NSApp.windows) {
         if (![window.identifier isEqual:@"strip"] && ![window.identifier isEqual:@"settings"] && ![window.identifier isEqual:@"git-viewer"] && ![window.identifier isEqual:@"suggested-actions"] && ![window.identifier hasPrefix:@"site-"]) continue;
-        if ([window isKindOfClass:NSPanel.class]) [(NSPanel *)window setFloatingPanel:enabled];
-        window.level = level;
-        if (window.level == level) updated++;
+        devjay_set_window_level(window, enabled);
+        updated++;
     }
     [NSUserDefaults.standardUserDefaults setBool:enabled forKey:@"DevJay.View.OnTop"];
-    NSLog(@"DevJay: keep all windows on top %@; %lu windows at level %ld",
-          enabled ? @"enabled" : @"disabled", (unsigned long)updated, (long)level);
+    NSLog(@"DevJay: keep strip and Site windows on top %@; updated %lu windows",
+          enabled ? @"enabled" : @"disabled", (unsigned long)updated);
 }
 
 // Keep WebKit's runtime class intact: changing it breaks AppKit's computed
-// properties and KVO teardown. Only marked panel views accept the first click;
+// properties and KVO teardown. Only marked views accept the first click;
 // all other web views retain their original behavior.
 static const char firstMouseKey;
 static BOOL (*originalFirstMouse)(id, SEL, NSEvent *);
@@ -498,7 +503,7 @@ void devjay_show_popup(void *pointer, void *parentPointer) {
     frame.origin.x = MAX(NSMinX(area) + 8, MIN(NSMidX(anchor) - frame.size.width / 2, NSMaxX(area) - frame.size.width - 8));
     frame.origin.y = MAX(NSMinY(area) + 8, MIN(NSMidY(anchor) - frame.size.height / 2, NSMaxY(area) - frame.size.height - 8));
     [window setFrame:frame display:NO];
-    window.level = [NSUserDefaults.standardUserDefaults boolForKey:@"DevJay.View.OnTop"] ? NSFloatingWindowLevel : NSNormalWindowLevel;
+    devjay_set_window_level(window, [NSUserDefaults.standardUserDefaults boolForKey:@"DevJay.View.OnTop"]);
     if (window.isMiniaturized) [window deminiaturize:nil];
     [window makeKeyAndOrderFront:nil];
     if (window.canBecomeMainWindow) [window makeMainWindow];
@@ -561,7 +566,7 @@ static void devjay_show_context_window(NSWindow *window, NSWindow *parent, doubl
     }
     [window setFrame:frame display:NO];
     window.collectionBehavior = NSWindowCollectionBehaviorMoveToActiveSpace | NSWindowCollectionBehaviorFullScreenNone;
-    window.level = [NSUserDefaults.standardUserDefaults boolForKey:@"DevJay.View.OnTop"] ? NSFloatingWindowLevel : NSNormalWindowLevel;
+    devjay_set_window_level(window, [NSUserDefaults.standardUserDefaults boolForKey:@"DevJay.View.OnTop"]);
     if (window.isMiniaturized) [window deminiaturize:nil];
     [window makeKeyAndOrderFront:nil];
     if (window.canBecomeMainWindow) [window makeMainWindow];
@@ -581,7 +586,10 @@ void devjay_show_suggestions(void *pointer, void *parentPointer, double x, doubl
 void devjay_show_viewer(void *pointer, void *parentPointer, double x, double y, double width, double height) {
     NSWindow *window = (NSWindow *)pointer;
     window.identifier = @"git-viewer";
+    WKWebView *view = devjay_webview(window.contentView);
+    devjay_enable_first_mouse(view);
     devjay_show_context_window(window,(NSWindow *)parentPointer,x,y,width,height,YES);
+    if (view) [window makeFirstResponder:view];
 }
 
 // Present the native alert as a dismissible window without NSAlert's automatic

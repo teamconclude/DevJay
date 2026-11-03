@@ -25,6 +25,8 @@ type viewerRequest struct {
 	Version          uint64      `json:"version"`
 	Commit           string      `json:"commit"`
 	File             int         `json:"file"`
+	Prefetch         []int       `json:"prefetch"`
+	PrefetchID       uint64      `json:"prefetchID"`
 	Page             int         `json:"page"`
 	NewWindow        bool        `json:"newWindow"`
 }
@@ -38,6 +40,7 @@ type gitViewerWindow struct {
 	editorGeneration uint64
 	editorOpening    bool
 	window           *application.WebviewWindow
+	title            string
 	parent           *application.WebviewWindow
 	anchor           *cardAnchor
 	ready            bool
@@ -47,12 +50,26 @@ type gitViewerWindow struct {
 	used             uint64
 	refresh          viewerRefreshSchedule
 	refreshCancel    context.CancelFunc
+	diffCache        viewerDiffCache
+	prefetchCancel   context.CancelFunc
+	prefetchEpoch    uint64
 }
 
 func (m *siteManager) emitViewer(id string) {
 	r := m.viewers[id]
 	if r != nil && r.ready && r.state != nil && !m.recovery.paused {
+		if site := m.runtime[r.state.SiteID]; site != nil {
+			r.updateTitle(site.Git)
+		}
 		dispatchWindowEvent(r.window, "devjay:viewer-state:"+id, r.state)
+	}
+}
+
+func (r *gitViewerWindow) updateTitle(status GitStatus) {
+	title := gitViewerTitle(r.state.Name, r.state.Kind, r.state.Branch, status)
+	if title != r.title {
+		r.title = title
+		r.window.SetTitle(title)
 	}
 }
 func (m *siteManager) viewerLoad(id string, work func(context.Context, *GitView) error) {
@@ -64,6 +81,7 @@ func (m *siteManager) viewerLoad(id string, work func(context.Context, *GitView)
 		r.cancel()
 	}
 	r.cancelViewerRefresh()
+	r.cancelPrefetch()
 	r.generation++
 	version := r.generation
 	v := *r.state
@@ -71,7 +89,7 @@ func (m *siteManager) viewerLoad(id string, work func(context.Context, *GitView)
 	v.Editor = nil
 	r.state = &v
 	m.emitViewer(id)
-	ctx, cancel := context.WithCancel(m.app.Context())
+	ctx, cancel := context.WithCancel(context.WithValue(m.app.Context(), viewerForegroundKey{}, true))
 	r.cancel = cancel
 	go func() {
 		next := v
@@ -89,8 +107,10 @@ func (m *siteManager) viewerLoad(id string, work func(context.Context, *GitView)
 			r.cancel = nil
 			r.refresh.lastFinished = time.Now()
 			r.reviewSaving = false
+			r.diffCache.remember(&next)
 			m.emitViewer(id)
 			m.refreshViewerEditor(id)
+			m.prefetchViewerFiles(id)
 		})
 	}()
 }
@@ -99,6 +119,7 @@ func (m *siteManager) forgetViewer(id string) {
 		if r.reviewEditing {
 			m.lifecycle.finishDraft()
 		}
+		r.cancelPrefetch()
 		r.cancelViewerRefresh()
 		if r.cancel != nil {
 			r.cancel()
@@ -144,7 +165,11 @@ func (m *siteManager) openViewer(req viewerRequest, parent *application.WebviewW
 	if !req.Anchor.valid() {
 		return
 	}
+	m.lastWindowSiteID = req.SiteID
 	if r := m.existingViewer(req); r != nil {
+		if site != nil {
+			r.updateTitle(site.Git)
+		}
 		m.viewerSequence++
 		r.used = m.viewerSequence
 		// Explicit opens follow their current source, including a viewer first
@@ -168,20 +193,28 @@ func (m *siteManager) openViewer(req viewerRequest, parent *application.WebviewW
 	}
 	m.viewerSequence++
 	id := fmt.Sprintf("git-viewer-%d", m.viewerSequence)
-	title, url := "Changes", "/?viewer="+id
+	title := gitViewerTitle(filepath.Base(site.Site.Path), req.Kind, site.Git.Branch, site.Git)
+	url := "/?viewer=" + id
 	if req.Kind == "review" {
-		title, url = "Branch review", url+"&review=1"
+		url += "&review=1"
 	}
 	w := m.app.Window.NewWithOptions(application.WebviewWindowOptions{
-		Name: id, Title: "DevJay · " + filepath.Base(site.Site.Path) + " · " + title, URL: url,
+		Name: id, Title: title, URL: url,
 		Width: 1100, Height: 740, MinWidth: 720, MinHeight: 460, Hidden: true,
 		BackgroundColour: m.config.backgroundColour(m.systemDark),
 		Mac:              application.MacWindow{CollectionBehavior: application.MacWindowCollectionBehaviorMoveToActiveSpace | application.MacWindowCollectionBehaviorFullScreenNone, TabbingMode: application.MacWindowTabbingModeDisallowed},
 	})
-	state := &GitView{SiteID: req.SiteID, Name: filepath.Base(site.Site.Path), Path: site.Site.Path, File: -1, RemoteNote: site.Git.RemoteNote, Rebased: site.Git.Rebased}
+	state := &GitView{SiteID: req.SiteID, Name: filepath.Base(site.Site.Path), Path: site.Site.Path, Branch: site.Git.Branch, File: -1, RemoteNote: site.Git.RemoteNote, Rebased: site.Git.Rebased}
 	setViewMode(state, req.Kind)
-	m.viewers[id] = &gitViewerWindow{window: w, parent: parent, anchor: req.Anchor, used: m.viewerSequence, state: state}
+	m.viewers[id] = &gitViewerWindow{window: w, title: title, parent: parent, anchor: req.Anchor, used: m.viewerSequence, state: state}
 	m.watchView(id, w)
+	w.OnWindowEvent(events.Common.WindowFocus, func(*application.WindowEvent) {
+		m.send(func() {
+			if r := m.viewers[id]; r != nil {
+				m.lastWindowSiteID = r.state.SiteID
+			}
+		})
+	})
 	w.OnWindowEvent(events.Common.WindowRuntimeReady, func(*application.WindowEvent) {
 		m.send(func() {
 			if r := m.viewers[id]; r != nil {
@@ -296,6 +329,15 @@ func (m *siteManager) registerViewerEvents() {
 			case "mode":
 				m.viewerMode(id, req.Kind)
 				return
+			}
+			if req.Operation == "file" && r.useCachedFile(req.File) {
+				m.emitViewer(id)
+				m.refreshViewerEditor(id)
+				m.prefetchViewerFiles(id)
+				return
+			}
+			if req.Operation == "refresh" {
+				r.diffCache = viewerDiffCache{}
 			}
 			m.viewerLoad(id, func(ctx context.Context, v *GitView) error {
 				switch req.Operation {

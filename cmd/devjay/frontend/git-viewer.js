@@ -177,9 +177,16 @@ export function mountGitViewer(root, request, suggestions, openBranches) {
     node.classList.add('git-summary');
     node.title=`${counts.added} lines added, ${counts.removed} lines removed${counts.binary?`; ${counts.binary} binary file changes excluded from line counts`:''}${counts.partial?'; totals are incomplete because some files could not be counted or the list is limited':''}. Staged and unstaged changes are counted separately.`;
   }
-  let state=null, renderedVersion=null, renderedState=null, initialFocus=true;
-  let commitRowsKey=null, fileRowsKey=null;
+  let state=null, renderedVersion=null, renderedState=null, initialFocus=true, activeList=null;
+  let commitRowsKey=null, fileRowsKey=null, overviewKey=null;
+  let requestedListItem=null, queuedListItem=null;
   const send=(operation,extra={})=>{if(state&&!state.loading)request({version:state.version,operation,...extra});};
+  function selectListItem(list,item,operation,extra){
+    activeList=list;list.focus({preventScroll:true});
+    if(state?.loading)return;
+    if(operation==='commit'&&extra.commit===state?.commit&&!state?.allChanges)return;
+    requestedListItem={list,item};send(operation,extra);
+  }
   // Keep focus on the list itself: replacing rows or loading another diff must
   // not lose the next arrow key. Only the selected option enters the details.
   function navigableList(label) {
@@ -187,18 +194,22 @@ export function mountGitViewer(root, request, suggestions, openBranches) {
     list.setAttribute('role','listbox');list.setAttribute('aria-label',label);
     list.title='↑/↓ to select · Home/End for first/last';
     const selected=()=>list.querySelector('.selected');
-    list.onfocus=()=>selected()?.scrollIntoView({block:'nearest',inline:'nearest'});
+    list.onfocus=()=>{activeList=list;selected()?.scrollIntoView({block:'nearest',inline:'nearest'});};
     list.onkeydown=event=>{
       if(event.altKey||event.ctrlKey||event.metaKey||event.shiftKey||event.isComposing||event.defaultPrevented)return;
       if(!['ArrowUp','ArrowDown','Home','End'].includes(event.key))return;
       event.preventDefault();
-      if(!state||state.loading)return;
+      if(!state)return;
       const items=[...list.querySelectorAll('button')];
       if(!items.length)return;
-      const current=items.indexOf(selected());
+      const pending=queuedListItem||requestedListItem;
+      const current=items.indexOf(pending?.list===list&&items.includes(pending.item)?pending.item:selected());
       const index=event.key==='Home'?0:event.key==='End'?items.length-1:
         current<0?0:Math.max(0,Math.min(items.length-1,current+(event.key==='ArrowDown'?1:-1)));
-      if(index!==current)items[index].click();
+      if(index!==current){
+        if(state.loading)queuedListItem={list,item:items[index]};
+        else items[index].click();
+      }
     };
     return list;
   }
@@ -245,9 +256,9 @@ export function mountGitViewer(root, request, suggestions, openBranches) {
   refresh.setAttribute('aria-label','Refresh');
   refresh.title='Reread files and the last fetched history. Push and Update check the remote before confirmation.';
   const reviewBranch=button('',()=>send('review-open'),'git-review-branch');
-  reviewBranch.append(toolbarIcon('M1.5 8C4.5 2 11.5 2 14.5 8C11.5 14 4.5 14 1.5 8ZM10 8A2 2 0 1 1 6 8A2 2 0 0 1 10 8Z'),el('span','','View diffs'));
-  reviewBranch.setAttribute('aria-label','View diffs');
-  reviewBranch.title='Open a focused window comparing the branch fork point with current files, including uncommitted edits';
+  reviewBranch.append(toolbarIcon('M1.5 8C4.5 2 11.5 2 14.5 8C11.5 14 4.5 14 1.5 8ZM10 8A2 2 0 1 1 6 8A2 2 0 0 1 10 8Z'),el('span','','Review'));
+  reviewBranch.setAttribute('aria-label','Review');
+  reviewBranch.title='Review branch changes from the fork point, including uncommitted edits';
   branchName.append(refresh);
   const tools=el('div','git-view-tools');tools.append(reviewBranch);
   header.append(title,branchRow,...(suggestions?[suggestions]:[]),tools);
@@ -431,6 +442,11 @@ export function mountGitViewer(root, request, suggestions, openBranches) {
       event.preventDefault();findBar.hidden=false;findInput.focus();findInput.select();return;
     }
     if(event.key==='Escape'&&!findBar.hidden){event.preventDefault();closeFind();return;}
+    if(!event.altKey&&!event.ctrlKey&&!event.metaKey&&!event.shiftKey&&activeList&&
+      ['ArrowUp','ArrowDown','Home','End'].includes(event.key)&&
+      [document.body,document.documentElement,root].includes(event.target)){
+      activeList.focus({preventScroll:true});activeList.onkeydown(event);return;
+    }
     if(!event.altKey||event.ctrlKey||event.metaKey||event.shiftKey)return;
     if(['INPUT','TEXTAREA','SELECT'].includes(event.target?.tagName)||event.target?.isContentEditable)return;
     const control={ArrowUp:previousDiff,ArrowDown:nextDiff,ArrowLeft:previousFile,ArrowRight:nextFile}[event.key];
@@ -439,13 +455,39 @@ export function mountGitViewer(root, request, suggestions, openBranches) {
   // BODY can retain keyboard focus after a native window opens or diff nodes
   // are replaced, so shortcuts must also work outside the root's descendants.
   document.addEventListener('keydown',handleKeydown);
+  const rememberList=event=>{activeList=[commitList,fileList].find(list=>list.contains(event.target))||null;queuedListItem=null;};
+  document.addEventListener('pointerdown',rememberList);
   const emptyDetail=el('div','git-detail-empty');
   content.append(diffHeader,diffToolbar,findBar,partTabs,note,sides,diff,emptyDetail);
   sidebar.append(commits);detailPanes.append(files,content);inspection.append(commitDetail,detailPanes);
   panes.append(sidebar,inspection);root.append(header,error,panes,statusbar);
+  const pendingControls=new Map();
+  function holdReadControls(loading){
+    if(loading){
+      if(pendingControls.size)return;
+      for(const control of [reviewBranch,branchDiffButton,branchHistoryButton,fullHistoryButton,previousDiff,nextDiff,previousFile,nextFile,unifiedButton,splitButton]){
+        pendingControls.set(control,control.disabled);
+        // Keep the last frame's contrast while still blocking stale requests.
+        control.classList.toggle('git-read-pending',!control.disabled);
+        control.disabled=true;
+      }
+    }else{
+      for(const [control,disabled] of pendingControls){control.disabled=disabled;control.classList.toggle('git-read-pending',false);}
+      pendingControls.clear();
+    }
+  }
   const render=v=>{
     const changedContext=state?.siteID!==v.siteID||state?.kind!==v.kind;
+    if(changedContext){requestedListItem=null;queuedListItem=null;}
     state=v;
+    root.setAttribute('aria-busy',String(v.loading));
+    commitList.setAttribute('aria-busy',String(v.loading));fileList.setAttribute('aria-busy',String(v.loading));
+    renderEditor(v);
+    // A row selection reads asynchronously. Keep the complete current frame,
+    // including toolbar contrast, until its replacement is ready.
+    const holdFrame=v.loading&&renderedState?.siteID===v.siteID&&renderedState?.kind===v.kind;
+    holdReadControls(holdFrame);
+    if(holdFrame)return;
     reviewBranch.disabled=!!v.loading||!v.head;
     updateDiffControls();
     branchDiffButton.hidden=v.kind!=='branch';
@@ -458,12 +500,8 @@ export function mountGitViewer(root, request, suggestions, openBranches) {
       button.classList.toggle('selected',selected);button.setAttribute('aria-pressed',String(selected));
     }
     commitList.setAttribute('aria-label',v.branchOnly?'Branch commits':'Full history');
-    renderEditor(v);
-    root.setAttribute('aria-busy',String(v.loading));
-    commitList.setAttribute('aria-busy',String(v.loading));fileList.setAttribute('aria-busy',String(v.loading));
-    // Selecting a row reads its diff asynchronously. Keep the current frame
-    // intact until it arrives, instead of flashing loading text and controls.
-    if(v.loading&&renderedState?.siteID===v.siteID&&renderedState?.kind===v.kind)return;
+    // Editor discovery can emit this version again without changing the view.
+    if(!v.loading&&renderedVersion===v.version)return;
     const edits=v.kind==='edits';
     commits.hidden=edits;panes.classList.toggle('edits-only',edits);
     // Move the same file list between the sidebar and selected-commit details.
@@ -477,50 +515,53 @@ export function mountGitViewer(root, request, suggestions, openBranches) {
       diffTitle.textContent='';note.hidden=true;fileHeading.textContent='Files';
       previous.disabled=true;next.disabled=true;pageLabel.textContent='';
     }
-    name.textContent=v.name||'Changes';name.title=v.path;
-    branch.textContent=v.branch||'';branch.title=v.branch||'';
     updateBranchButton();
-    tabs.querySelectorAll('button').forEach(tab=>{
-      const category=viewCategory(v,tab.dataset.kind);
-      tab.classList.toggle('selected',tab.dataset.kind===v.kind);
-      tab.classList.toggle('empty-category',category.empty);
-      tab.setAttribute('aria-pressed',String(tab.dataset.kind===v.kind));
-      tab.setAttribute('aria-label',`${category.label}, ${category.count}`);
-      tab.querySelector('.git-tab-count').textContent=category.count;
-      tab.querySelector('.git-tab-count').hidden=tab.dataset.kind!=='edits';
-      tab.title=category.description;
-    });
-    // Inert would discard keyboard focus on every read. Keep the list focused
-    // while loading; send() guards read requests and the editor disables itself.
     refresh.disabled=v.loading;
-    error.hidden=!v.error;error.textContent=v.error||'';
-    const capture=v.captured?new Date(v.captured).toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit'}):'';
-    context.replaceChildren();
-    context.hidden=edits;
-    if(!edits){
-      if(v.loading)context.append(el('span','muted','Loading history…'));
-      else if(v.branchOnly){
-        const count=v.branchCommits;
-        context.append(el('strong','git-history-count',Number.isInteger(count)?`${count.toLocaleString()} branch ${count===1?'commit':'commits'}`:'Branch commits'),
-          el('span','muted',`Since the common ancestor with ${v.branchDiff?.target||'the base branch'}`));
-      }else {
-        const outgoing=v.branchWork?.local ?? (Number.isInteger(v.counts?.local)?v.counts.local:null);
-        const diverged=v.counts?.local>0&&v.incomingCount>0;
-        if(diverged)context.append(el('span','git-history-count',v.rebased?'Rebased':'History differs'));
-        if(outgoing>0)context.append(el('span','git-history-count outgoing',`↑ ${outgoing} ${v.comparisonOnly||diverged?'local only':'not pushed'}`));
-        if(v.incomingCount>0)context.append(el('span','git-history-count incoming',`↓ ${v.incomingCount} ${diverged?'remote only':'incoming'}`));
-        if(outgoing===0&&v.incomingCount===0)context.append(el('span','muted',v.comparisonOnly?'Matches comparison history':'Matches last fetched history'));
-        else if(!context.children.length)context.append(el('span','muted',v.upstream?'Branch history':'Local history'));
+    const nextOverviewKey=JSON.stringify([v.siteID,v.kind,v.name,v.path,v.branch,v.branchOnly,v.allChanges,v.branchCommits,v.branchDiff,v.counts,v.incomingCount,v.upstream,v.tracking,v.comparisonOnly,v.branchWork,v.rebased,v.captured,v.remoteNote,v.historyNote,v.error,!!v.loading]);
+    if(overviewKey!==nextOverviewKey){
+      overviewKey=nextOverviewKey;
+      name.textContent=v.name||'Changes';name.title=v.path;
+      branch.textContent=v.branch||'';branch.title=v.branch||'';
+      tabs.querySelectorAll('button').forEach(tab=>{
+        const category=viewCategory(v,tab.dataset.kind);
+        tab.classList.toggle('selected',tab.dataset.kind===v.kind);
+        tab.classList.toggle('empty-category',category.empty);
+        tab.setAttribute('aria-pressed',String(tab.dataset.kind===v.kind));
+        tab.setAttribute('aria-label',`${category.label}, ${category.count}`);
+        tab.querySelector('.git-tab-count').textContent=category.count;
+        tab.querySelector('.git-tab-count').hidden=tab.dataset.kind!=='edits';
+        tab.title=category.description;
+      });
+      // Inert would discard keyboard focus on every read. Keep the list focused
+      // while loading; send() guards read requests and the editor disables itself.
+      error.hidden=!v.error;error.textContent=v.error||'';
+      const capture=v.captured?new Date(v.captured).toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit'}):'';
+      context.replaceChildren();
+      context.hidden=edits;
+      if(!edits){
+        if(v.loading)context.append(el('span','muted','Loading history…'));
+        else if(v.branchOnly){
+          const count=v.branchCommits;
+          context.append(el('strong','git-history-count',Number.isInteger(count)?`${count.toLocaleString()} branch ${count===1?'commit':'commits'}`:'Branch commits'),
+            el('span','muted',`Since the common ancestor with ${v.branchDiff?.target||'the base branch'}`));
+        }else {
+          const outgoing=v.branchWork?.local ?? (Number.isInteger(v.counts?.local)?v.counts.local:null);
+          const diverged=v.counts?.local>0&&v.incomingCount>0;
+          if(diverged)context.append(el('span','git-history-count',v.rebased?'Rebased':'History differs'));
+          if(outgoing>0)context.append(el('span','git-history-count outgoing',`↑ ${outgoing} ${v.comparisonOnly||diverged?'local only':'not pushed'}`));
+          if(v.incomingCount>0)context.append(el('span','git-history-count incoming',`↓ ${v.incomingCount} ${diverged?'remote only':'incoming'}`));
+          if(outgoing===0&&v.incomingCount===0)context.append(el('span','muted',v.comparisonOnly?'Matches comparison history':'Matches last fetched history'));
+          else if(!context.children.length)context.append(el('span','muted',v.upstream?'Branch history':'Local history'));
+        }
+        context.title=branchHistoryContext(v);
       }
-      context.title=branchHistoryContext(v);
+      statusbar.textContent=[v.loading?'Refreshing…':edits?'Uncommitted changes':v.branchOnly||v.allChanges?`Branch changes since the common ancestor with ${v.branchDiff?.target||'the base'}`:v.tracking?`Compared with ${v.tracking}`:'Local history',
+        !v.loading&&capture?`Read at ${capture}`:'',v.comparisonOnly?'No upstream configured':'',v.remoteNote,v.historyNote,
+        v.rebased?'Rebased history: equivalent changes can have different commit IDs.':v.counts?.local>0&&v.incomingCount>0?'History differs: remote-only commits may be older versions after a rebase.':'',
+        v.branchWork?.inherited?`${v.branchWork.inherited} additional commits already on ${v.branchWork.base}`:''].filter(Boolean).join(' · ');
     }
-    statusbar.textContent=[v.loading?'Refreshing…':edits?'Uncommitted changes':v.branchOnly||v.allChanges?`Branch changes since the common ancestor with ${v.branchDiff?.target||'the base'}`:v.tracking?`Compared with ${v.tracking}`:'Local history',
-      !v.loading&&capture?`Read at ${capture}`:'',v.comparisonOnly?'No upstream configured':'',v.remoteNote,v.historyNote,
-      v.rebased?'Rebased history: equivalent changes can have different commit IDs.':v.counts?.local>0&&v.incomingCount>0?'History differs: remote-only commits may be older versions after a rebase.':'',
-      v.branchWork?.inherited?`${v.branchWork.inherited} additional commits already on ${v.branchWork.base}`:''].filter(Boolean).join(' · ');
     // Keep scroll and text selection intact for duplicate/loading-only emissions.
     if(v.loading)return;
-    if(renderedVersion===v.version)return;
     renderedVersion=v.version;
     const previousState=renderedState;
     const sameList=previousState?.siteID===v.siteID&&previousState?.kind===v.kind&&!!previousState?.branchOnly===!!v.branchOnly&&previousState?.page===v.page;
@@ -542,7 +583,7 @@ export function mountGitViewer(root, request, suggestions, openBranches) {
         if(!v.branchOnly&&shared&&!sharedStarted&&(v.commits||[]).some(c=>c.presence==='incoming'||c.presence==='outgoing')){
           commitList.append(el('div','git-history-divider','Shared history'));sharedStarted=true;
         }
-        const item=button('',()=>{commitList.focus({preventScroll:true});send('commit',{commit:commit.id});},'git-commit');
+        const item=button('',()=>selectListItem(commitList,item,'commit',{commit:commit.id}),'git-commit');
         listOption(commitList,item,`git-commit-${commitList.children.length}`,commit.id===v.commit);
         item.classList.toggle('incoming',commit.presence==='incoming');item.classList.toggle('outgoing',commit.presence==='outgoing');
         const marker=el('span','git-history-dot');marker.setAttribute('aria-hidden','true');
@@ -575,7 +616,7 @@ export function mountGitViewer(root, request, suggestions, openBranches) {
       fileList.replaceChildren();
       for(const row of rows) {
         const {file,index}=row;
-        const item=button('',()=>{fileList.focus({preventScroll:true});send('file',{file:index});},'git-file');
+        const item=button('',()=>selectListItem(fileList,item,'file',{file:index}),'git-file');
         listOption(fileList,item,`git-file-${index}`,row.selected);
         const status=file.status.startsWith('R')?'R':file.status[0];
         const copy=el('span','git-file-copy');
@@ -597,7 +638,7 @@ export function mountGitViewer(root, request, suggestions, openBranches) {
     fileList.querySelectorAll('button').forEach((item,index)=>{
       const row=rows[index];
       listOption(fileList,item,item.id,row.selected);
-      item.onclick=()=>{fileList.focus({preventScroll:true});send('file',{file:row.index});};
+      item.onclick=()=>selectListItem(fileList,item,'file',{file:row.index});
     });
     partTabs.replaceChildren();
     const selectedRow=edits?rows.find(row=>row.selected):null;
@@ -661,7 +702,12 @@ export function mountGitViewer(root, request, suggestions, openBranches) {
     updateDiffControls();
     updateDiffLabels(v);
     diff.scrollTop=diffScroll.top;diff.scrollLeft=diffScroll.left;
+    const queued=queuedListItem;requestedListItem=null;queuedListItem=null;
+    // Use the completed read's version; discard queued rows replaced by a
+    // different history/page or file list, and stop on a failed read.
+    if(queued&&!v.error&&root.contains(queued.item)&&
+      (queued.list.contains(document.activeElement)||[document.body,document.documentElement,root].includes(document.activeElement)&&activeList===queued.list))queued.item.click();
   };
-  render.destroy=()=>document.removeEventListener('keydown',handleKeydown);
+  render.destroy=()=>{document.removeEventListener('keydown',handleKeydown);document.removeEventListener('pointerdown',rememberList);};
   return render;
 }

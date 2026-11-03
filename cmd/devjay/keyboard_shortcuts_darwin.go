@@ -96,6 +96,9 @@ func (m *siteManager) changeShortcuts(overrides map[string]ShortcutBinding, chan
 	if err := validateShortcuts(overrides); err != nil {
 		return err
 	}
+	if err := validateFileMenuShortcuts(m.config.Shortcuts, overrides); err != nil {
+		return err
+	}
 	failed, err := commitShortcutChange(m.config, overrides, changed, configureGlobalShortcuts, m.save)
 	m.updateShortcutStatus(failed)
 	return err

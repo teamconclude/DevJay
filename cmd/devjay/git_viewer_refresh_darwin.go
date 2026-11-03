@@ -20,6 +20,7 @@ func (m *siteManager) siteViewersChanged(siteID string, before, after GitStatus)
 	}
 	for _, r := range m.viewers {
 		if r.state.SiteID == siteID {
+			r.updateTitle(after)
 			r.refresh.pending = true
 		}
 	}
@@ -31,6 +32,7 @@ func (m *siteManager) refreshViewers(now time.Time) {
 	var due []string
 	for id, r := range m.viewers {
 		if m.recovery.paused || !m.monitor.visibility[id] {
+			r.cancelPrefetch()
 			r.cancelViewerRefresh()
 			continue
 		}

@@ -17,6 +17,10 @@ import (
 const viewerPageSize = 100
 const viewerDiffLimit = 256 << 10
 
+type viewerForegroundKey struct{}
+
+var viewerCommandSlots = make(chan struct{}, 2)
+
 type ViewCommit struct {
 	Presence string `json:"presence,omitempty"` // incoming, outgoing, inherited, shared, unlinked, or unknown; local in legacy remote views.
 	ID       string `json:"id"`
@@ -100,7 +104,11 @@ func setViewMode(v *GitView, kind string) {
 
 func viewerGit(ctx context.Context, root string, args ...string) ([]byte, error) {
 	prefix := []string{"--no-pager", "--literal-pathspecs", "-C", root, "-c", "core.quotePath=false"}
-	return runCommandWithSlots(ctx, commandSlots, 10*time.Second, "git", append(prefix, args...)...)
+	slots := commandSlots
+	if foreground, _ := ctx.Value(viewerForegroundKey{}).(bool); foreground {
+		slots = viewerCommandSlots
+	}
+	return runCommandWithSlots(ctx, slots, 10*time.Second, "git", append(prefix, args...)...)
 }
 
 func parseViewFiles(data []byte, group string) ([]ViewFile, error) {

@@ -203,6 +203,24 @@ int main(void) {
         [window setContentSize:NSMakeSize(1280,800)];
         evaluate(view, @"review.render(fixture);void 0");
 
+        // File-list focus survives clicking, list replacement and response rendering.
+        evaluate(view,@"var navigationFixture={...fixture,path:'/fixture/ignore-navigation',version:100,files:[...fixture.files,{path:'cmd/devjay/review_test.go'},{path:'cmd/devjay/client_gen.go'}]};review.render(navigationFixture);var presentation=document.querySelector('.br-presentation');presentation.value='file';presentation.onchange();document.querySelector('.br-file').click();var plainArrow=key=>document.activeElement.dispatchEvent(new KeyboardEvent('keydown',{key,bubbles:true,cancelable:true}));void 0");
+        check(view,@"document.activeElement===document.querySelector('.br-files') && document.querySelectorAll('.br-file').length===2 && document.querySelector('.br-files-title').textContent==='2 / 4 files'");
+        evaluate(view,@"plainArrow('ArrowDown');review.render({...navigationFixture,version:101});void 0");
+        check(view,@"document.activeElement===document.querySelector('.br-files') && document.querySelector('.br-file[aria-selected=true]').dataset.path==='cmd/devjay/frontend/review.js'");
+        evaluate(view,@"document.activeElement.blur();plainArrow('ArrowUp');document.querySelector('.br-ignore-options').open=true;void 0");
+        check(view,@"document.activeElement===document.querySelector('.br-files') && document.querySelector('.br-file[aria-selected=true]').dataset.path==='cmd/devjay/review.go'");
+        for (NSNumber *width in @[@1280,@720]) {
+            [window setContentSize:NSMakeSize(width.doubleValue,600)];
+            check(view,@"document.body.scrollWidth<=innerWidth+1 && document.querySelector('.br-ignore-patterns').getBoundingClientRect().right<=document.querySelector('.br-sidebar').getBoundingClientRect().right && document.querySelector('.br-files').clientHeight>=80");
+        }
+        evaluate(view,@"var ignores=document.querySelector('.br-ignore-patterns');ignores.value='*.go';ignores.dispatchEvent(new Event('input'));void 0");
+        check(view,@"document.querySelectorAll('.br-file').length===1 && document.querySelector('.br-file[aria-selected=true]').dataset.path.endsWith('review.js')");
+        evaluate(view,@"var showIgnored=document.querySelector('.br-show-ignored input');showIgnored.checked=true;showIgnored.dispatchEvent(new Event('change'));void 0");
+        check(view,@"document.querySelectorAll('.br-file').length===4");
+        evaluate(view,@"showIgnored.checked=false;showIgnored.dispatchEvent(new Event('change'));document.querySelector('.br-ignore-options').open=false;review.render(fixture);void 0");
+        [window setContentSize:NSMakeSize(1280,800)];
+
         // Optional data captured by a disposable-repository Go test verifies
         // the Go JSON contract against the production renderer without opening
         // the app or loading the user's configuration.
@@ -222,6 +240,19 @@ int main(void) {
                 assert([[bitmap representationUsingType:NSBitmapImageFileTypePNG properties:@{}] writeToFile:output atomically:YES]);done=YES;
             }]; spin(&done);
         }
+        // Keep the previous file mounted while a newly selected file loads.
+        evaluate(view,@"document.querySelector('.br-presentation').value='file';document.querySelector('.br-presentation').dispatchEvent(new Event('change'));var waitingFixture={...fixture,captured:'waiting-file',version:180};review.render(waitingFixture);var retainedCard=document.querySelector('.br-file-card');var retainedContent=document.querySelector('.br-content');retainedContent.scrollTop=120;var retainedTop=retainedContent.scrollTop;document.querySelectorAll('.br-file')[1].click();void 0");
+        check(view,@"document.querySelector('.br-file-card')===retainedCard && retainedContent.scrollTop===retainedTop && !document.querySelector('.br-load-file') && document.querySelector('.br-file-loading').textContent==='Loading…'");
+        evaluate(view,@"flushReviewFrames();var waitingRequest=requests.filter(r=>r.operation==='review-prefetch'&&r.version===180).at(-1);review.prefetch({...waitingFixture,prefetchID:waitingRequest.prefetchID,review:{...fixture.review,selected:{...fixture.review.selected,path:fixture.files[1].path}}});void 0");
+        check(view,@"document.querySelector('.br-file-card').dataset.path===fixture.files[1].path && document.querySelector('.br-file-loading').hidden");
+
+        // Full preload and held-key navigation must not create loading-state
+        // cycles or leave a queue of repaints after key repeat stops.
+        evaluate(view,@"var preloadFiles=Array.from({length:40},(_,i)=>({path:`preload-${i}.go`,status:'M'}));var preloadFixture={...fixture,path:'/fixture/full-preload',captured:'full-preload',version:200,files:preloadFiles,review:{...fixture.review,selected:{...fixture.review.selected,path:preloadFiles[0].path}}};document.querySelector('.br-presentation').value='file';document.querySelector('.br-presentation').dispatchEvent(new Event('change'));review.render(preloadFixture);var preloaded=1;var preloadBatches=0;while(preloaded<40){flushReviewFrames();var batch=requests.filter(r=>r.operation==='review-prefetch'&&r.version===200).at(-1);if(!batch||++preloadBatches>10)throw Error('Preload did not drain');for(const index of batch.prefetch){review.prefetch({...preloadFixture,prefetchID:batch.prefetchID,review:{...preloadFixture.review,selected:{...fixture.review.selected,path:preloadFiles[index].path}}});preloaded++;}review.prefetch({...preloadFixture,prefetchID:batch.prefetchID,done:true});}flushReviewFrames();var preloadRequestCount=requests.length;var heldList=document.querySelector('.br-files');heldList.focus();var heldOldCard=document.querySelector('.br-file-card');var heldToolbar=document.querySelector('.br-toolbar');var heldControls=[...heldToolbar.querySelectorAll('select,.br-layouts button,.br-options button')];var heldControlFrame=()=>JSON.stringify(heldControls.map(n=>[n.disabled,getComputedStyle(n).opacity,n.getBoundingClientRect().width,n.getBoundingClientRect().height]));var beforeHeldControls=heldControlFrame();for(let i=0;i<30;i++)heldList.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowDown',repeat:true,bubbles:true,cancelable:true}));void 0");
+        check(view,@"document.querySelector('.br-preload-status').textContent==='40 files ready' && document.querySelector('.br-file[aria-selected=true]').dataset.path==='preload-30.go' && document.querySelector('.br-file-card')===heldOldCard && requests.length===preloadRequestCount");
+        evaluate(view,@"flushReviewFrames();heldList.dispatchEvent(new KeyboardEvent('keyup',{key:'ArrowDown',bubbles:true}));var heldFinalCard=document.querySelector('.br-file-card');flushReviewFrames();flushReviewFrames();void 0");
+        check(view,@"heldFinalCard.dataset.path==='preload-30.go' && document.querySelector('.br-file-card')===heldFinalCard && document.querySelector('.br-toolbar')===heldToolbar && heldControlFrame()===beforeHeldControls && requests.length===preloadRequestCount && !document.querySelector('.branch-review').classList.contains('br-loading')");
+
         // Branch controls are centered in the header. Refresh stays square
         // after Switch, including alongside warnings and suggested actions.
         evaluate(view,@"review.destroy();void 0");
@@ -249,7 +280,7 @@ int main(void) {
             [window setContentSize:NSMakeSize(width.doubleValue,600)];
             check(view,@"checkBranchControls() && document.body.scrollWidth<=innerWidth && actionHeader.getBoundingClientRect().right<=innerWidth");
         }
-        // Rebase and View diffs must share the branch controls' vertical center,
+        // Rebase and Review must share the branch controls' vertical center,
         // both with and without guidance between them.
         evaluate(view,@"var rebaseButton=actionButtons.firstElementChild;rebaseButton.textContent='Rebase';actionButtons.replaceChildren(rebaseButton);void 0");
         for (NSNumber *warning in @[@NO,@YES]) {
@@ -263,6 +294,14 @@ int main(void) {
         evaluate(view,@"document.querySelector('.git-review-branch').click();void 0");
         check(view,@"requests.some(r=>r.operation==='review-open')");
         check(view,@"!!document.querySelector('.git-diff .syntax-keyword') && !!document.querySelector('.git-diff .syntax-comment')");
+        // History selection must retain the frame's real WebKit contrast and
+        // geometry during the read, then update only the selected details.
+        evaluate(view,@"var historyFixture={...fixture,version:100,kind:'branch',branchOnly:true,branchCommits:2,branchDiff:{base:'base',target:'origin/main'},commit:'first',message:'First commit',counts:{edits:2,branch:2},commits:[{...commit,id:'first',subject:'First commit',presence:'shared'},{...commit,id:'second',subject:'Second commit',presence:'shared'}],diff:fixture.review.selected.diff,editor:{resolved:{name:'Editor'},canOpen:true}};renderLegacy(historyFixture);var historyList=document.querySelector('.git-view-commits .git-scroll-list');historyList.querySelector('button').click();var historyChrome=[...document.querySelectorAll('.git-view-header button,.git-history-scope button,.git-branch-diff,.git-diff-toolbar button,.file-editor-controls button')];var chromeFrame=()=>historyChrome.map(node=>{const r=node.getBoundingClientRect();return [getComputedStyle(node).opacity,r.x,r.y,r.width,r.height,node.textContent]});var historyFrame=JSON.stringify(chromeFrame()),historyContext=document.querySelector('.git-view-context').firstChild,historyTitle=document.querySelector('.git-current-branch').firstChild,historyLine=document.querySelector('.git-diff').firstChild;historyList.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowDown',bubbles:true,cancelable:true}));renderLegacy({...historyFixture,version:101,loading:true,editor:null});void 0");
+        check(view,@"requests.at(-1).operation==='commit' && requests.at(-1).commit==='second' && document.activeElement===historyList && JSON.stringify(chromeFrame())===historyFrame && document.querySelector('.git-diff').firstChild===historyLine && document.querySelector('.git-full-history').disabled && document.querySelector('.git-review-branch').disabled");
+        evaluate(view,@"var secondCommit={...historyFixture,version:101,commit:'second',message:'Second commit',diff:'@@ -1 +1 @@\\n-old\\n+second commit',editor:null};renderLegacy(secondCommit);void 0");
+        check(view,@"document.activeElement===historyList && historyList.querySelector('.selected').textContent.includes('Second commit') && document.querySelector('.git-view-context').firstChild===historyContext && document.querySelector('.git-current-branch').firstChild===historyTitle && document.querySelector('.git-diff').textContent.includes('second commit') && !document.querySelector('.git-full-history').disabled && !document.querySelector('.git-read-pending')");
+        evaluate(view,@"var secondLine=document.querySelector('.git-diff').firstChild;renderLegacy({...secondCommit,editor:historyFixture.editor});historyList.blur();document.body.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowUp',bubbles:true,cancelable:true}));void 0");
+        check(view,@"requests.at(-1).commit==='first' && document.querySelector('.git-diff').firstChild===secondLine && document.querySelector('.git-view-context').firstChild===historyContext && document.querySelector('.git-current-branch').firstChild===historyTitle");
         evaluate(view,@"renderLegacy.destroy();void 0");
         check(view,@"!optionKey(document.body,'ArrowRight')");
         puts("Branch review WebKit layout checks passed");

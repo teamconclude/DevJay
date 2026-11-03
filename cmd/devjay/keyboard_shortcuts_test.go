@@ -137,3 +137,23 @@ func TestShortcutConflictNamesBothActions(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestFileMenuShortcutsReserveNewAssignmentsAndPreserveSavedOnes(t *testing.T) {
+	for _, binding := range []ShortcutBinding{{45, 8}, {45, 12}, {13, 8}} {
+		overrides := map[string]ShortcutBinding{"toggle-strip": binding}
+		if validateFileMenuShortcuts(nil, overrides) == nil {
+			t.Fatalf("accepted File menu shortcut %s", shortcutLabel(binding))
+		}
+		if err := validateFileMenuShortcuts(overrides, overrides); err != nil {
+			t.Fatal("rejected unchanged legacy assignment", err)
+		}
+		cfg := SiteConfig{Version: 1, Shortcuts: overrides}
+		path := filepath.Join(t.TempDir(), "sites.json")
+		if err := saveSites(path, cfg); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := loadSites(path); err != nil {
+			t.Fatal("new menu command broke existing configuration", err)
+		}
+	}
+}

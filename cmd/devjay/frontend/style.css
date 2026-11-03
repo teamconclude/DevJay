@@ -516,6 +516,7 @@ button.status-line { padding: 0; border: 0; border-radius: 3px; background: tran
 button.status-line:hover { text-decoration: underline; }
 .git-viewer #app { --git-sidebar-width: clamp(220px, 27vw, 292px); height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
 .git-viewer [hidden] { display: none !important; }
+.git-viewer button.git-read-pending:disabled { opacity: 1; }
 .git-view-header { display: grid; grid-template-columns: var(--git-sidebar-width) minmax(190px, 1fr) auto auto auto; grid-template-rows: minmax(48px, auto); align-items: stretch; border-bottom: 1px solid var(--border, #343c48); background: var(--panel, #20252e); flex-shrink: 0; }
 .git-view-header:has(.git-suggestion-warning) { grid-template-columns: var(--git-sidebar-width) minmax(190px, max-content) minmax(0, 1fr) auto auto; }
 .git-view-header:has(.git-suggestion-warning) > .git-view-branch { max-width: clamp(190px, calc(50vw - 240px), 390px); }
@@ -571,7 +572,7 @@ mark.diff-search-hit [class^="syntax-"] { color: inherit; }
 .git-commit.incoming .git-history-dot { background: transparent; border: 2px solid var(--border-strong, #aab7c9); }
 .git-commit.incoming:not(.selected) { color: var(--text-secondary, #b2bdcc); }
 .git-commit:hover, .git-file:hover { background: var(--hover, #222d3b); }
-.git-commit.selected, .git-file.selected { background: var(--selection, #273b54); box-shadow: inset 3px 0 var(--accent, #88baff); }
+.git-commit.selected, .git-file.selected, .br-file[aria-selected=true], .br-file[aria-selected=true]:hover { background: var(--selection, #273b54); box-shadow: inset 3px 0 var(--accent, #88baff); }
 .git-scroll-list:focus { outline: none; }
 .git-history-divider { border-top: 1px solid var(--border, #343f4e); margin-top: 8px; padding: 12px 15px 0; color: var(--muted, #a3b0c2); font-size: 10px; }
 .git-view-pagination { display: flex; gap: 8px; align-items: center; justify-content: space-between; padding: 9px 12px; border-top: 1px solid var(--border, #303a49); font-size: 10px; }

@@ -242,6 +242,58 @@ static void test_viewer_placement(void) {
     other->visibleForPlacement = NO;
 }
 
+static void test_on_top_applies_only_to_strip_and_sites(void) {
+    NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+    id previous = [[defaults objectForKey:@"DevJay.View.OnTop"] retain];
+    Method activation = class_getInstanceMethod(NSApplication.class, @selector(activateIgnoringOtherApps:));
+    IMP original = method_setImplementation(activation, (IMP)recordActivation);
+    DevJaySiteTestWindow *review = [[[DevJaySiteTestWindow alloc] initWithContentRect:NSMakeRect(0,0,460,330)
+        styleMask:NSWindowStyleMaskTitled backing:NSBackingStoreBuffered defer:NO] autorelease];
+    DevJaySiteTestWindow *history = [[[DevJaySiteTestWindow alloc] initWithContentRect:NSMakeRect(0,0,460,330)
+        styleMask:NSWindowStyleMaskTitled backing:NSBackingStoreBuffered defer:NO] autorelease];
+    DevJayStripTestPanel *strip = [[[DevJayStripTestPanel alloc] initWithContentRect:NSMakeRect(0,0,100,100)
+        styleMask:NSWindowStyleMaskNonactivatingPanel backing:NSBackingStoreBuffered defer:NO] autorelease];
+    strip.identifier = @"strip";
+    DevJaySiteTestWindow *site = [[[DevJaySiteTestWindow alloc] initWithContentRect:NSMakeRect(0,0,100,100)
+        styleMask:NSWindowStyleMaskTitled backing:NSBackingStoreBuffered defer:NO] autorelease];
+    site.identifier = @"site-test";
+    DevJaySiteTestWindow *settings = [[[DevJaySiteTestWindow alloc] initWithContentRect:NSMakeRect(0,0,100,100)
+        styleMask:NSWindowStyleMaskTitled backing:NSBackingStoreBuffered defer:NO] autorelease];
+    DevJaySiteTestWindow *actions = [[[DevJaySiteTestWindow alloc] initWithContentRect:NSMakeRect(0,0,100,100)
+        styleMask:NSWindowStyleMaskTitled backing:NSBackingStoreBuffered defer:NO] autorelease];
+    WKWebView *reviewView = [[[WKWebView alloc] initWithFrame:review.contentView.bounds] autorelease];
+    review.contentView = reviewView;
+    devjay_all_windows_on_top(1);
+    devjay_show_viewer(history,NULL,0,0,0,0);
+    devjay_show_viewer(review,NULL,0,0,0,0);
+    devjay_show_settings(settings,history);
+    devjay_show_suggestions(actions,history,0,0,0,0);
+    assert(history.level == NSNormalWindowLevel && review.level == NSNormalWindowLevel);
+    assert([review.identifier isEqual:@"git-viewer"] && review->keyOrders == 1);
+    assert([reviewView acceptsFirstMouse:nil]);
+    assert([review.firstResponder isKindOfClass:NSView.class] && [(NSView *)review.firstResponder isDescendantOf:reviewView]);
+    for (int enabled = 0; enabled <= 1; enabled++) {
+        devjay_all_windows_on_top(enabled);
+        assert(review.level == NSNormalWindowLevel);
+        assert(history.level == NSNormalWindowLevel);
+        assert(settings.level == NSNormalWindowLevel && actions.level == NSNormalWindowLevel);
+        assert(strip.level == (enabled ? NSFloatingWindowLevel : NSNormalWindowLevel) && strip.floatingPanel == (BOOL)enabled);
+        assert(site.level == (enabled ? NSFloatingWindowLevel : NSNormalWindowLevel));
+        devjay_show_viewer(review,history,0,0,0,0);
+        devjay_show_viewer(history,site,0,0,0,0);
+        devjay_show_settings(settings,history);
+        devjay_show_suggestions(actions,history,0,0,0,0);
+        assert(review.level == NSNormalWindowLevel);
+        assert(history.level == NSNormalWindowLevel && settings.level == NSNormalWindowLevel && actions.level == NSNormalWindowLevel);
+    }
+    devjay_apply_top_preference();
+    assert(review.level == NSNormalWindowLevel && history.level == NSNormalWindowLevel);
+    if (previous) [defaults setObject:previous forKey:@"DevJay.View.OnTop"];
+    else [defaults removeObjectForKey:@"DevJay.View.OnTop"];
+    [previous release];
+    method_setImplementation(activation,original);
+}
+
 static void test_switch_placement(void) {
     NSRect area = NSScreen.mainScreen.visibleFrame;
     if (area.size.width < 1200 || area.size.height < 850) return;
@@ -582,6 +634,7 @@ int main(void) {
         test_message_dialog_card_anchor();
         test_confirmation_site_center();
         test_viewer_placement();
+        test_on_top_applies_only_to_strip_and_sites();
         test_switch_placement();
         test_card_height_refit();
         test_profile_layout_isolation();
