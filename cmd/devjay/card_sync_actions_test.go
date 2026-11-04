@@ -1,6 +1,79 @@
 package main
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/wailsapp/wails/v3/pkg/application"
+)
+
+func TestCardUpdateSourceOnlyAuthorizesIncomingMainBranch(t *testing.T) {
+	strip, window := &application.WebviewWindow{}, &application.WebviewWindow{}
+	status := GitStatus{Branch: "develop", Head: "head", Tracking: "origin/develop", Behind: 3, IsMainBranch: true}
+	site := &siteRuntime{Ready: true, Window: window, Git: status}
+	m := &siteManager{strip: strip, stripReady: true, runtime: map[string]*siteRuntime{"a": site}}
+	req := ActionRequest{SiteID: "a", Kind: "update", Branch: "develop", Head: "head", Anchor: &cardAnchor{Width: 200, Height: 140}}
+	for sender, expected := range map[string]*application.WebviewWindow{"strip": strip, "site-a": window} {
+		if m.cardUpdateSource(req, sender) != expected {
+			t.Fatalf("incoming main-branch click rejected from %s", sender)
+		}
+		for _, change := range []func(*ActionRequest){
+			func(r *ActionRequest) { r.SiteID = "missing" }, func(r *ActionRequest) { r.Head = "stale" },
+			func(r *ActionRequest) { r.Branch = "other" }, func(r *ActionRequest) { r.Kind = "push" },
+			func(r *ActionRequest) { r.DeleteBranch = true }, func(r *ActionRequest) { r.UpdateTarget = true },
+			func(r *ActionRequest) { r.TargetBranch = "other" }, func(r *ActionRequest) { r.TargetRemote = "other" },
+			func(r *ActionRequest) { r.Anchor = &cardAnchor{} },
+		} {
+			invalid := req
+			change(&invalid)
+			if m.cardUpdateSource(invalid, sender) != nil {
+				t.Fatalf("accepted stale or unrelated request: %+v", invalid)
+			}
+		}
+		for _, change := range []func(*GitStatus){
+			func(g *GitStatus) { g.IsMainBranch = false }, func(g *GitStatus) { g.Behind = 0 },
+			func(g *GitStatus) { g.Ahead = 1 }, func(g *GitStatus) { g.Changes = 1 },
+			func(g *GitStatus) { g.Conflicts = 1 }, func(g *GitStatus) { g.LocalNote = "unavailable" },
+			func(g *GitStatus) { g.Tracking = "" }, func(g *GitStatus) { g.Rewritten = true },
+			func(g *GitStatus) { g.Rebased = true }, func(g *GitStatus) { g.CanReplaceRemote = true },
+			func(g *GitStatus) { g.Comparison = &HistoryComparison{Behind: 3} },
+		} {
+			site.Git = status
+			change(&site.Git)
+			if m.cardUpdateSource(req, sender) != nil {
+				t.Fatalf("accepted unavailable update: %+v", site.Git)
+			}
+		}
+		site.Git = status
+		for _, phase := range []string{"preparing", "running"} {
+			m.actionDialogs = map[string]*actionDialog{"action": {siteID: "a", action: &CheckoutAction{Status: phase}}}
+			if m.cardUpdateSource(req, sender) != nil {
+				t.Fatal("accepted a second action on a busy Site")
+			}
+			m.actionDialogs["action"].siteID = "other"
+			if m.cardUpdateSource(req, sender) != expected {
+				t.Fatal("another Site's action blocked this update")
+			}
+		}
+		m.actionDialogs = nil
+	}
+	for _, sender := range []string{"settings", "site-b", "git-viewer-1", "suggested-actions-1", ""} {
+		if m.cardUpdateSource(req, sender) != nil {
+			t.Fatalf("accepted wrong sender %q", sender)
+		}
+	}
+	site.Ready = false
+	if m.cardUpdateSource(req, "site-a") != nil || m.cardUpdateSource(req, "strip") != nil {
+		t.Fatal("accepted an unready Site")
+	}
+	site.Ready, m.stripReady = true, false
+	if m.cardUpdateSource(req, "strip") != nil {
+		t.Fatal("accepted an unready strip")
+	}
+	m.config = SiteConfig{ActiveProfile: "test", Profiles: []Profile{{ID: "test", Excluded: []string{"a"}}}}
+	if m.cardUpdateSource(req, "site-a") != nil {
+		t.Fatal("accepted a Site excluded by the current Profile")
+	}
+}
 
 func TestCardReplacementRequiresVerifiedHistoryAndRevalidatesSelection(t *testing.T) {
 	status := GitStatus{Branch: "feature", Head: "head", Tracking: "origin/feature", Ahead: 2, Behind: 3,

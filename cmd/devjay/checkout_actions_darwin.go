@@ -16,8 +16,7 @@ func (m *siteManager) actionReply(requestID, message string) {
 	}{requestID, message})
 }
 
-// Site buttons may prepare only their own currently available rebased push.
-// All other actions retain their existing viewer/confirmation authorization.
+// The explicit rebased-push button belongs only to its own Site window.
 func (m *siteManager) sitePublishSource(req ActionRequest, sender string) *application.WebviewWindow {
 	if sender != "site-"+req.SiteID || req.Kind != "publish" || m.siteActionBusy(req.SiteID) {
 		return nil
@@ -28,6 +27,24 @@ func (m *siteManager) sitePublishSource(req ActionRequest, sender string) *appli
 	}
 	option := makeCardGitOption(cardMenuRequest{Kind: "branch", PublishRebased: true}, site.Git)
 	if option == nil || option.DisabledReason != "" {
+		return nil
+	}
+	return parent
+}
+
+// Incoming main-branch metrics may enter the existing update preparation flow.
+// Recheck the exact checkout and eligibility; a frontend hint is not authority.
+func (m *siteManager) cardUpdateSource(req ActionRequest, sender string) *application.WebviewWindow {
+	if req.Kind != "update" || req.DeleteBranch || req.UpdateTarget || req.TargetBranch != "" || req.TargetRemote != "" ||
+		!req.Anchor.valid() || m.siteActionBusy(req.SiteID) || !siteEnabled(m.config, req.SiteID) {
+		return nil
+	}
+	parent, site := m.cardMenuSource(cardMenuRequest{SiteID: req.SiteID}, sender)
+	if parent == nil || !site.Git.IsMainBranch || site.Git.Comparison != nil || req.Head != site.Git.Head || req.Branch != site.Git.Branch {
+		return nil
+	}
+	option := makeCardSyncOption("update", site.Git)
+	if _, ok := option.request(req.SiteID, site.Git); !ok {
 		return nil
 	}
 	return parent
@@ -132,10 +149,14 @@ func (m *siteManager) registerCheckoutActions() {
 					return
 				}
 				parent = d.parent
-			} else if sender == "site-"+req.SiteID {
-				parent = m.sitePublishSource(req, sender)
+			} else if sender == "strip" || sender == "site-"+req.SiteID {
+				if req.Kind == "update" {
+					parent = m.cardUpdateSource(req, sender)
+				} else {
+					parent = m.sitePublishSource(req, sender)
+				}
 				if parent == nil {
-					m.actionReply(req.RequestID, "This rebased push is no longer available. Refresh the Site and review its current state.")
+					m.actionReply(req.RequestID, "This action is no longer available. Refresh the Site and review its current state.")
 					return
 				}
 			} else {

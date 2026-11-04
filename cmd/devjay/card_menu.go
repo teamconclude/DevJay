@@ -305,9 +305,10 @@ func cardMenuOffersDiffs(req cardMenuRequest, git GitStatus) bool {
 		return false
 	}
 	// Feature branches can differ from their base even when their upstream is
-	// in sync. Default branches need evidence of edits or differing history.
-	return !git.IsMainBranch || git.Changes > 0 || git.Conflicts > 0 || git.Ahead > 0 || git.Behind > 0 ||
-		(git.Comparison != nil && (git.Comparison.Ahead > 0 || git.Comparison.Behind > 0))
+	// in sync. Incoming commits alone on a default branch are an update, not
+	// local work to review. Keep Review for edits, outgoing or rewritten history.
+	return !git.IsMainBranch || git.Changes > 0 || git.Conflicts > 0 || git.Ahead > 0 || git.Rewritten || git.Rebased || git.CanReplaceRemote ||
+		(git.Comparison != nil && git.Comparison.Ahead > 0)
 }
 
 func cardMenuLabels(req cardMenuRequest) [4]string {

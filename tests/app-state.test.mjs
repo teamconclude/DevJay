@@ -327,6 +327,55 @@ test('incoming and outgoing metrics carry their own menu action without changing
  }
 });
 
+test('incoming main-branch clicks prepare an update and preserve their context menu',async()=>{
+ for(const search of ['', '?site=a']) for(const branch of ['develop','main','trunk']) {
+  const view=app(search),item=site('a',branch);
+  item.git={...item.git,head:'head',isMainBranch:true,ahead:0,behind:3,tracking:`origin/${branch}`};
+  view.snapshot(state([item]));
+  const metric=view.root.querySelector('.metric');
+  assert.equal(metric.title,`Fetch and update ${branch}…`);
+  assert.match(metric.attrs['aria-label'],/3 incoming commits/);
+  assert.equal(cardMenuTarget(metric).gitAction,'update');
+  const pending=metric.onclick();
+  metric.onclick();
+  view.snapshot(state([item]));
+  assert.equal(view.root.querySelector('.metric').disabled,true);
+  await pending;
+  assert.deepEqual(JSON.parse(JSON.stringify(view.calls.filter(([name])=>name==='devjay:action-prepare'))),[
+   ['devjay:action-prepare',{siteID:'a',kind:'update',branch,head:'head',anchor:{x:10,y:20,width:270,height:140}}],
+  ]);
+  assert.equal(view.calls.some(([name])=>['devjay:viewer-open','devjay:action-confirm','devjay:activate'].includes(name)),false);
+  for(const status of ['preparing','running']) {
+   view.snapshot({...state([item]),action:{siteID:'a',status}});
+   assert.equal(view.root.querySelector('.metric').disabled,true);
+  }
+  view.snapshot({...state([item]),action:{siteID:'other',status:'running'}});
+  assert.equal(view.root.querySelector('.metric').disabled,false);
+ }
+});
+
+test('incoming clicks retain history when a main-branch update is unavailable',async()=>{
+ for(const change of [{isMainBranch:false},{changes:1},{conflicts:1},{localNote:'Unavailable'},{ahead:1},{tracking:''},{head:''},{rewritten:true},{canReplaceRemote:true},{comparison:{ahead:0,behind:3,tracking:'origin/develop'}}]) {
+  const view=app(),item=site('a','develop');
+  item.git={...item.git,head:'head',isMainBranch:true,ahead:0,behind:3,tracking:'origin/develop',...change};
+  view.snapshot(state([item]));
+  await view.root.querySelectorAll('.metric').find(node=>node.dataset.gitAction==='update').onclick();
+  assert.equal(view.calls.some(([name])=>name==='devjay:action-prepare'),false);
+  assert.equal(view.calls.find(([name])=>name==='devjay:viewer-open')[1].kind,'branch');
+ }
+});
+
+test('incoming update controls recover after failed request delivery',async()=>{
+ const view=app('',false),item=site('a','develop');
+ item.git={...item.git,head:'head',isMainBranch:true,ahead:0,behind:3,tracking:'origin/develop'};
+ view.snapshot(state([item]));
+ await view.root.querySelector('.metric').onclick();
+ assert.equal(view.root.querySelector('.metric').disabled,false);
+ assert.match(view.root.querySelector('.notice').textContent,/Delivery failed/);
+ await view.root.querySelector('.metric').onclick();
+ assert.equal(view.calls.filter(([name])=>name==='devjay:action-prepare').length,2);
+});
+
 test('Changes and History clicks send the originating card bounds for placement',async()=>{
  for (const search of ['', '?site=a']) {
   const view=app(search), item=site('a','feature');

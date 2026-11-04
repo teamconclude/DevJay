@@ -15,7 +15,7 @@ import { mountGitViewer } from './git-viewer.js';
 import { createBranchReview } from './branch-review.js';
 import { createPRReview } from './pr-review.js';
 import { cardStatus } from './card-status.js';
-import { mountSuggestedActions, mountViewerSuggestions, rebasedPublishWarning } from './suggested-actions.js';
+import { mountSuggestedActions, mountViewerSuggestions, rebasedPublishWarning, siteSuggestions } from './suggested-actions.js';
 import { installStripDrag } from './strip-drag.js';
 import { installCardActivation } from './card-interaction.js';
 import { installDragOriginGuard } from './drag-origin.js';
@@ -35,6 +35,7 @@ let updateBar, updateButton, updateNote;
 if (!viewer && !actions) installPathLabels(document.body);
 let snapshot = {sites: []}, dragging = null, stripDragging = false;
 let sitePublishPending = null;
+const cardUpdatePending = new Set();
 let nativeVisible = true, renderedSnapshot = false, deferredSnapshot = null;
 function updateMonitoringVisibility() {
   const visible = nativeVisible && !document.hidden;
@@ -196,8 +197,9 @@ function developmentAppIndicator(site) {
 function details(site, parent, showIDEStatus) {
   const {checked, ...displayGit} = site.git;
   const publishBusy = !!siteID && (snapshot.action?.status === 'preparing' || snapshot.action?.status === 'running' || !!sitePublishPending);
+  const updateBusy = cardUpdatePending.has(site.id) || (snapshot.action?.siteID === site.id && ['preparing','running'].includes(snapshot.action.status));
   const attention = (site.developmentApps || []).map(app => appWaitingAttention(site, app).map(entry => entry.serial));
-  const signature = JSON.stringify([site.path, site.prefix, site.name, displayGit, site.developmentApps, site.developmentAppsKnown, showIDEStatus, site.position?.label, attention, publishBusy]);
+  const signature = JSON.stringify([site.path, site.prefix, site.name, displayGit, site.developmentApps, site.developmentAppsKnown, showIDEStatus, site.position?.label, attention, publishBusy, updateBusy]);
   if (parent.dataset.details === signature) return;
   parent.dataset.details = signature;
   parent.replaceChildren();
@@ -234,14 +236,25 @@ function details(site, parent, showIDEStatus) {
   }
   parent.append(heading);
   const status = cardStatus(site.git);
+  const incomingUpdate = site.git.isMainBranch && site.git.head && !site.git.comparison &&
+    siteSuggestions(site).some(suggestion => suggestion.kind === 'update' && !suggestion.blocked);
   const body = el('div', 'card-status');
-  function statusButton(view, cls, prNumber) {
-    const node = button('', () => {
+  function statusButton(view, cls, prNumber, update = false) {
+    const node = button('', async () => {
       const selection = window.getSelection();
       if (selection && !selection.isCollapsed && (node.contains(selection.anchorNode) || node.contains(selection.focusNode))) return;
       if (prNumber) openPR(prNumber);
+      else if (update) {
+        if (node.disabled || cardUpdatePending.has(site.id)) return;
+        const request = {siteID:site.id,kind:'update',branch:site.git.branch,head:site.git.head,anchor:cardBounds(node)};
+        cardUpdatePending.add(site.id);
+        render(snapshot);
+        try { await emit('action-prepare', request); }
+        finally { cardUpdatePending.delete(site.id); render(snapshot); }
+      }
       else emit('viewer-open', {siteID:site.id,kind:view || 'edits',anchor:cardBounds(node)});
     }, `${cls} status-link copyable`);
+    if (update) node.disabled = updateBusy;
     if (prNumber) node.dataset.prNumber = String(prNumber);
     else node.dataset.viewKind = view || 'edits';
     return node;
@@ -277,7 +290,10 @@ function details(site, parent, showIDEStatus) {
     row.append(heading);
     if (title) { row.classList.add('review-row'); row.title = title; row.setAttribute('aria-label', `${label}: ${title}`); }
     for (const item of values) {
-      const badge = statusButton(item.view, `metric ${item.tone}`, prNumber); badge.title = item.title; badge.setAttribute('aria-label', `View ${item.title}`);
+      const update = !!incomingUpdate && item.gitAction === 'update';
+      const badge = statusButton(item.view, `metric ${item.tone}`, prNumber, update);
+      badge.title = update ? `Fetch and update ${site.git.branch}…` : item.title;
+      badge.setAttribute('aria-label', update ? `${badge.title} · ${item.title}` : `View ${item.title}`);
       if (item.gitAction) badge.dataset.gitAction = item.gitAction;
       const symbol = el('span', 'metric-symbol', item.symbol); symbol.setAttribute('aria-hidden', 'true');
       if (item.symbol) badge.append(symbol);
