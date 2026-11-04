@@ -270,6 +270,7 @@ func (m *siteManager) snapshot() appSnapshot {
 	preferences := maps.Clone(m.monitor.preferences)
 	preferences["showIDEStatus"] = m.config.showIDEStatus()
 	preferences["showSiteWindows"] = !m.config.SiteWindowsHidden
+	preferences["viewersOnSiteDesktop"] = m.config.ViewersOnSiteDesktop
 	m.observeDevelopmentApps(m.monitor.windowNumbers, positions)
 	settingsOpen := m.monitor.settingsOpen
 	result := appSnapshot{Theme: m.config.theme(), ResolvedTheme: m.config.resolvedTheme(m.systemDark), Update: m.updateStatus, ShortcutSettings: m.shortcutSettingsView(), ShortcutLabels: m.shortcutLabels(), Profiles: m.profilesView(), StripMode: m.stripMode, ShortcutError: m.shortcutError, ShortcutHints: m.shortcutHints, QuitMessage: m.quitMessage, Layout: m.config.layout(), Placements: m.config.Placements, SettingsOpen: settingsOpen, Decoration: m.config.decoration(), Sites: []SiteView{}, Manual: m.config.Manual, Preferences: preferences}
@@ -501,6 +502,7 @@ func (m *siteManager) browse(after string) {
 }
 func (m *siteManager) registerEvents() {
 	m.registerAppearanceEvents()
+	m.registerViewerPlacementEvents()
 	m.registerClaudePermissionSettings()
 	m.registerShortcutEvents()
 	m.registerFolderEvents()

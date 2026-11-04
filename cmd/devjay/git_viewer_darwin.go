@@ -39,6 +39,7 @@ type viewerRequest struct {
 // Each window owns its snapshot, selections, and cancellable read. UI events
 // are routed by Wails' sender, never by a client-supplied Site identifier.
 type gitViewerWindow struct {
+	navigation       uint64
 	prReview         *prReviewWindow
 	removeCloseHook  func()
 	reviewEditing    bool
@@ -200,6 +201,7 @@ func (m *siteManager) openViewer(req viewerRequest, parent *application.WebviewW
 		return
 	}
 	m.lastWindowSiteID = req.SiteID
+	navigation := windowNavigationGeneration.Add(1)
 	if r := m.existingViewer(req); r != nil {
 		if site != nil {
 			r.updateTitle(site.Git)
@@ -208,7 +210,7 @@ func (m *siteManager) openViewer(req viewerRequest, parent *application.WebviewW
 		r.used = m.viewerSequence
 		// Explicit opens follow their current source, including a viewer first
 		// opened from a Site and later requested from its strip card.
-		r.parent, r.anchor = parent, req.Anchor
+		r.parent, r.anchor, r.navigation = parent, req.Anchor, navigation
 		for id, candidate := range m.viewers {
 			if candidate == r {
 				if r.state.Kind != req.Kind || (req.Kind == "branch" && !r.state.BranchOnly) {
@@ -217,11 +219,11 @@ func (m *siteManager) openViewer(req viewerRequest, parent *application.WebviewW
 					r.refresh.pending = true
 					m.refreshViewers(time.Now())
 				}
+				if r.ready {
+					m.showViewer(id)
+				}
 				break
 			}
-		}
-		if r.ready {
-			showViewerWindow(r.window, r.parent, r.anchor)
 		}
 		return
 	}
@@ -240,7 +242,7 @@ func (m *siteManager) openViewer(req viewerRequest, parent *application.WebviewW
 	})
 	state := &GitView{SiteID: req.SiteID, Name: filepath.Base(site.Site.Path), Path: site.Site.Path, Branch: site.Git.Branch, File: -1, RemoteNote: site.Git.RemoteNote, Rebased: site.Git.Rebased}
 	setViewMode(state, req.Kind)
-	m.viewers[id] = &gitViewerWindow{window: w, title: title, parent: parent, anchor: req.Anchor, used: m.viewerSequence, state: state}
+	m.viewers[id] = &gitViewerWindow{window: w, title: title, parent: parent, anchor: req.Anchor, used: m.viewerSequence, state: state, navigation: navigation}
 	m.watchView(id, w)
 	w.OnWindowEvent(events.Common.WindowFocus, func(*application.WindowEvent) {
 		m.send(func() {
@@ -254,7 +256,7 @@ func (m *siteManager) openViewer(req viewerRequest, parent *application.WebviewW
 			if r := m.viewers[id]; r != nil {
 				if !r.ready {
 					r.ready = true
-					showViewerWindow(w, r.parent, r.anchor)
+					m.showViewer(id)
 				}
 				m.emitViewer(id)
 			}

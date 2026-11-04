@@ -63,6 +63,81 @@ static int moveWindow(int connection, uint32_t *window, int count, int value) { 
 static NSUInteger activationRequests;
 static void recordActivation(id app, SEL selector, BOOL ignoringOthers) { activationRequests++; }
 
+@interface DevJayViewerNavigationHost : NSObject
+@property(nonatomic, getter=isActive) BOOL active;
+@property(nonatomic, assign) NSWindow *keyWindow;
+@end
+@implementation DevJayViewerNavigationHost
+@end
+
+static uint32_t placementSiteNumber;
+static BOOL placementMoved, placementMoveWorks, placementSiteChanged, placementSiteMissing;
+static CFArrayRef placementWindowSpaces(int conn, int mask, CFArrayRef windows) {
+    (void)conn; (void)mask;
+    uint32_t number = [(NSArray *)windows firstObject] ? [[(NSArray *)windows firstObject] unsignedIntValue] : 0;
+    int space = number == placementSiteNumber ? (placementSiteChanged ? 1 : placementSiteMissing ? 0 : 2) : (placementMoved ? 2 : 1);
+    return (CFArrayRef)[(space ? @[@(space)] : @[]) retain];
+}
+static CFArrayRef placementDisplaySpaces(int conn) {
+    (void)conn;
+    return (CFArrayRef)[@[@{@"Spaces":@[@{@"ManagedSpaceID":@1,@"uuid":@"source",@"type":@0},@{@"ManagedSpaceID":@2,@"uuid":@"site",@"type":@0}]}] retain];
+}
+static int placementMove(int conn, uint32_t *window, int count, int value) {
+    (void)conn; (void)window; (void)count; (void)value;
+    placementMoved = placementMoveWorks;
+    return 0; // A successful return is insufficient without verified membership.
+}
+static void test_viewer_waits_for_site_desktop(void) {
+    assert(!devjay_prepare_viewer_on_site(NULL,NULL));
+    if (!dp_spaces_available()) return;
+    __typeof__(copyWindowSpaces) oldWindowSpaces = copyWindowSpaces;
+    __typeof__(copyDisplaySpaces) oldDisplaySpaces = copyDisplaySpaces;
+    __typeof__(getCompatID) oldGet = getCompatID;
+    __typeof__(setCompatID) oldSet = setCompatID;
+    __typeof__(setWorkspace) oldMove = setWorkspace;
+    __typeof__(moveManaged) oldManaged = moveManaged;
+    copyWindowSpaces=placementWindowSpaces;copyDisplaySpaces=placementDisplaySpaces;
+    getCompatID=readTag;setCompatID=writeTag;setWorkspace=placementMove;moveManaged=NULL;
+    dp_invalidate_space_cache();
+    DevJaySiteTestWindow *site = [[[DevJaySiteTestWindow alloc]
+        initWithContentRect:NSMakeRect(100,100,100,100) styleMask:NSWindowStyleMaskTitled
+        backing:NSBackingStoreBuffered defer:NO] autorelease];
+    DevJaySiteTestWindow *viewer = [[[DevJaySiteTestWindow alloc]
+        initWithContentRect:NSMakeRect(0,0,460,330) styleMask:NSWindowStyleMaskTitled
+        backing:NSBackingStoreBuffered defer:NO] autorelease];
+    site.identifier=@"site-navigation-test";placementSiteNumber=(uint32_t)site.windowNumber;
+    placementMoveWorks=YES;
+    assert(!site.visible && devjay_prepare_viewer_on_site(viewer,site));
+    assert(devjay_viewer_placement_status(viewer,site)==1);
+    assert(!(viewer.collectionBehavior & NSWindowCollectionBehaviorMoveToActiveSpace));
+    assert(!site.visible && !viewer.visible && site->keyOrders==0);
+    placementSiteChanged=YES;
+    assert(devjay_viewer_placement_status(viewer,site)==-1);
+    placementSiteChanged=NO;placementMoved=NO;placementMoveWorks=NO;
+    assert(devjay_prepare_viewer_on_site(viewer,site));
+    assert(devjay_viewer_placement_status(viewer,site)==0);
+    NSApplication *originalHost=NSApp;
+    DevJayViewerNavigationHost *host=[[[DevJayViewerNavigationHost alloc] init] autorelease];
+    host.keyWindow=site;NSApp=(NSApplication *)host;
+    assert(devjay_viewer_placement_status(viewer,site)==-2);
+    NSApp=originalHost;
+    placementMoveWorks=YES;
+    assert(devjay_prepare_viewer_on_site(viewer,site));
+    assert(devjay_viewer_placement_status(viewer,site)==1);
+    Method activation=class_getInstanceMethod(NSApplication.class,@selector(activateIgnoringOtherApps:));
+    IMP oldActivation=method_setImplementation(activation,(IMP)recordActivation);
+    devjay_show_viewer_on_site(viewer);
+    assert(viewer->keyOrders==1 && viewer.level==NSNormalWindowLevel);
+    assert(!(viewer.collectionBehavior & NSWindowCollectionBehaviorMoveToActiveSpace));
+    assert(!site.visible && site->keyOrders==0);
+    method_setImplementation(activation,oldActivation);
+    placementSiteMissing=YES;
+    assert(!devjay_prepare_viewer_on_site(viewer,site));
+    copyWindowSpaces=oldWindowSpaces;copyDisplaySpaces=oldDisplaySpaces;
+    getCompatID=oldGet;setCompatID=oldSet;setWorkspace=oldMove;moveManaged=oldManaged;
+    dp_invalidate_space_cache();
+}
+
 static void test_strip_focus_isolation(void) {
     IMP panelBaseIMP = class_getMethodImplementation(NSPanel.class, @selector(canBecomeKeyWindow));
     IMP windowBaseIMP = class_getMethodImplementation(NSWindow.class, @selector(canBecomeKeyWindow));
@@ -634,6 +709,7 @@ int main(void) {
         test_message_dialog_card_anchor();
         test_confirmation_site_center();
         test_viewer_placement();
+        test_viewer_waits_for_site_desktop();
         test_on_top_applies_only_to_strip_and_sites();
         test_switch_placement();
         test_card_height_refit();

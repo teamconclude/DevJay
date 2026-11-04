@@ -3,6 +3,7 @@
 #import <WebKit/WebKit.h>
 #import <QuartzCore/QuartzCore.h>
 #import "focus_trace_darwin.h"
+#import "spaces_darwin.h"
 #include "layout_geometry.h"
 
 // Optional interactive permission panel, installed after app startup. Keeping
@@ -527,7 +528,7 @@ void devjay_show_settings(void *pointer, void *parentPointer) {
     [window setFrame:frame display:NO];
     devjay_show_popup(window, parent);
 }
-static void devjay_show_context_window(NSWindow *window, NSWindow *parent, double x, double y, double width, double height, BOOL viewer) {
+static void devjay_position_context_window(NSWindow *window, NSWindow *parent, double x, double y, double width, double height, BOOL viewer) {
     NSRect anchor = parent.frame;
     BOOL cardParent = [parent.identifier isEqual:@"strip"];
     BOOL controlAnchor = NO;
@@ -565,12 +566,20 @@ static void devjay_show_context_window(NSWindow *window, NSWindow *parent, doubl
         frame.origin = NSMakePoint(NSMidX(area)-frame.size.width/2,NSMidY(area)-frame.size.height/2);
     }
     [window setFrame:frame display:NO];
-    window.collectionBehavior = NSWindowCollectionBehaviorMoveToActiveSpace | NSWindowCollectionBehaviorFullScreenNone;
+}
+
+static void devjay_activate_context_window(NSWindow *window) {
     devjay_set_window_level(window, [NSUserDefaults.standardUserDefaults boolForKey:@"DevJay.View.OnTop"]);
     if (window.isMiniaturized) [window deminiaturize:nil];
     [window makeKeyAndOrderFront:nil];
     if (window.canBecomeMainWindow) [window makeMainWindow];
     [NSApp activateIgnoringOtherApps:YES];
+}
+
+static void devjay_show_context_window(NSWindow *window, NSWindow *parent, double x, double y, double width, double height, BOOL viewer) {
+    devjay_position_context_window(window,parent,x,y,width,height,viewer);
+    window.collectionBehavior = NSWindowCollectionBehaviorMoveToActiveSpace | NSWindowCollectionBehaviorFullScreenNone;
+    devjay_activate_context_window(window);
 }
 
 void devjay_show_context_dialog(void *pointer, void *parentPointer) {
@@ -590,6 +599,50 @@ void devjay_show_viewer(void *pointer, void *parentPointer, double x, double y, 
     devjay_enable_first_mouse(view);
     devjay_show_context_window(window,(NSWindow *)parentPointer,x,y,width,height,YES);
     if (view) [window makeFirstResponder:view];
+}
+
+static char viewerPlacementKey;
+
+// Place the viewer itself, rather than depending on a hidden Site window to
+// activate its desktop. Keep MoveToActiveSpace off during placement and show.
+int devjay_prepare_viewer_on_site(void *pointer, void *sitePointer) {
+    if (![NSThread isMainThread]) return 0;
+    NSWindow *window = (NSWindow *)pointer, *site = (NSWindow *)sitePointer;
+    if (!window || !site || ![site.identifier hasPrefix:@"site-"]) return 0;
+    NSString *space = dp_window_space(site);
+    if (!space.length) return 0;
+    window.identifier = @"git-viewer";
+    window.collectionBehavior = NSWindowCollectionBehaviorFullScreenNone;
+    if (window.miniaturized) { [window deminiaturize:nil]; [window orderOut:nil]; }
+    devjay_position_context_window(window,site,0,0,0,0,YES);
+    devjay_enable_first_mouse(devjay_webview(window.contentView));
+    NSDictionary *placement = @{@"space":space,
+        @"pid":@(NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier),
+        @"key":@(NSApp.keyWindow.windowNumber)};
+    objc_setAssociatedObject(window,&viewerPlacementKey,placement,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    return dp_move_to_space(window,space) ? 1 : 0;
+}
+
+// 1 = verified placement, 0 = settling, -1 = unavailable or Site moved,
+// -2 = user changed focus. A successful move return code is not verification.
+int devjay_viewer_placement_status(void *pointer, void *sitePointer) {
+    if (![NSThread isMainThread]) return -1;
+    NSWindow *window = (NSWindow *)pointer, *site = (NSWindow *)sitePointer;
+    NSDictionary *placement = objc_getAssociatedObject(window,&viewerPlacementKey);
+    NSString *space = placement[@"space"];
+    if (!space || ![dp_window_space(site) isEqual:space]) return -1;
+    if ([placement[@"pid"] intValue] != NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier ||
+        [placement[@"key"] integerValue] != NSApp.keyWindow.windowNumber) return -2;
+    return [dp_window_space(window) isEqual:space] ? 1 : 0;
+}
+
+void devjay_show_viewer_on_site(void *pointer) {
+    NSWindow *window = (NSWindow *)pointer;
+    window.collectionBehavior = NSWindowCollectionBehaviorFullScreenNone;
+    devjay_activate_context_window(window);
+    WKWebView *view = devjay_webview(window.contentView);
+    if (view) [window makeFirstResponder:view];
+    objc_setAssociatedObject(window,&viewerPlacementKey,nil,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
 
 // Present the native alert as a dismissible window without NSAlert's automatic

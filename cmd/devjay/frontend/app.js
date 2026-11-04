@@ -427,6 +427,11 @@ if (viewer) {
   siteWindows.onchange = () => emit('showSiteWindows', siteWindows.checked);
   siteWindowsLabel.append(siteWindows, document.createTextNode('Show Site windows'));
   section.append(siteWindowsLabel, el('p', 'help', 'Show the independent window on each Site’s desktop. Applies to all Profiles and is saved across restarts.'));
+  const viewerDesktopLabel = el('label', 'preference'), viewerDesktop = el('input');
+  viewerDesktop.type = 'checkbox'; viewerDesktop.dataset.pref = 'viewersOnSiteDesktop';
+  viewerDesktop.onchange = () => emit('viewersOnSiteDesktop', viewerDesktop.checked);
+  viewerDesktopLabel.append(viewerDesktop, document.createTextNode('Open branch and Review windows on the Site’s desktop'));
+  section.append(viewerDesktopLabel, el('p', 'help', 'Use the Site’s assigned desktop, including when its Site window is hidden. Applies to all Profiles and is saved across restarts.'));
   for (const [key, title] of [['allDesktops', 'Strip on all desktops'], ['onTop', 'Keep strip and Site windows on top']]) {
     const label = el('label', 'preference'); const box = el('input'); box.type = 'checkbox'; box.dataset.pref = key; box.onchange = () => emit(key, box.checked);
     label.append(box, document.createTextNode(title)); section.append(label);

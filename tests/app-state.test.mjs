@@ -129,6 +129,18 @@ test('Settings sidebar switches pages without rebuilding their controls',()=>{
  assert.equal(pages.filter(p=>!p.hidden)[0].id,'settings-page-profiles');
 });
 
+test('viewer desktop setting follows saved snapshots and sends explicit boolean choices',async()=>{
+ const view=app('?settings');view.snapshot(state([]));
+ const box=view.root.querySelectorAll('[data-pref]').find(n=>n.dataset.pref==='viewersOnSiteDesktop');
+ assert.equal(box.closest('.settings-page').id,'settings-page-windows');assert.ok(!box.checked);
+ for(const enabled of [true,false]){
+  box.checked=enabled;box.onchange();await Promise.resolve();
+  assert.deepEqual(view.calls.at(-1),['devjay:viewersOnSiteDesktop',enabled]);
+  view.snapshot({...state([]),preferences:{viewersOnSiteDesktop:enabled}});assert.equal(box.checked,enabled);
+ }
+ box.checked=true;view.snapshot({...state([]),preferences:{viewersOnSiteDesktop:false}});assert.equal(box.checked,false);
+});
+
 test('Site window visibility in Settings follows snapshots and sends explicit show/hide choices',async()=>{
  const view=app('?settings');
  const snapshot=visible=>view.snapshot({...state([]),preferences:{showSiteWindows:visible}});

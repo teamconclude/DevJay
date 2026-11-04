@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include "../cmd/devjay/focus_trace_darwin.m"
 #include "../cmd/devjay/windows_darwin.m"
+#include "../cmd/devjay/spaces_darwin.m"
 
 @interface AppTooltipTestView : WKWebView {
 @public
