@@ -516,19 +516,18 @@ void devjay_apply_top_preference(void) {
     devjay_all_windows_on_top([defaults objectForKey:@"DevJay.View.OnTop"] == nil || [defaults boolForKey:@"DevJay.View.OnTop"]);
 }
 
-void devjay_show_settings(void *pointer, void *parentPointer) {
-    NSWindow *window = (NSWindow *)pointer;
-    NSWindow *parent = (NSWindow *)parentPointer;
-    window.identifier = @"settings";
-    // Sidebar pages scroll inside a stable, user-resizable Settings window.
-    NSRect area = (parent.screen ?: NSScreen.mainScreen).visibleFrame;
-    NSRect frame = window.frame;
-    frame.size.width = MIN(frame.size.width, MAX(1, area.size.width - 16));
-    frame.size.height = MIN(frame.size.height, MAX(1, area.size.height - 16));
-    [window setFrame:frame display:NO];
-    devjay_show_popup(window, parent);
+static NSScreen *devjay_context_screen(NSWindow *parent, NSRect anchor) {
+    NSScreen *screen = parent.screen ?: NSScreen.mainScreen;
+    CGFloat overlap = 0;
+    for (NSScreen *candidate in NSScreen.screens) {
+        NSRect intersection = NSIntersectionRect(anchor, candidate.frame);
+        CGFloat area = intersection.size.width * intersection.size.height;
+        if (area > overlap) { overlap = area; screen = candidate; }
+    }
+    return screen;
 }
-static void devjay_position_context_window(NSWindow *window, NSWindow *parent, double x, double y, double width, double height, BOOL viewer) {
+
+static void devjay_position_context_window(NSWindow *window, NSWindow *parent, double x, double y, double width, double height, BOOL viewer, NSScreen *targetScreen) {
     NSRect anchor = parent.frame;
     BOOL cardParent = [parent.identifier isEqual:@"strip"];
     BOOL controlAnchor = NO;
@@ -542,22 +541,21 @@ static void devjay_position_context_window(NSWindow *window, NSWindow *parent, d
             controlAnchor = !viewer && [parent.identifier isEqual:@"git-viewer"];
         }
     }
-    NSScreen *screen = parent.screen ?: NSScreen.mainScreen;
-    CGFloat overlap = 0;
-    for (NSScreen *candidate in NSScreen.screens) {
-        NSRect intersection = NSIntersectionRect(anchor, candidate.frame);
-        CGFloat area = intersection.size.width * intersection.size.height;
-        if (area > overlap) { overlap = area; screen = candidate; }
-    }
+    NSScreen *screen = devjay_context_screen(parent,anchor);
+    // A different Space on the same monitor uses the normal source/card
+    // coordinates. Across monitors, center on the destination's usable area.
+    BOOL centerOnScreen = targetScreen && (!parent ||
+        ![screen.deviceDescription[@"NSScreenNumber"] isEqual:targetScreen.deviceDescription[@"NSScreenNumber"]]);
+    if (centerOnScreen) screen = targetScreen;
     NSRect area = screen.visibleFrame, frame = window.frame;
-    if (cardParent) {
+    if (cardParent && !centerOnScreen) {
         DPRect placed = dp_card_popup((DPRect){frame.origin.x,frame.origin.y,frame.size.width,frame.size.height},
                                      (DPRect){anchor.origin.x,anchor.origin.y,anchor.size.width,anchor.size.height},
                                      (DPRect){area.origin.x,area.origin.y,area.size.width,area.size.height});
         frame = NSMakeRect(placed.x,placed.y,placed.width,placed.height);
-    } else if (parent) {
-        NSRect owner = parent.frame;
-        DPRect control = controlAnchor ? (DPRect){anchor.origin.x,anchor.origin.y,anchor.size.width,anchor.size.height} : (DPRect){0};
+    } else if (parent || centerOnScreen) {
+        NSRect owner = centerOnScreen ? area : parent.frame;
+        DPRect control = controlAnchor && !centerOnScreen ? (DPRect){anchor.origin.x,anchor.origin.y,anchor.size.width,anchor.size.height} : (DPRect){0};
         DPRect placed = dp_parent_popup((DPRect){frame.origin.x,frame.origin.y,frame.size.width,frame.size.height},
                                        (DPRect){owner.origin.x,owner.origin.y,owner.size.width,owner.size.height},
                                        control,(DPRect){area.origin.x,area.origin.y,area.size.width,area.size.height});
@@ -577,9 +575,19 @@ static void devjay_activate_context_window(NSWindow *window) {
 }
 
 static void devjay_show_context_window(NSWindow *window, NSWindow *parent, double x, double y, double width, double height, BOOL viewer) {
-    devjay_position_context_window(window,parent,x,y,width,height,viewer);
+    devjay_position_context_window(window,parent,x,y,width,height,viewer,nil);
     window.collectionBehavior = NSWindowCollectionBehaviorMoveToActiveSpace | NSWindowCollectionBehaviorFullScreenNone;
     devjay_activate_context_window(window);
+}
+
+void devjay_show_settings(void *pointer, void *parentPointer) {
+    NSWindow *window = (NSWindow *)pointer;
+    NSWindow *parent = (NSWindow *)parentPointer;
+    window.identifier = @"settings";
+    devjay_trace_focus(@"explicit-popup-request", window);
+    // Use the strip's popup placement: above it with a gap, falling below
+    // only when needed to fit on screen. Keep the user's window size.
+    devjay_show_context_window(window,parent,0,0,0,0,YES);
 }
 
 void devjay_show_context_dialog(void *pointer, void *parentPointer) {
@@ -605,7 +613,7 @@ static char viewerPlacementKey;
 
 // Place the viewer itself, rather than depending on a hidden Site window to
 // activate its desktop. Keep MoveToActiveSpace off during placement and show.
-int devjay_prepare_viewer_on_site(void *pointer, void *sitePointer) {
+int devjay_prepare_viewer_on_site(void *pointer, void *sitePointer, void *parentPointer, double x, double y, double width, double height) {
     if (![NSThread isMainThread]) return 0;
     NSWindow *window = (NSWindow *)pointer, *site = (NSWindow *)sitePointer;
     if (!window || !site || ![site.identifier hasPrefix:@"site-"]) return 0;
@@ -614,7 +622,7 @@ int devjay_prepare_viewer_on_site(void *pointer, void *sitePointer) {
     window.identifier = @"git-viewer";
     window.collectionBehavior = NSWindowCollectionBehaviorFullScreenNone;
     if (window.miniaturized) { [window deminiaturize:nil]; [window orderOut:nil]; }
-    devjay_position_context_window(window,site,0,0,0,0,YES);
+    devjay_position_context_window(window,(NSWindow *)parentPointer,x,y,width,height,YES,devjay_context_screen(site,site.frame));
     devjay_enable_first_mouse(devjay_webview(window.contentView));
     NSDictionary *placement = @{@"space":space,
         @"pid":@(NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier),

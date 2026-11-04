@@ -88,7 +88,7 @@ static int placementMove(int conn, uint32_t *window, int count, int value) {
     return 0; // A successful return is insufficient without verified membership.
 }
 static void test_viewer_waits_for_site_desktop(void) {
-    assert(!devjay_prepare_viewer_on_site(NULL,NULL));
+    assert(!devjay_prepare_viewer_on_site(NULL,NULL,NULL,0,0,0,0));
     if (!dp_spaces_available()) return;
     __typeof__(copyWindowSpaces) oldWindowSpaces = copyWindowSpaces;
     __typeof__(copyDisplaySpaces) oldDisplaySpaces = copyDisplaySpaces;
@@ -105,16 +105,25 @@ static void test_viewer_waits_for_site_desktop(void) {
     DevJaySiteTestWindow *viewer = [[[DevJaySiteTestWindow alloc]
         initWithContentRect:NSMakeRect(0,0,460,330) styleMask:NSWindowStyleMaskTitled
         backing:NSBackingStoreBuffered defer:NO] autorelease];
+    NSRect area = NSScreen.mainScreen.visibleFrame;
+    NSWindow *strip = [[[NSWindow alloc] initWithContentRect:NSMakeRect(area.origin.x+30,area.origin.y+10,900,174)
+        styleMask:NSWindowStyleMaskBorderless backing:NSBackingStoreBuffered defer:NO] autorelease];
+    strip.identifier=@"strip";
+    strip.contentView=[[[WKWebView alloc] initWithFrame:NSMakeRect(0,0,900,174)] autorelease];
+    [site setFrameOrigin:NSMakePoint(area.origin.x+8,area.origin.y+8)];
+    devjay_position_context_window(viewer,strip,400,10,200,140,YES,nil);
+    NSRect sourceFrame=viewer.frame;
     site.identifier=@"site-navigation-test";placementSiteNumber=(uint32_t)site.windowNumber;
     placementMoveWorks=YES;
-    assert(!site.visible && devjay_prepare_viewer_on_site(viewer,site));
+    assert(!site.visible && devjay_prepare_viewer_on_site(viewer,site,strip,400,10,200,140));
+    assert(NSEqualRects(viewer.frame,sourceFrame)); // Hidden Site at the edge must not move the card anchor.
     assert(devjay_viewer_placement_status(viewer,site)==1);
     assert(!(viewer.collectionBehavior & NSWindowCollectionBehaviorMoveToActiveSpace));
     assert(!site.visible && !viewer.visible && site->keyOrders==0);
     placementSiteChanged=YES;
     assert(devjay_viewer_placement_status(viewer,site)==-1);
     placementSiteChanged=NO;placementMoved=NO;placementMoveWorks=NO;
-    assert(devjay_prepare_viewer_on_site(viewer,site));
+    assert(devjay_prepare_viewer_on_site(viewer,site,strip,400,10,200,140));
     assert(devjay_viewer_placement_status(viewer,site)==0);
     NSApplication *originalHost=NSApp;
     DevJayViewerNavigationHost *host=[[[DevJayViewerNavigationHost alloc] init] autorelease];
@@ -122,7 +131,7 @@ static void test_viewer_waits_for_site_desktop(void) {
     assert(devjay_viewer_placement_status(viewer,site)==-2);
     NSApp=originalHost;
     placementMoveWorks=YES;
-    assert(devjay_prepare_viewer_on_site(viewer,site));
+    assert(devjay_prepare_viewer_on_site(viewer,site,strip,400,10,200,140));
     assert(devjay_viewer_placement_status(viewer,site)==1);
     Method activation=class_getInstanceMethod(NSApplication.class,@selector(activateIgnoringOtherApps:));
     IMP oldActivation=method_setImplementation(activation,(IMP)recordActivation);
@@ -132,7 +141,7 @@ static void test_viewer_waits_for_site_desktop(void) {
     assert(!site.visible && site->keyOrders==0);
     method_setImplementation(activation,oldActivation);
     placementSiteMissing=YES;
-    assert(!devjay_prepare_viewer_on_site(viewer,site));
+    assert(!devjay_prepare_viewer_on_site(viewer,site,strip,400,10,200,140));
     copyWindowSpaces=oldWindowSpaces;copyDisplaySpaces=oldDisplaySpaces;
     getCompatID=oldGet;setCompatID=oldSet;setWorkspace=oldMove;moveManaged=oldManaged;
     dp_invalidate_space_cache();
@@ -315,6 +324,36 @@ static void test_viewer_placement(void) {
     method_setImplementation(activation,original);
     // Keep this artificial visible obstacle out of later harness checks.
     other->visibleForPlacement = NO;
+}
+
+static void test_settings_above_strip(void) {
+    NSRect area=NSScreen.mainScreen.visibleFrame;
+    if (area.size.width < 900 || area.size.height < 700) return;
+    NSWindow *strip=[[[NSWindow alloc] initWithContentRect:NSMakeRect(NSMidX(area)-450,NSMinY(area)+8,900,174)
+        styleMask:NSWindowStyleMaskBorderless backing:NSBackingStoreBuffered defer:NO] autorelease];
+    strip.identifier=@"strip";
+    DevJaySiteTestWindow *settings=[[[DevJaySiteTestWindow alloc] initWithContentRect:NSMakeRect(0,0,760,440)
+        styleMask:NSWindowStyleMaskTitled backing:NSBackingStoreBuffered defer:NO] autorelease];
+    NSSize originalSize=settings.frame.size;
+    Method activation=class_getInstanceMethod(NSApplication.class,@selector(activateIgnoringOtherApps:));
+    IMP original=method_setImplementation(activation,(IMP)recordActivation);
+    devjay_show_settings(settings,strip);
+    assert(fabs(NSMinY(settings.frame)-NSMaxY(strip.frame)-10)<1);
+    assert(fabs(NSMidX(settings.frame)-NSMidX(strip.frame))<1);
+    assert(NSEqualSizes(settings.frame.size,originalSize));
+    assert(NSContainsRect(area,settings.frame));
+    assert(settings.level==NSNormalWindowLevel && settings->keyOrders==1);
+    // Reopening follows a moved strip while respecting the display edges.
+    [strip setFrameOrigin:NSMakePoint(NSMaxX(area)-450,NSMinY(area)+8)];
+    devjay_show_settings(settings,strip);
+    assert(fabs(NSMinY(settings.frame)-NSMaxY(strip.frame)-10)<1);
+    assert(fabs(NSMaxX(settings.frame)-NSMaxX(area)+8)<1);
+    // A strip at the top leaves Settings reachable below it.
+    [strip setFrameOrigin:NSMakePoint(NSMidX(area)-450,NSMaxY(area)-182)];
+    devjay_show_settings(settings,strip);
+    assert(fabs(NSMaxY(settings.frame)-NSMinY(strip.frame)+10)<1);
+    assert(NSContainsRect(area,settings.frame));
+    method_setImplementation(activation,original);
 }
 
 static void test_on_top_applies_only_to_strip_and_sites(void) {
@@ -574,14 +613,57 @@ static void test_profile_layout_isolation(void) {
 @interface RecoveryTestScreen : NSScreen {
 @public
     NSRect rectangle, usable;
+    CGDirectDisplayID displayID;
 }
 @end
 @implementation RecoveryTestScreen
 - (NSRect)frame { return rectangle; }
 - (NSRect)visibleFrame { return usable; }
-- (NSDictionary *)deviceDescription { return @{@"NSScreenNumber":@(CGMainDisplayID())}; }
+- (NSDictionary *)deviceDescription { return @{@"NSScreenNumber":@(displayID ?: CGMainDisplayID())}; }
 @end
 static NSArray *recoveryTestScreens;
+
+static void test_viewer_destination_monitor(void) {
+    NSScreen *source=NSScreen.mainScreen;
+    NSRect area=source.visibleFrame;
+    NSWindow *strip=[[[NSWindow alloc] initWithContentRect:NSMakeRect(area.origin.x+30,area.origin.y+10,900,174)
+        styleMask:NSWindowStyleMaskBorderless backing:NSBackingStoreBuffered defer:NO] autorelease];
+    strip.identifier=@"strip";
+    strip.contentView=[[[WKWebView alloc] initWithFrame:NSMakeRect(0,0,900,174)] autorelease];
+    DevJayPlacementTestWindow *viewer=[[[DevJayPlacementTestWindow alloc] initWithContentRect:NSMakeRect(0,0,460,330)
+        styleMask:NSWindowStyleMaskBorderless backing:NSBackingStoreBuffered defer:NO] autorelease];
+    viewer->syntheticScreens=YES;
+    // Reusing a viewer from different cards retains precisely the ordinary
+    // placement, even when its Site belongs to a different virtual desktop.
+    for (NSNumber *x in @[@0,@400,@700]) {
+        devjay_position_context_window(viewer,strip,x.doubleValue,10,200,140,YES,nil);
+        NSRect expected=viewer.frame;
+        [viewer setFrameOrigin:NSMakePoint(-4000,-2000)];
+        devjay_position_context_window(viewer,strip,x.doubleValue,10,200,140,YES,source);
+        assert(NSEqualRects(viewer.frame,expected));
+    }
+    // Also preserve normal placement for File-menu opens without card bounds.
+    devjay_position_context_window(viewer,strip,0,0,0,0,YES,nil);
+    NSRect expected=viewer.frame;
+    devjay_position_context_window(viewer,strip,0,0,0,0,YES,source);
+    assert(NSEqualRects(viewer.frame,expected));
+
+    RecoveryTestScreen *target=[[[RecoveryTestScreen alloc] init] autorelease];
+    target->displayID=[source.deviceDescription[@"NSScreenNumber"] unsignedIntValue]+1;
+    target->rectangle=NSMakeRect(-1600,-500,1200,900);
+    target->usable=NSMakeRect(-1540,-500,1140,870); // Left Dock and menu bar.
+    devjay_position_context_window(viewer,strip,400,10,200,140,YES,target);
+    assert(NSEqualRects(viewer.frame,NSMakeRect(-1200,-230,460,330)));
+    // A missing source still centers on the Site's monitor.
+    devjay_position_context_window(viewer,nil,0,0,0,0,YES,target);
+    assert(NSEqualRects(viewer.frame,NSMakeRect(-1200,-230,460,330)));
+    // Large viewers shrink to fit the destination instead of the source.
+    target->rectangle=NSMakeRect(3000,100,400,300);
+    target->usable=NSMakeRect(3000,150,400,220);
+    [viewer setFrame:NSMakeRect(0,0,1100,740) display:NO];
+    devjay_position_context_window(viewer,strip,400,10,200,140,YES,target);
+    assert(NSEqualRects(viewer.frame,NSMakeRect(3008,158,384,204)));
+}
 
 static void test_disconnected_window_recovery(void) {
     RecoveryTestScreen *left = [[[RecoveryTestScreen alloc] init] autorelease];
@@ -710,6 +792,8 @@ int main(void) {
         test_confirmation_site_center();
         test_viewer_placement();
         test_viewer_waits_for_site_desktop();
+        test_viewer_destination_monitor();
+        test_settings_above_strip();
         test_on_top_applies_only_to_strip_and_sites();
         test_switch_placement();
         test_card_height_refit();

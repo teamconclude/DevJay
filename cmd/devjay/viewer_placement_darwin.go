@@ -1,7 +1,7 @@
 package main
 
 /*
-int devjay_prepare_viewer_on_site(void *window, void *site);
+int devjay_prepare_viewer_on_site(void *window, void *site, void *parent, double x, double y, double width, double height);
 int devjay_viewer_placement_status(void *window, void *site);
 void devjay_show_viewer_on_site(void *window);
 */
@@ -9,6 +9,7 @@ import "C"
 
 import (
 	"time"
+	"unsafe"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
@@ -43,9 +44,19 @@ func (m *siteManager) viewerDesktopSite(r *gitViewerWindow) *siteRuntime {
 	return site
 }
 
-func prepareViewerOnSite(window, site *application.WebviewWindow) bool {
+func prepareViewerOnSite(window, site, parent *application.WebviewWindow, anchor *cardAnchor) bool {
 	var prepared C.int
-	application.InvokeSync(func() { prepared = C.devjay_prepare_viewer_on_site(window.NativeWindow(), site.NativeWindow()) })
+	if anchor == nil || !anchor.valid() {
+		anchor = &cardAnchor{}
+	}
+	application.InvokeSync(func() {
+		var nativeParent unsafe.Pointer
+		if parent != nil {
+			nativeParent = parent.NativeWindow()
+		}
+		prepared = C.devjay_prepare_viewer_on_site(window.NativeWindow(), site.NativeWindow(), nativeParent,
+			C.double(anchor.X), C.double(anchor.Y), C.double(anchor.Width), C.double(anchor.Height))
+	})
 	return prepared != 0
 }
 
@@ -86,7 +97,7 @@ func (m *siteManager) showViewer(id string) {
 		r.state = &fresh
 		m.emitViewer(id)
 	}
-	if !prepareViewerOnSite(r.window, site.Window) {
+	if !prepareViewerOnSite(r.window, site.Window, r.parent, r.anchor) {
 		fallback()
 		return
 	}
