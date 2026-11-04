@@ -146,6 +146,22 @@ For small corrections, choose **Edit**, modify the current text, and click **Sav
 
 Text previews are limited to 256 KiB per version and the file list to 2,000 entries. Files with more than 5,000 displayed rows have line-page controls. The viewer labels these limits; the commit panel's supporting file history shows up to 50 commits.
 
+## Leave PR review comments
+
+When the branch has an open PR, click a line number in the existing Review diff. A blue **+** appears in the gutter on hover. The comment editor opens directly below the line, in the current split or unified layout. Shift-click another line number on the same side for a range. The file list, ignored-file filters, full-file/continuous presentation, syntax highlighting and navigation continue to work as before.
+
+**Add review comment** saves an inline comment to your private pending review on GitHub and displays it below the line. DevJay continues your existing pending review, including comments entered on GitHub; if you have none, your first comment starts one. Opening Review alone creates nothing. **Edit** and **Delete** update comments in that pending review.
+
+Choose **Review comments** at the bottom-right to open the comments panel on the right. Each comment has a rounded card with a contrasting background, a file-and-line header, and actions at the bottom. The panel also lets you continue unfinished text and add an optional summary. **Submit review** publishes the pending review as **Comment**, **Approve**, or **Request changes**, using the account shown in the panel. Approve and Request changes are unavailable on your own PR. A request for changes needs a summary; Comment needs either inline comments or a summary. If the branch has multiple PRs, select one beside Review comments.
+
+PR details load in the background without adding files to the Review list. Clicking a line maps the displayed text to the pushed PR using local Git objects. Unchanged lines can be mapped past local insertions or deletions; unpublished lines and ranges crossing local edits cannot receive PR comments. Lines outside GitHub’s commentable diff are also unavailable. If the PR revision is missing locally, fetch the branch first. **Refresh PR details** in the review summary rereads PR metadata; it does not replace the working-tree comparison.
+
+Pending comments are reloaded from GitHub when you reopen Review. Unfinished comment text and summaries are saved on this Mac, scoped to the repository, PR, head and base commits. Earlier-revision text remains copyable in the panel; select a fresh location before reusing it. If a pending GitHub review belongs to an earlier PR revision, continue it on GitHub. Another window cannot silently overwrite newer local text. If local storage fails, the window and app stay open until you save or copy the text and reload the saved draft to discard the unsaved version.
+
+Comment changes and submission recheck the PR revisions and signed-in account. Submission also checks that the pending comments have not changed elsewhere. Errors retain your unfinished text. If confirmation is lost, **Check comment status** or **Check submission** reads GitHub without posting again. If it remains unconfirmed, check GitHub; the corresponding confirmation checkbox enables an explicit retry, which checks again before writing.
+
+GitHub.com PRs already identified for the Site are supported. PR metadata covers up to 2,000 files and 16 MiB of patch text, with a 256 KiB per-file limit. Omitted or incomplete patches cannot receive inline comments. Each new comment or summary can contain up to 60,000 UTF-8 bytes. DevJay loads up to 1,000 comments in your pending review. Submitted discussions and other reviewers’ comments remain on GitHub.
+
 ## Open pull requests
 
 Click a card’s PR tag (or its review status) to reuse an existing tab showing that PR. DevJay checks running **Safari, Google Chrome, Microsoft Edge, and Brave** windows only when you request a PR action. A tab showing the PR’s Files, Commits, or discussion page counts as the same PR. It selects that tab and activates its browser window; switching macOS desktops depends on the browser and Mission Control settings.

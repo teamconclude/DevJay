@@ -89,6 +89,16 @@ func (m *siteManager) requestCloseViewer(id string) {
 	if r == nil {
 		return
 	}
+	if r.prReview != nil && r.prReview.draftGuard {
+		m.reviewCloseError(id, "Save or copy your unsaved PR review draft before closing this window.")
+		return
+	}
+	if r.prReview != nil && r.prReview.state.Submitting {
+		r.prReview.state.Error = "Wait for the PR review submission to finish before closing this window."
+		m.emitPRReview(id)
+		m.reviewCloseError(id, "Wait for the PR review submission to finish before closing this window.")
+		return
+	}
 	if r.reviewEditing || r.reviewSaving {
 		m.reviewCloseError(id, "Save or cancel your edits before closing this window.")
 		return

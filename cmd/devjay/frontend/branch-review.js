@@ -122,7 +122,7 @@ export function reviewFileIgnored(file, matchers) {
   return matchers.some(pattern => pattern.test(file.path));
 }
 
-export function createBranchReview(root, request) {
+export function createBranchReview(root, request, options = {}) {
   const setText = (node, value) => { if (node.textContent !== value) node.textContent = value; };
   const setDisabled = (node, value) => { if (node.disabled !== !!value) node.disabled = !!value; };
   const el = (tag, cls = '', text) => { const node = document.createElement(tag); node.className = cls; if (text !== undefined) node.textContent = text; return node; };
@@ -560,6 +560,7 @@ export function createBranchReview(root, request) {
   }
   function renderContent() {
     if (editing) return false;
+    options.beforeRender?.(content);
     const files = presentation === 'continuous' ? matchingFiles() : (selectedFile() ? [selectedFile()] : []);
     // Keep the actual displayed file/header, DOM and scroll position until the
     // requested file is ready. A quick read never flashes a placeholder.
@@ -585,6 +586,7 @@ export function createBranchReview(root, request) {
   }
   function renderCard(path) {
     const card = cards.get(path); if (!card) return;
+    options.beforeRender?.(card);
     const data = cache.get(path), file = view?.files?.find(file => file.path === path);
     updateFindStatus();
     const horizontal = [...card.querySelectorAll('.br-horizontal-scroll')].map(node => node.scrollLeft);
@@ -645,12 +647,12 @@ export function createBranchReview(root, request) {
       if (row.kind === 'gap') { fragment.append(gapNode(path, row)); continue; }
       if (layout === 'split') {
         const node = el('div', `br-row ${row.kind === 'change' ? 'br-change' : ''}`);
-        node.append(cellNode(row.before, row.kind === 'change' ? 'delete' : 'context', syntax?.before, highlightBudget), cellNode(row.after, row.kind === 'change' ? 'add' : 'context', syntax?.after, highlightBudget));
+        node.append(cellNode(row.before, row.kind === 'change' ? 'delete' : 'context', syntax?.before, highlightBudget, path, 'LEFT', data.oldText), cellNode(row.after, row.kind === 'change' ? 'add' : 'context', syntax?.after, highlightBudget, path, 'RIGHT', data.newText));
         registerChange(node, row, path, model); fragment.append(node);
       } else if (row.kind === 'change') {
         for (const [side, kind] of [[row.before, 'delete'], [row.after, 'add']]) if (side) {
           const node = el('div', `br-row br-change br-${kind}`);
-          node.append(el('span', 'br-line-number', kind === 'delete' ? side.number : ''), el('span', 'br-line-number', kind === 'add' ? side.number : ''), el('span', 'br-sign', kind === 'delete' ? '−' : '+'), sourceNode(side, kind === 'delete' ? syntax?.before : syntax?.after, 'br-line-text', highlightBudget));
+          node.append(lineNumber(kind === 'delete' ? side : null, path, 'LEFT', data.oldText), lineNumber(kind === 'add' ? side : null, path, 'RIGHT', data.newText), el('span', 'br-sign', kind === 'delete' ? '−' : '+'), sourceNode(side, kind === 'delete' ? syntax?.before : syntax?.after, 'br-line-text', highlightBudget));
           registerChange(node, row, path, model); fragment.append(node);
         }
       } else {
@@ -658,7 +660,7 @@ export function createBranchReview(root, request) {
         // Show the original when it is the only side matching the search.
         const originalMatch = findInput.value && row.before && !findTextMatches(row.after?.text || '', findInput.value).length && findTextMatches(row.before.text, findInput.value).length;
         const source = originalMatch ? row.before : row.after || row.before;
-        const node = el('div', 'br-row'); node.append(el('span', 'br-line-number', row.before?.number || ''), el('span', 'br-line-number', row.after?.number || ''), el('span', 'br-sign', ''), sourceNode(source, originalMatch || !row.after ? syntax?.before : syntax?.after, 'br-line-text', highlightBudget)); fragment.append(node);
+        const node = el('div', 'br-row'); node.append(lineNumber(row.before, path, 'LEFT', data.oldText), lineNumber(row.after, path, 'RIGHT', data.newText), el('span', 'br-sign', ''), sourceNode(source, originalMatch || !row.after ? syntax?.before : syntax?.after, 'br-line-text', highlightBudget)); fragment.append(node);
       }
     }
     code.append(fragment); nodes.push(code);
@@ -667,6 +669,7 @@ export function createBranchReview(root, request) {
     else if (!model.hunks.length) nodes.push(el('p', 'br-file-note', view.review.ignoreWhitespace ? 'No text differences with whitespace ignored.' : 'Only file metadata changed.'));
     if ((data.oldText && !data.oldText.endsWith('\n')) || (data.newText && !data.newText.endsWith('\n'))) nodes.push(el('p', 'br-file-note', `No newline at end of ${data.oldText && !data.oldText.endsWith('\n') ? 'original' : ''}${data.oldText && !data.oldText.endsWith('\n') && data.newText && !data.newText.endsWith('\n') ? ' and ' : ''}${data.newText && !data.newText.endsWith('\n') ? 'current' : ''} file.`));
     card.replaceChildren(...nodes);
+    options.afterRender?.(card);
     [...card.querySelectorAll('.br-horizontal-scroll')].forEach((node, index) => { node.scrollLeft = horizontal[index] || 0; node.onscroll(); });
   }
   function sourceNode(line, syntax, cls = 'br-line-text', highlightBudget = null) {
@@ -675,10 +678,15 @@ export function createBranchReview(root, request) {
     appendSearchSyntax(node, text, syntax?.[(line?.number || 0) - 1], findInput.value, 0, text.length, highlightBudget);
     return node;
   }
-  function cellNode(line, kind, syntax, highlightBudget) {
+  function lineNumber(line, path, side, text) {
+    const node = el('span', 'br-line-number', line?.number || '');
+    if (line && view?.reviewPRs?.length) options.commentLine?.(node, {path, side, line:line.number, text});
+    return node;
+  }
+  function cellNode(line, kind, syntax, highlightBudget, path, side, source) {
     const node = el('div', `br-cell${line ? ' br-' + kind : ' br-blank'}`);
     const text = el('span', 'br-line-text'); text.append(sourceNode(line, syntax, 'br-source', highlightBudget));
-    node.append(el('span', 'br-line-number', line?.number || ''), el('span', 'br-sign', line ? kind === 'add' ? '+' : kind === 'delete' ? '−' : '' : ''), text);
+    node.append(lineNumber(line, path, side, source), el('span', 'br-sign', line ? kind === 'add' ? '+' : kind === 'delete' ? '−' : '' : ''), text);
     return node;
   }
   function registerChange(node, row, path, model) {
@@ -794,7 +802,7 @@ export function createBranchReview(root, request) {
     [...filesList.querySelectorAll('.br-file')].find(node => node.dataset.path === selectedPath)?.scrollIntoView({block:'nearest'});
   };
   const handleKeydown = event => {
-    if (destroyed || event.defaultPrevented || event.isComposing) return;
+    if (destroyed || !visible || event.defaultPrevented || event.isComposing) return;
     if (event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey && event.key.toLowerCase() === 'f') {
       event.preventDefault();
       if (!editing && !beginningEdit) { findBar.hidden = false; updateFindStatus(); findInput.focus(); findInput.select(); }

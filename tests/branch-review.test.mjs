@@ -84,6 +84,13 @@ const payload=(path='one.go',overrides={})=>({path,oldText:'prefix\nold\nsuffix\
 const state=(overrides={})=>({kind:'review',version:1,siteID:'site',path:'/repo',branch:'feature',head:'head',captured:'snapshot1',file:0,files:[{path:'one.go',status:'M',added:1,removed:1,statsKnown:true}],review:{baseRef:'main',base:'base',refs:['main','develop'],ignoreWhitespace:false,selected:payload()},...overrides});
 const control=(view,label)=>view.root.querySelectorAll('button').find(node=>node.attrs['aria-label']===label);
 
+test('hidden working-tree review does not handle keys intended for PR review',()=>{
+  const v=viewer();v.render(state());v.setVisible(false);
+  const event={type:'keydown',key:'f',metaKey:true,target:v.document.body,defaultPrevented:false,preventDefault(){this.defaultPrevented=true;}};
+  v.document.dispatchEvent(event);
+  assert.equal(event.defaultPrevented,false);assert.equal(v.root.querySelector('.diff-find').hidden,true);
+});
+
 test('dedicated view defaults to whole-file side by side and renders source as literal text',()=>{
   const view=viewer();view.render(state());
   assert.equal(view.root.querySelector('.br-code').classList.contains('br-split'),true);

@@ -85,6 +85,10 @@ check:
 	trap 'rm -f "$$branch_review_bin"' EXIT; \
 	clang -Wall -Wextra -Werror -fblocks -framework AppKit -framework WebKit tests/branch_review_layout_test.m -o "$$branch_review_bin"; \
 	"$$branch_review_bin"
+	@set -e; pr_review_bin=$$(mktemp "$${TMPDIR:-/tmp}/devjay-pr-review.XXXXXX"); \
+	trap 'rm -f "$$pr_review_bin"' EXIT; \
+	clang -Wall -Wextra -Werror -fblocks -framework AppKit -framework WebKit tests/pr_review_layout_test.m -o "$$pr_review_bin"; \
+	"$$pr_review_bin"
 	go test -ldflags="$(GO_LINK_FLAGS)" ./...
 	go vet ./...
 	node --input-type=module --check < cmd/devjay/frontend/app.js

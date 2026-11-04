@@ -145,6 +145,10 @@ func runCommandWithEnv(ctx context.Context, slots chan struct{}, timeout time.Du
 }
 
 func runCommandOutput(ctx context.Context, slots chan struct{}, timeout time.Duration, extraEnv []string, output io.Writer, name string, args ...string) ([]byte, error) {
+	return runCommandInputOutput(ctx, slots, timeout, extraEnv, nil, output, name, args...)
+}
+
+func runCommandInputOutput(ctx context.Context, slots chan struct{}, timeout time.Duration, extraEnv []string, input io.Reader, output io.Writer, name string, args ...string) ([]byte, error) {
 	select {
 	case slots <- struct{}{}:
 		defer func() { <-slots }()
@@ -158,6 +162,7 @@ func runCommandOutput(ctx context.Context, slots chan struct{}, timeout time.Dur
 		defer cancel()
 	}
 	cmd := exec.CommandContext(ctx, toolPath(name), args...)
+	cmd.Stdin = input
 	cmd.WaitDelay = time.Second
 	overridden := map[string]bool{}
 	for _, v := range extraEnv {

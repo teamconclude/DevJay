@@ -97,6 +97,7 @@ type siteManager struct {
 	viewers                                                        map[string]*gitViewerWindow
 	viewerSequence                                                 uint64
 	lastWindowSiteID                                               string
+	prReviewPublishing                                             map[string]bool
 	prOpening                                                      bool
 	actionDialogs                                                  map[string]*actionDialog
 	actionDialogSequence                                           uint64

@@ -13,6 +13,7 @@ import { mountClaudePermissionSettings } from './claude-permission-settings.js';
 import { mountEditorSettings } from './editor-settings.js';
 import { mountGitViewer } from './git-viewer.js';
 import { createBranchReview } from './branch-review.js';
+import { createPRReview } from './pr-review.js';
 import { cardStatus } from './card-status.js';
 import { mountSuggestedActions, mountViewerSuggestions, rebasedPublishWarning } from './suggested-actions.js';
 import { installStripDrag } from './strip-drag.js';
@@ -359,14 +360,19 @@ if (viewer) {
   const updateSuggestions = mountViewerSuggestions(suggestions, request => emit('action-prepare', request));
   const updateOverview = () => { if (!review) updateSuggestions(currentSnapshot.sites.find(site => site.id === currentView?.siteID), currentSnapshot.action); };
   renderViewerSnapshot = state => { currentSnapshot = state; updateOverview(); };
-  const branchReview = review ? createBranchReview(root, data => emit('viewer-request', data)) : null;
-  if (branchReview) { setViewerVisible = branchReview.setVisible; setViewerVisible(nativeVisible && !document.hidden); }
-  const renderViewer = branchReview ? view => branchReview.render(view) : mountGitViewer(root, data => emit('viewer-request', data), suggestions, (siteID, anchor) => emit('branches-open', {siteID, anchor}));
+  let prReview = null;
+  const branchReview = review ? createBranchReview(root, data => emit('viewer-request', data), {commentLine:(node, info) => prReview?.decorateGutter(node, info), beforeRender:card => prReview?.beforeRender(card), afterRender:() => prReview?.afterRender()}) : null;
+  if (branchReview) {
+    prReview = createPRReview(root, data => emit('viewer-request', data));
+    setViewerVisible = branchReview.setVisible; setViewerVisible(nativeVisible && !document.hidden);
+    Events.On(`devjay:pr-review:${params.get('viewer')}`, event => prReview.receive(event.data));
+  }
+  const renderViewer = branchReview ? view => { prReview.sync(view); branchReview.render(view); } : mountGitViewer(root, data => emit('viewer-request', data), suggestions, (siteID, anchor) => emit('branches-open', {siteID, anchor}));
   Events.On(`devjay:viewer-state:${params.get('viewer')}`, event => {
     currentView = event.data; renderViewer(currentView); updateOverview(); reportUIReady();
   });
   if (branchReview) Events.On(`devjay:review-prefetch:${params.get('viewer')}`, event => branchReview.prefetch(event.data));
-  if (branchReview) window.addEventListener('pagehide', () => branchReview.destroy());
+  if (branchReview) window.addEventListener('pagehide', () => { branchReview.destroy(); prReview.destroy(); });
   else {
     window.addEventListener('pagehide', () => renderViewer.destroy());
     document.addEventListener('keydown', e => { if (e.key === 'Escape' && !e.defaultPrevented) emit('viewer-close'); });

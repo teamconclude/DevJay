@@ -47,13 +47,14 @@ type ViewCounts struct {
 	Branch *int `json:"branch"`
 }
 type GitView struct {
-	ReviewEditing  bool            `json:"reviewEditing,omitempty"`
-	Review         *BranchReview   `json:"review,omitempty"`
-	ComparisonOnly bool            `json:"comparisonOnly,omitempty"` // Tracking/Upstream describe a cached comparison, not configured tracking.
-	AllChanges     bool            `json:"allChanges,omitempty"`
-	BranchOnly     bool            `json:"branchOnly,omitempty"` // Keep the branch commit range while inspecting individual commits.
-	BranchCommits  *int            `json:"branchCommits,omitempty"`
-	BranchDiff     *ViewBranchDiff `json:"branchDiff,omitempty"`
+	ReviewPRs      []PullRequestLink `json:"reviewPRs,omitempty"`
+	ReviewEditing  bool              `json:"reviewEditing,omitempty"`
+	Review         *BranchReview     `json:"review,omitempty"`
+	ComparisonOnly bool              `json:"comparisonOnly,omitempty"` // Tracking/Upstream describe a cached comparison, not configured tracking.
+	AllChanges     bool              `json:"allChanges,omitempty"`
+	BranchOnly     bool              `json:"branchOnly,omitempty"` // Keep the branch commit range while inspecting individual commits.
+	BranchCommits  *int              `json:"branchCommits,omitempty"`
+	BranchDiff     *ViewBranchDiff   `json:"branchDiff,omitempty"`
 
 	Counts        *ViewCounts  `json:"counts"`
 	Editor        *EditorState `json:"editor,omitempty"`

@@ -95,6 +95,12 @@ func (m *siteManager) startViewerRefresh(id string) {
 	next := *r.state
 	if site := m.runtime[next.SiteID]; site != nil {
 		next.RemoteNote, next.Rebased = site.Git.RemoteNote, site.Git.Rebased
+		if next.Kind == "review" {
+			next.ReviewPRs = nil
+			if next.Branch != "" && next.Branch == site.Git.Branch {
+				next.ReviewPRs = site.Git.PullRequests
+			}
+		}
 	}
 	ctx, cancel := context.WithCancel(m.app.Context())
 	r.refreshCancel = cancel

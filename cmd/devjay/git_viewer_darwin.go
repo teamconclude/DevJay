@@ -12,28 +12,34 @@ import (
 )
 
 type viewerRequest struct {
-	BaseRef          string      `json:"baseRef"`
-	IgnoreWhitespace bool        `json:"ignoreWhitespace"`
-	Token            string      `json:"token"`
-	Content          string      `json:"content"`
-	Editing          bool        `json:"editing"`
-	Anchor           *cardAnchor `json:"anchor,omitempty"`
-	SiteID           string      `json:"siteID"`
-	Kind             string      `json:"kind"`
-	Scope            string      `json:"scope"`
-	Operation        string      `json:"operation"`
-	Version          uint64      `json:"version"`
-	Commit           string      `json:"commit"`
-	File             int         `json:"file"`
-	Prefetch         []int       `json:"prefetch"`
-	PrefetchID       uint64      `json:"prefetchID"`
-	Page             int         `json:"page"`
-	NewWindow        bool        `json:"newWindow"`
+	PRNumber         int                 `json:"prNumber"`
+	PRLoadID         uint64              `json:"prLoadID"`
+	PRSubmission     *PRReviewSubmission `json:"prSubmission"`
+	PRAnchor         *PRReviewAnchor     `json:"prAnchor"`
+	PRComment        *PRCommentRequest   `json:"prComment"`
+	BaseRef          string              `json:"baseRef"`
+	IgnoreWhitespace bool                `json:"ignoreWhitespace"`
+	Token            string              `json:"token"`
+	Content          string              `json:"content"`
+	Editing          bool                `json:"editing"`
+	Anchor           *cardAnchor         `json:"anchor,omitempty"`
+	SiteID           string              `json:"siteID"`
+	Kind             string              `json:"kind"`
+	Scope            string              `json:"scope"`
+	Operation        string              `json:"operation"`
+	Version          uint64              `json:"version"`
+	Commit           string              `json:"commit"`
+	File             int                 `json:"file"`
+	Prefetch         []int               `json:"prefetch"`
+	PrefetchID       uint64              `json:"prefetchID"`
+	Page             int                 `json:"page"`
+	NewWindow        bool                `json:"newWindow"`
 }
 
 // Each window owns its snapshot, selections, and cancellable read. UI events
 // are routed by Wails' sender, never by a client-supplied Site identifier.
 type gitViewerWindow struct {
+	prReview         *prReviewWindow
 	removeCloseHook  func()
 	reviewEditing    bool
 	reviewSaving     bool
@@ -60,8 +66,17 @@ func (m *siteManager) emitViewer(id string) {
 	if r != nil && r.ready && r.state != nil && !m.recovery.paused {
 		if site := m.runtime[r.state.SiteID]; site != nil {
 			r.updateTitle(site.Git)
+			if r.state.Kind == "review" {
+				next := *r.state
+				next.ReviewPRs = nil
+				if next.Branch != "" && next.Branch == site.Git.Branch {
+					next.ReviewPRs = site.Git.PullRequests
+				}
+				r.state = &next
+			}
 		}
 		dispatchWindowEvent(r.window, "devjay:viewer-state:"+id, r.state)
+		m.emitPRReview(id)
 	}
 }
 
@@ -116,6 +131,15 @@ func (m *siteManager) viewerLoad(id string, work func(context.Context, *GitView)
 }
 func (m *siteManager) forgetViewer(id string) {
 	if r := m.viewers[id]; r != nil {
+		if r.prReview != nil && r.prReview.draftGuard {
+			m.lifecycle.finishDraft()
+		}
+		if r.prReview != nil && r.prReview.cancel != nil {
+			r.prReview.cancel()
+		}
+		if r.prReview != nil && r.prReview.anchorCancel != nil {
+			r.prReview.anchorCancel()
+		}
 		if r.reviewEditing {
 			m.lifecycle.finishDraft()
 		}
@@ -147,6 +171,16 @@ func (m *siteManager) forgetViewer(id string) {
 }
 func (m *siteManager) closeViewer(id string) {
 	if r := m.viewers[id]; r != nil {
+		if r.prReview != nil && r.prReview.draftGuard {
+			m.reviewCloseError(id, "Save or copy your unsaved PR review draft before closing this window.")
+			return
+		}
+		if r.prReview != nil && r.prReview.state.Submitting {
+			r.prReview.state.Error = "Wait for the PR review submission to finish before closing this window."
+			m.emitPRReview(id)
+			m.reviewCloseError(id, "Wait for the PR review submission to finish before closing this window.")
+			return
+		}
 		if r.reviewEditing || r.reviewSaving {
 			// Site/Profile lifecycle may remove the original parent while this
 			// window stays open to preserve its unsaved text.
@@ -295,6 +329,10 @@ func (m *siteManager) registerViewerEvents() {
 			if r == nil {
 				return
 			}
+			if req.Operation == "pr-review-load" || req.Operation == "pr-review-anchor" || req.Operation == "pr-review-comment" || req.Operation == "pr-review-comment-check" || req.Operation == "pr-review-comment-retry" || req.Operation == "pr-review-submit" || req.Operation == "pr-review-check" || req.Operation == "pr-review-retry" || req.Operation == "pr-review-draft" {
+				m.handlePRReviewRequest(id, req)
+				return
+			}
 			m.viewerSequence++
 			r.used = m.viewerSequence
 			if req.Operation == "refresh" || req.Operation == "mode" {
@@ -365,7 +403,7 @@ func (m *siteManager) registerViewerEvents() {
 	})
 	m.app.Event.On("devjay:viewer-hello", func(e *application.CustomEvent) {
 		id := e.Sender
-		m.send(func() { m.emitViewer(id) })
+		m.send(func() { m.emitViewer(id); m.emitPRReview(id, true) })
 	})
 	m.app.Event.On("devjay:viewer-close", func(e *application.CustomEvent) {
 		id := e.Sender
