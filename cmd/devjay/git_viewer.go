@@ -52,7 +52,8 @@ type GitView struct {
 	Review         *BranchReview     `json:"review,omitempty"`
 	ComparisonOnly bool              `json:"comparisonOnly,omitempty"` // Tracking/Upstream describe a cached comparison, not configured tracking.
 	AllChanges     bool              `json:"allChanges,omitempty"`
-	BranchOnly     bool              `json:"branchOnly,omitempty"` // Keep the branch commit range while inspecting individual commits.
+	BranchOnly     bool              `json:"branchOnly,omitempty"`  // Keep the branch commit range while inspecting individual commits.
+	OldestFirst    bool              `json:"oldestFirst,omitempty"` // Applies only to branch history, not full/local/remote history.
 	BranchCommits  *int              `json:"branchCommits,omitempty"`
 	BranchDiff     *ViewBranchDiff   `json:"branchDiff,omitempty"`
 
@@ -212,8 +213,11 @@ func findViewSelectionPage(ctx context.Context, v *GitView, revisions []string, 
 		}
 	}
 	for _, start := range starts {
-		args := []string{"log", "--date-order", "--no-show-signature", "--format=%H",
-			"--max-count=" + strconv.Itoa(3*viewerPageSize), "--skip=" + strconv.Itoa(start*viewerPageSize)}
+		limits, err := viewHistoryLimits(v, start*viewerPageSize, 3*viewerPageSize)
+		if err != nil {
+			return 0, false, err
+		}
+		args := append([]string{"log", "--date-order", "--no-show-signature", "--format=%H"}, limits...)
 		out, err := viewerGit(ctx, v.root, append(append(args, revisions...), "--")...)
 		if err != nil {
 			return 0, false, errors.New("Could not locate the selected commit. Try Refresh.")
@@ -225,6 +229,26 @@ func findViewSelectionPage(ctx context.Context, v *GitView, revisions []string, 
 		}
 	}
 	return 0, false, nil
+}
+
+// Git applies --skip/--max-count before --reverse. Read the corresponding
+// window from the end of the pinned branch range, then reverse that window.
+// Reversing only a newest-first page would put the wrong commits on page one.
+func viewHistoryLimits(v *GitView, offset, limit int) ([]string, error) {
+	reverse := v.Kind == "branch" && v.BranchOnly && v.OldestFirst
+	if reverse {
+		if v.BranchCommits == nil {
+			return nil, errors.New("Could not count branch commits for Oldest first. Try Refresh.")
+		}
+		remaining := max(0, *v.BranchCommits-offset)
+		limit = min(limit, remaining)
+		offset = remaining - limit
+	}
+	args := []string{"--max-count=" + strconv.Itoa(limit), "--skip=" + strconv.Itoa(offset)}
+	if reverse {
+		args = append(args, "--reverse")
+	}
+	return args, nil
 }
 
 func noteViewSelectionFallback(v *GitView, selection *viewSelection) {
@@ -384,7 +408,11 @@ func loadGitViewSelection(ctx context.Context, v *GitView, refresh bool, selecti
 			return nil // An unborn branch has no history yet.
 		}
 	}
-	args := []string{"log", "--date-order", "--no-show-signature", "-z", "--format=%H%x00%an%x00%aI%x00%s", "--max-count=" + strconv.Itoa(viewerPageSize+1), "--skip=" + strconv.Itoa(v.Page*viewerPageSize)}
+	limits, err := viewHistoryLimits(v, v.Page*viewerPageSize, viewerPageSize+1)
+	if err != nil {
+		return err
+	}
+	args := append([]string{"log", "--date-order", "--no-show-signature", "-z", "--format=%H%x00%an%x00%aI%x00%s"}, limits...)
 	out, err := viewerGit(ctx, v.root, append(append(args, revisions...), "--")...)
 	if err != nil {
 		return errors.New("Could not read these commits. Try Refresh.")

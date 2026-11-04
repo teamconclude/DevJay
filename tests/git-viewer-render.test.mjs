@@ -299,15 +299,16 @@ test('History offers independent branch and full history scopes for aggregate an
  const view=viewer(),initial=state({kind:'branch',head:'head',commit:'',allChanges:true,branchOnly:true,branchCommits:2,
   branchDiff:{base:'base',target:'origin/develop'},commits:[{id:'local',subject:'Local branch work',presence:'outgoing'},{id:'published',subject:'Published branch work',presence:'shared'}]});
  view.render(initial);
- assert.match(view.root.querySelector('.git-view-context').textContent,/2 branch commits.*common ancestor with origin\/develop/);
- assert.match(view.root.querySelector('.git-view-context').title,/Includes published commits; excludes shared ancestors and remote-only/);
+ assert.equal(view.root.querySelector('.git-view-context').hidden,true);
+ assert.equal(view.root.querySelector('.git-branch-diff').textContent,'All 2 commits');
+ assert.match(view.root.querySelector('.git-branch-summary').title,/Includes published commits; excludes shared ancestors and remote-only/);
  assert.equal(view.root.querySelector('.git-history-divider'),null);
  assert.equal(view.root.querySelector('.git-view-commits').querySelector('.git-scroll-list').attrs['aria-label'],'Branch commits');
  const scope=view.root.querySelector('.git-history-scope'),history=view.root.querySelector('.git-full-history'),branch=view.root.querySelector('.git-branch-history');
  assert.equal(scope.hidden,false);assert.equal(branch.attrs['aria-pressed'],'true');assert.equal(history.attrs['aria-pressed'],'false');
  view.root.querySelectorAll('.git-commit')[1].click();assert.equal(view.requests.at(-1).commit,'published');
  view.render({...initial,version:2,allChanges:false,commit:'published'});
- assert.match(view.root.querySelector('.git-view-context').textContent,/2 branch commits/);
+ assert.equal(view.root.querySelector('.git-branch-diff').textContent,'All 2 commits');
  assert.equal(view.root.querySelectorAll('.git-commit').length,2);assert.equal(scope.hidden,false);
  history.click();assert.equal(view.requests.at(-1).operation,'history-scope');assert.equal(view.requests.at(-1).scope,'full');
  view.render({...initial,version:3,branchOnly:false,allChanges:false,commit:'published'});
@@ -326,12 +327,39 @@ test('empty or unavailable branch ranges never imply a full repository list',()=
  const view=viewer(),initial=state({kind:'branch',allChanges:true,branchOnly:true,branchCommits:0,
   branchDiff:{base:'base',target:'origin/main'},commits:[],files:[],file:-1,diff:''});
  view.render(initial);
- assert.match(view.root.querySelector('.git-view-context').textContent,/0 branch commits/);
+ assert.equal(view.root.querySelector('.git-branch-diff').textContent,'All 0 commits');
  assert.match(view.root.querySelector('.git-view-commits').textContent,/No commits added since the branch base/);
  view.render({...initial,version:2,branchCommits:null,error:'Comparison unavailable',branchDiff:{note:'No base'}});
- assert.doesNotMatch(view.root.querySelector('.git-view-context').textContent,/0 branch commits/);
+ assert.equal(view.root.querySelector('.git-branch-diff').textContent,'All branch changes');
  assert.match(view.root.querySelector('.git-view-commits').textContent,/Branch commits unavailable/);
  assert.equal(view.root.querySelector('.git-full-history').disabled,false);
+});
+
+test('branch history order shares the aggregate changes row and follows saved state without changing full history',()=>{
+ const view=viewer(),commits=[{id:'new',subject:'Newest'},{id:'old',subject:'Oldest'}];
+ const initial=state({kind:'branch',branchOnly:true,branchCommits:2,commit:'new',commits,head:'new'});
+ view.render(initial);
+ const order=view.root.querySelector('.git-history-order'),summary=view.root.querySelector('.git-branch-summary');
+ assert.equal(summary.children[0].textContent,'All 2 commits');assert.equal(summary.children[1],order);
+ assert.equal(order.value,'newest');assert.equal(order.attrs['aria-label'],'Commit order');
+ assert.deepEqual(order.children.map(option=>[option.value,option.textContent]),[['newest','Newest first'],['oldest','Oldest first']]);
+ order.focus();order.value='oldest';order.onchange();
+ assert.deepEqual(JSON.parse(JSON.stringify(view.requests.at(-1))),{version:1,operation:'history-sort',order:'oldest'});
+ view.render({...initial,version:2,loading:true});assert.equal(order.disabled,true);
+ const requests=view.requests.length;order.onchange();assert.equal(view.requests.length,requests);
+ view.render({...initial,version:2,oldestFirst:true,commit:'old',commits:[...commits].reverse()});
+ assert.equal(order.value,'oldest');assert.equal(order.disabled,false);assert.equal(view.document.activeElement,order);
+ const list=view.root.querySelector('.git-view-commits').querySelector('.git-scroll-list');
+ list.focus();list.onkeydown({key:'ArrowDown',preventDefault(){}});
+ assert.equal(view.requests.at(-1).commit,'new');
+ view.render({...initial,version:3,branchOnly:false,oldestFirst:true});
+ assert.equal(order.hidden,true);
+ view.render({...initial,version:4,oldestFirst:true});assert.equal(order.value,'oldest');assert.equal(order.hidden,false);
+ // A failed save restores the authoritative choice instead of showing an
+ // order that was neither saved nor applied to the returned commit list.
+ order.value='newest';order.onchange();
+ view.render({...initial,version:5,oldestFirst:true,error:'Could not save preference'});
+ assert.equal(order.value,'oldest');assert.match(view.root.querySelector('.git-view-error').textContent,/Could not save/);
 });
 
 test('combined conflicts fall back to readable unified text without navigating invented differences',()=>{

@@ -49,6 +49,20 @@ func selectViewHistoryScope(ctx context.Context, v *GitView, scope string) error
 	return loadGitView(ctx, v, false)
 }
 
+func validHistoryOrder(order string) bool { return order == "newest" || order == "oldest" }
+
+func selectViewHistoryOrder(ctx context.Context, v *GitView, order string) error {
+	if v.Kind != "branch" || !v.BranchOnly || !validHistoryOrder(order) {
+		return errors.New("Choose Newest first or Oldest first in Branch history.")
+	}
+	oldest := order == "oldest"
+	if v.OldestFirst == oldest {
+		return nil
+	}
+	v.OldestFirst, v.Page = oldest, 0
+	return loadGitView(ctx, v, false)
+}
+
 func selectViewBranchDiff(ctx context.Context, v *GitView) error {
 	if v.Kind != "branch" {
 		return errors.New("Open History to compare branch changes.")

@@ -29,26 +29,27 @@ type CardPlacement struct {
 	Z int `json:"z"`
 }
 type SiteConfig struct {
-	ViewersOnSiteDesktop bool                       `json:"viewersOnSiteDesktop,omitempty"`
-	Theme                string                     `json:"theme,omitempty"`
-	SiteWindowsHidden    bool                       `json:"siteWindowsHidden,omitempty"`
-	Shortcuts            map[string]ShortcutBinding `json:"shortcuts,omitempty"`
-	Profiles             []Profile                  `json:"profiles,omitempty"`
-	ActiveProfile        string                     `json:"activeProfile,omitempty"`
-	AutomaticProfiles    *bool                      `json:"automaticProfiles,omitempty"`
-	AllDesktops          *bool                      `json:"allDesktops,omitempty"`
-	OnTop                *bool                      `json:"onTop,omitempty"`
-	Folders              map[string]FolderReference `json:"folders,omitempty"`
-	PreferredEditor      string                     `json:"preferredEditor,omitempty"`
-	UseProjectEditor     *bool                      `json:"useProjectEditor,omitempty"`
-	ShowIDEStatus        *bool                      `json:"showIDEStatus,omitempty"`
-	Layout               string                     `json:"layout,omitempty"`
-	Placements           map[string]CardPlacement   `json:"placements,omitempty"`
-	Decoration           string                     `json:"decoration,omitempty"`
-	Version              int                        `json:"version"`
-	Sites                []Site                     `json:"sites"`
-	Manual               bool                       `json:"manual"`
-	Order                []string                   `json:"order"`
+	BranchHistoryOldestFirst bool                       `json:"branchHistoryOldestFirst,omitempty"`
+	ViewersOnSiteDesktop     bool                       `json:"viewersOnSiteDesktop,omitempty"`
+	Theme                    string                     `json:"theme,omitempty"`
+	SiteWindowsHidden        bool                       `json:"siteWindowsHidden,omitempty"`
+	Shortcuts                map[string]ShortcutBinding `json:"shortcuts,omitempty"`
+	Profiles                 []Profile                  `json:"profiles,omitempty"`
+	ActiveProfile            string                     `json:"activeProfile,omitempty"`
+	AutomaticProfiles        *bool                      `json:"automaticProfiles,omitempty"`
+	AllDesktops              *bool                      `json:"allDesktops,omitempty"`
+	OnTop                    *bool                      `json:"onTop,omitempty"`
+	Folders                  map[string]FolderReference `json:"folders,omitempty"`
+	PreferredEditor          string                     `json:"preferredEditor,omitempty"`
+	UseProjectEditor         *bool                      `json:"useProjectEditor,omitempty"`
+	ShowIDEStatus            *bool                      `json:"showIDEStatus,omitempty"`
+	Layout                   string                     `json:"layout,omitempty"`
+	Placements               map[string]CardPlacement   `json:"placements,omitempty"`
+	Decoration               string                     `json:"decoration,omitempty"`
+	Version                  int                        `json:"version"`
+	Sites                    []Site                     `json:"sites"`
+	Manual                   bool                       `json:"manual"`
+	Order                    []string                   `json:"order"`
 }
 
 func (c SiteConfig) useProjectEditor() bool { return c.UseProjectEditor == nil || *c.UseProjectEditor }

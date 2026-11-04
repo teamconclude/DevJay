@@ -263,6 +263,14 @@ export function mountGitViewer(root, request, suggestions, openBranches) {
   const tools=el('div','git-view-tools');tools.append(reviewBranch);
   header.append(title,branchRow,...(suggestions?[suggestions]:[]),tools);
   const context=el('div','git-view-context');
+  const historyOrder=el('select','git-history-order');
+  historyOrder.setAttribute('aria-label','Commit order');historyOrder.title='Sort branch commits';
+  for(const [value,label] of [['newest','Newest first'],['oldest','Oldest first']]){
+    const option=el('option','',label);option.value=value;historyOrder.append(option);
+  }
+  historyOrder.onchange=()=>{
+    if(!historyOrder.disabled&&state?.kind==='branch'&&state.branchOnly)send('history-sort',{order:historyOrder.value});
+  };
   const error=el('div','git-view-error');error.setAttribute('role','status');error.hidden=true;
   const panes=el('div','git-view-panes');
   const sidebar=el('aside','git-view-sidebar');sidebar.setAttribute('aria-label','Changes and history');
@@ -277,12 +285,14 @@ export function mountGitViewer(root, request, suggestions, openBranches) {
   const detailPanes=el('div','git-detail-panes');
   const statusbar=el('footer','git-view-status');
   const commits=el('aside','git-view-commits');commits.setAttribute('aria-label','Commits');
+  const branchSummary=el('div','git-branch-summary');
   const branchDiffButton=button('All branch changes',()=>{setLayout('split');send('branch-diff');},'git-branch-diff');
+  branchSummary.append(branchDiffButton,historyOrder);
   const commitList=navigableList('Branch commits');
   const pagination=el('div','git-view-pagination');
   const previous=button('Previous',()=>send('page',{page:state.page-1}));
   const pageLabel=el('span','muted');const next=button('Next',()=>send('page',{page:state.page+1}));
-  pagination.append(previous,pageLabel,next);commits.append(branchDiffButton,commitList,pagination);
+  pagination.append(previous,pageLabel,next);commits.append(branchSummary,commitList,pagination);
   const files=el('aside','git-view-files');files.setAttribute('aria-label','Changed files');
   const fileHeading=el('h2','','Files'),fileList=navigableList('Changed files');files.append(fileHeading,fileList);
   const content=el('section','git-view-content');
@@ -465,7 +475,7 @@ export function mountGitViewer(root, request, suggestions, openBranches) {
   function holdReadControls(loading){
     if(loading){
       if(pendingControls.size)return;
-      for(const control of [reviewBranch,branchDiffButton,branchHistoryButton,fullHistoryButton,previousDiff,nextDiff,previousFile,nextFile,unifiedButton,splitButton]){
+      for(const control of [reviewBranch,branchDiffButton,branchHistoryButton,fullHistoryButton,historyOrder,previousDiff,nextDiff,previousFile,nextFile,unifiedButton,splitButton]){
         pendingControls.set(control,control.disabled);
         // Keep the last frame's contrast while still blocking stale requests.
         control.classList.toggle('git-read-pending',!control.disabled);
@@ -488,9 +498,15 @@ export function mountGitViewer(root, request, suggestions, openBranches) {
     const holdFrame=v.loading&&renderedState?.siteID===v.siteID&&renderedState?.kind===v.kind;
     holdReadControls(holdFrame);
     if(holdFrame)return;
+    historyOrder.value=v.oldestFirst?'oldest':'newest';
+    historyOrder.hidden=v.kind!=='branch'||!v.branchOnly;
+    historyOrder.disabled=!!v.loading||v.kind!=='branch'||!v.branchOnly;
     reviewBranch.disabled=!!v.loading||!v.head;
     updateDiffControls();
-    branchDiffButton.hidden=v.kind!=='branch';
+    branchSummary.hidden=v.kind!=='branch';
+    branchSummary.title=branchHistoryContext(v);
+    branchSummary.classList.toggle('selected',!!v.allChanges);
+    branchDiffButton.textContent=Number.isInteger(v.branchCommits)?`All ${v.branchCommits.toLocaleString()} ${v.branchCommits===1?'commit':'commits'}`:'All branch changes';
     branchDiffButton.disabled=v.loading||!v.branchDiff?.base;
     branchDiffButton.classList.toggle('selected',!!v.allChanges);branchDiffButton.setAttribute('aria-pressed',String(!!v.allChanges));
     branchDiffButton.title=v.branchDiff?.note||`Compare committed branch changes from the common ancestor with ${v.branchDiff?.target||'the base branch'}`;
@@ -517,7 +533,7 @@ export function mountGitViewer(root, request, suggestions, openBranches) {
     }
     updateBranchButton();
     refresh.disabled=v.loading;
-    const nextOverviewKey=JSON.stringify([v.siteID,v.kind,v.name,v.path,v.branch,v.branchOnly,v.allChanges,v.branchCommits,v.branchDiff,v.counts,v.incomingCount,v.upstream,v.tracking,v.comparisonOnly,v.branchWork,v.rebased,v.captured,v.remoteNote,v.historyNote,v.error,!!v.loading]);
+    const nextOverviewKey=JSON.stringify([v.siteID,v.kind,v.name,v.path,v.branch,v.branchOnly,v.oldestFirst,v.allChanges,v.branchCommits,v.branchDiff,v.counts,v.incomingCount,v.upstream,v.tracking,v.comparisonOnly,v.branchWork,v.rebased,v.captured,v.remoteNote,v.historyNote,v.error,!!v.loading]);
     if(overviewKey!==nextOverviewKey){
       overviewKey=nextOverviewKey;
       name.textContent=v.name||'Changes';name.title=v.path;
@@ -537,14 +553,10 @@ export function mountGitViewer(root, request, suggestions, openBranches) {
       error.hidden=!v.error;error.textContent=v.error||'';
       const capture=v.captured?new Date(v.captured).toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit'}):'';
       context.replaceChildren();
-      context.hidden=edits;
-      if(!edits){
+      context.hidden=edits||!!v.branchOnly;
+      if(!context.hidden){
         if(v.loading)context.append(el('span','muted','Loading history…'));
-        else if(v.branchOnly){
-          const count=v.branchCommits;
-          context.append(el('strong','git-history-count',Number.isInteger(count)?`${count.toLocaleString()} branch ${count===1?'commit':'commits'}`:'Branch commits'),
-            el('span','muted',`Since the common ancestor with ${v.branchDiff?.target||'the base branch'}`));
-        }else {
+        else {
           const outgoing=v.branchWork?.local ?? (Number.isInteger(v.counts?.local)?v.counts.local:null);
           const diverged=v.counts?.local>0&&v.incomingCount>0;
           if(diverged)context.append(el('span','git-history-count',v.rebased?'Rebased':'History differs'));
