@@ -105,6 +105,7 @@ func TestCardMenuActionLabels(t *testing.T) {
 		{cardMenuRequest{Kind: "auto"}, [4]string{"View branch", "", "DevJay settings…", "Quit DevJay"}},
 		{cardMenuRequest{Kind: "edits"}, [4]string{"View branch", "", "DevJay settings…", "Quit DevJay"}},
 		{cardMenuRequest{Kind: "branch"}, [4]string{"View branch", "", "DevJay settings…", "Quit DevJay"}},
+		{cardMenuRequest{Kind: "review-status", Number: 123}, [4]string{"View branch", "Open PR #123 in browser", "DevJay settings…", "Quit DevJay"}},
 		{cardMenuRequest{Kind: "site"}, [4]string{"Go to Site desktop", "", "DevJay settings…", "Quit DevJay"}},
 		{cardMenuRequest{BundleID: "com.jetbrains.goland", appName: "GoLand"}, [4]string{"Show GoLand", "", "DevJay settings…", "Quit DevJay"}},
 		{cardMenuRequest{Kind: "local"}, [4]string{"View local commits", "", "DevJay settings…", "Quit DevJay"}},
@@ -114,6 +115,34 @@ func TestCardMenuActionLabels(t *testing.T) {
 		if got := cardMenuLabels(test.req); got != test.labels {
 			t.Errorf("menu for %#v = %#v, want %#v", test.req, got, test.labels)
 		}
+	}
+}
+
+func TestCardPrimaryActionMatchesClickedContent(t *testing.T) {
+	option := &cardGitOption{Kind: "update"}
+	for _, test := range []struct {
+		req  cardMenuRequest
+		want cardMenuAction
+	}{
+		{cardMenuRequest{Kind: "edits"}, cardMenuView},
+		{cardMenuRequest{Kind: "auto"}, cardMenuView},
+		{cardMenuRequest{Kind: "site"}, cardMenuView},
+		{cardMenuRequest{Kind: "site", Number: 123}, cardMenuView},
+		{cardMenuRequest{Kind: "site", BundleID: "app"}, cardMenuView},
+		{cardMenuRequest{Kind: "review-status", Number: 123, viewDiffs: true}, cardMenuViewDiffs},
+		{cardMenuRequest{Kind: "branch", GitAction: "update"}, cardMenuGitAction},
+		{cardMenuRequest{Kind: "branch", BaseBranch: "main"}, cardMenuGitAction},
+		{cardMenuRequest{Kind: "branch", PublishRebased: true, PublishButton: true}, cardMenuGitAction},
+	} {
+		if got := firstCardMenuAction(test.req, option); got != test.want {
+			t.Errorf("primary action for %+v = %d, want %d", test.req, got, test.want)
+		}
+	}
+	if got := firstCardMenuAction(cardMenuRequest{Kind: "branch"}, nil); got != cardMenuView {
+		t.Fatal("a count without a Git suggestion must open the branch")
+	}
+	if got := firstCardMenuAction(cardMenuRequest{Kind: "review-status", Number: 123}, nil); got != cardMenuView {
+		t.Fatal("unavailable Review must leave View branch first")
 	}
 }
 
@@ -277,7 +306,7 @@ func TestCardMenuChoosesChangesOrHistoryWithoutChangingGitActionTargets(t *testi
 		{GitStatus{Branch: "main", LocalNote: "Could not read local status"}, "edits"},
 		{GitStatus{}, "edits"},
 	} {
-		for _, kind := range []string{"auto", "edits", "branch"} {
+		for _, kind := range []string{"auto", "edits", "branch", "review-status"} {
 			req := m.resolveCardMenuRequest(cardMenuRequest{Kind: kind}, test.git)
 			if got := cardMenuViewKind(req.Kind, test.git); got != test.want {
 				t.Errorf("%s menu for %#v = %q, want %q", kind, test.git, got, test.want)
@@ -415,5 +444,62 @@ func TestCardMenuAppActionsSurviveStalePRButNavigationDoesNot(t *testing.T) {
 	}
 	if validCardMenuSelection(req, cardMenuDismissed, pr, current) {
 		t.Fatal("dismissed menu accepted")
+	}
+}
+
+func TestCardReviewStatusMenuKeepsNavigationSeparateAndRevalidatesPR(t *testing.T) {
+	pr := PullRequestLink{Number: 123, URL: "https://github.com/owner/repo/pull/123"}
+	status := GitStatus{Branch: "feature", Head: "head", PullRequests: []PullRequestLink{pr}, Ahead: 2, PushTarget: "origin/feature"}
+	req := cardMenuRequest{SiteID: "a", Kind: "review-status", Number: pr.Number}
+	if _, ok := normalizeCardMenuRequest(req); !ok {
+		t.Fatal("review status rejected")
+	}
+	for _, change := range []func(*cardMenuRequest){
+		func(r *cardMenuRequest) { r.Number = 0 },
+		func(r *cardMenuRequest) { r.BundleID = "app" },
+		func(r *cardMenuRequest) { r.BaseBranch = "main" },
+		func(r *cardMenuRequest) { r.PublishRebased = true },
+		func(r *cardMenuRequest) { r.GitAction = "push" },
+	} {
+		invalid := req
+		change(&invalid)
+		if _, ok := normalizeCardMenuRequest(invalid); ok {
+			t.Fatalf("ambiguous review target accepted: %+v", invalid)
+		}
+	}
+	m := &siteManager{}
+	req = m.resolveCardMenuRequest(req, status)
+	for _, action := range []cardMenuAction{cardMenuView, cardMenuViewDiffs, cardMenuOpenPR, cardMenuViewNew} {
+		if !validCardMenuSelection(req, action, pr, status) {
+			t.Fatalf("review navigation %d rejected", action)
+		}
+		for _, current := range []GitStatus{
+			{Head: "head"},
+			{Head: "head", PullRequests: []PullRequestLink{{Number: pr.Number, URL: "https://github.com/other/repo/pull/123"}}},
+		} {
+			if validCardMenuSelection(req, action, pr, current) {
+				t.Fatalf("stale review navigation %d accepted", action)
+			}
+		}
+	}
+	for _, action := range []cardMenuAction{cardMenuGitAction, cardMenuDismissed} {
+		if validCardMenuSelection(req, action, pr, status) {
+			t.Fatalf("unoffered action %d accepted", action)
+		}
+	}
+	if validCardMenuSelection(cardMenuRequest{Kind: "branch", Number: pr.Number}, cardMenuOpenPR, pr, status) {
+		t.Fatal("dedicated review PR action accepted for a badge menu")
+	}
+	status.MergedPR = &MergedPullRequest{Number: pr.Number, Head: "head", SameHead: true, Base: "main"}
+	status.DefaultBranch = "main"
+	if makeCardGitOption(req, status) != nil {
+		t.Fatal("Git action displaced review navigation")
+	}
+	status.LocalNote = "Unavailable"
+	if validCardMenuSelection(req, cardMenuViewDiffs, pr, status) {
+		t.Fatal("Review accepted with unavailable local status")
+	}
+	if !validCardMenuSelection(req, cardMenuOpenPR, pr, status) {
+		t.Fatal("unavailable local status blocked the PR browser action")
 	}
 }

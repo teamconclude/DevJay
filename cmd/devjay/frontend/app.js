@@ -20,7 +20,7 @@ import { installStripDrag } from './strip-drag.js';
 import { installCardActivation } from './card-interaction.js';
 import { installDragOriginGuard } from './drag-origin.js';
 import { installCardHover } from './card-hover.js';
-import { installCardMenu, cardBounds } from './card-menu.js';
+import { installCardMenu, cardBounds, cardMenuTarget } from './card-menu.js';
 installCardHover(window, document);
 installDragOriginGuard(window, document.documentElement);
 const reportUIReady = uiReady(id => Events.Emit('devjay:ui-ready', id));
@@ -74,6 +74,17 @@ for (const name of ['pr-open-result','app-activate-result']) Events.On(`devjay:$
   }
 });
 if (!settings && !viewer && !actions) installCardMenu(root, data => emit('card-menu', data), !siteID);
+async function activateCardTarget(target) {
+  const request = cardMenuTarget(target);
+  const site = snapshot.sites.find(site => site.id === request?.siteID);
+  if (!site || target.disabled || cardUpdatePending.has(site.id)) return;
+  const anchor = cardBounds(target);
+  const repaint = request.gitAction === 'update';
+  cardUpdatePending.add(site.id);
+  if (repaint) render(snapshot);
+  try { await emit('card-default', {...request, branch:site.git.branch || '', head:site.git.head || '', anchor}); }
+  finally { cardUpdatePending.delete(site.id); if (repaint) render(snapshot); }
+}
 function pathLabel(site) {
   const n = el('div', 'path');n.title=site.path;n.setAttribute('aria-label',site.path);
   n.dataset.pathPrefix=site.prefix||'';n.dataset.pathName=site.name||'';
@@ -212,12 +223,12 @@ function details(site, parent, showIDEStatus) {
     parent.append(glow);
   }
   const heading = el('div', 'card-heading');
-  const title = siteID ? el('div', 'card-title') : button('', () => emit('activate', site.id), 'card-title');
+  const title = button('', () => activateCardTarget(title), 'card-title');
   title.dataset.viewKind = 'auto';
   const branch = el('div', 'branch', site.git.branch || 'Folder');
   title.append(pathLabel(site), branch);
-  title.title = siteID ? 'Drag to move this Site' : 'Go to this Site · Drag to move the strip';
-  if (!siteID) title.setAttribute('aria-label', `Activate ${site.path}, ${site.git.branch || 'folder'}`);
+  title.title = siteID ? 'View branch · Drag to move this Site' : 'View branch · Drag to move the strip';
+  title.setAttribute('aria-label', `View branch for ${site.path}, ${site.git.branch || 'folder'}`);
   heading.append(title);
   const pullRequests = site.git.pullRequests || [];
   const openPR = number => emit('pr-open', {siteID:site.id, number, anchor:cardBounds(parent)});
@@ -243,16 +254,7 @@ function details(site, parent, showIDEStatus) {
     const node = button('', async () => {
       const selection = window.getSelection();
       if (selection && !selection.isCollapsed && (node.contains(selection.anchorNode) || node.contains(selection.focusNode))) return;
-      if (prNumber) openPR(prNumber);
-      else if (update) {
-        if (node.disabled || cardUpdatePending.has(site.id)) return;
-        const request = {siteID:site.id,kind:'update',branch:site.git.branch,head:site.git.head,anchor:cardBounds(node)};
-        cardUpdatePending.add(site.id);
-        render(snapshot);
-        try { await emit('action-prepare', request); }
-        finally { cardUpdatePending.delete(site.id); render(snapshot); }
-      }
-      else emit('viewer-open', {siteID:site.id,kind:view || 'edits',anchor:cardBounds(node)});
+      await activateCardTarget(node);
     }, `${cls} status-link copyable`);
     if (update) node.disabled = updateBusy;
     if (prNumber) node.dataset.prNumber = String(prNumber);
@@ -292,6 +294,7 @@ function details(site, parent, showIDEStatus) {
     for (const item of values) {
       const update = !!incomingUpdate && item.gitAction === 'update';
       const badge = statusButton(item.view, `metric ${item.tone}`, prNumber, update);
+      if (prNumber && item.value !== '') badge.dataset.viewKind = 'review-status';
       badge.title = update ? `Fetch and update ${site.git.branch}…` : item.title;
       badge.setAttribute('aria-label', update ? `${badge.title} · ${item.title}` : `View ${item.title}`);
       if (item.gitAction) badge.dataset.gitAction = item.gitAction;
@@ -316,7 +319,11 @@ function details(site, parent, showIDEStatus) {
       const number = Number(/^PR #(\d+)/.exec(label)?.[1]);
       const prNumber = pullRequests.some(pr => pr.number === number) ? number : null;
       const text = singlePR ? label.replace(/^PR #\d+ · /, '') : label;
-      line(text === 'Merged' ? 'PR merged' : text, `pr-status ${status.prTone}`, ['good', 'merged'].includes(status.prTone) ? '✓' : '⑂', status.prTitle, 'edits', prNumber);
+      const row = line(text === 'Merged' ? 'PR merged' : text, `pr-status ${status.prTone}`, ['good', 'merged'].includes(status.prTone) ? '✓' : '⑂', status.prTitle, 'edits', prNumber);
+      if (label.endsWith(' · Merged')) {
+        row.dataset.viewKind = 'branch';
+        delete row.dataset.prNumber;
+      } else if (prNumber && label.endsWith(' · Review required')) row.dataset.viewKind = 'review-status';
     }
   }
   if (status.prNote) line(status.prNote, 'freshness muted', '·', status.prTitle, 'edits', singlePR);
@@ -498,11 +505,13 @@ if (viewer) {
     place: positions => emit('placements', positions),
   });
   installCardActivation(list, id => emit('activate', id));
+}
+if (!settings && !viewer && !actions) {
   // Wails starts native window dragging on mouse movement. Suppress the
   // subsequent click as well, even if the native drag has already ended.
   let press = null;
   root.addEventListener('mousedown', e => {
-    press = e.button === 0 && e.target.closest('.card') ? {x: e.screenX, y: e.screenY, moved: false} : null;
+    press = e.button === 0 && e.target.closest('.card, .site-detail') ? {x: e.screenX, y: e.screenY, moved: false} : null;
   }, true);
   root.addEventListener('mousemove', e => {
     if (press && (e.buttons & 1) && (e.screenX !== press.x || e.screenY !== press.y)) press.moved = true;

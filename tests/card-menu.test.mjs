@@ -10,6 +10,7 @@ test('right-click targets category, heading, PR or app, with desktop navigation 
   assert.deepEqual(cardMenuTarget(target(null)), {siteID:'site-a',kind:'site',number:0,bundleID:''});
   for (const kind of ['auto','edits','branch','local','remote']) assert.equal(cardMenuTarget(target({viewKind:kind})).kind,kind);
   assert.equal(cardMenuTarget(target({prNumber:'1234'})).number,1234);
+  assert.deepEqual(cardMenuTarget(target({viewKind:'review-status',prNumber:'1234'})),{siteID:'site-a',kind:'review-status',number:1234,bundleID:''});
   assert.equal(cardMenuTarget(target({appBundle:'com.jetbrains.goland'})).bundleID,'com.jetbrains.goland');
   for(const gitAction of ['update','push']) assert.equal(cardMenuTarget(target({viewKind:'branch',gitAction})).gitAction,gitAction);
   assert.equal(cardMenuTarget(target({viewKind:'branch',gitAction:'replace'})).gitAction,undefined);
@@ -18,7 +19,8 @@ test('right-click targets category, heading, PR or app, with desktop navigation 
 });
 test('mouse and keyboard menus suppress the default menu and capture their own target', () => {
   const handlers={}, requests=[];
-  installCardMenu({addEventListener:(name,fn)=>handlers[name]=fn}, request=>requests.push(request));
+  let selectionsCleared=0;
+  installCardMenu({ownerDocument:{getSelection:()=>({removeAllRanges:()=>selectionsCleared++})},addEventListener:(name,fn)=>handlers[name]=fn}, request=>requests.push(request));
   let prevented=0,stopped=0;
   const event={target:target({viewKind:'remote'}),clientX:128.2,clientY:72.9,
     preventDefault:()=>prevented++,stopPropagation:()=>stopped++};
@@ -28,6 +30,7 @@ test('mouse and keyboard menus suppress the default menu and capture their own t
   assert.deepEqual(requests,[{siteID:'site-a',kind:'remote',number:0,bundleID:'',anchor:{x:0,y:4,width:216,height:152},x:128,y:73},
     {siteID:'site-b',kind:'site',number:8,bundleID:'',anchor:{x:0,y:4,width:216,height:152},x:30,y:36}]);
   assert.equal(prevented,2);assert.equal(stopped,2);
+  assert.equal(selectionsCleared,2);
 });
 
 

@@ -6,7 +6,7 @@ export function cardMenuTarget(target) {
   const content = target.closest('[data-pr-number], [data-view-kind], [data-app-bundle]');
   const number = Number(content?.dataset.prNumber);
   const kind = content?.dataset.viewKind;
-  return {siteID: card.dataset.id, kind: ['auto', 'edits', 'branch', 'local', 'remote'].includes(kind) ? kind : 'site',
+  return {siteID: card.dataset.id, kind: ['auto', 'edits', 'branch', 'local', 'remote', 'review-status'].includes(kind) ? kind : 'site',
     number: Number.isSafeInteger(number) && number > 0 ? number : 0, bundleID: content?.dataset.appBundle || '',
     ...(content?.dataset.baseBranch ? {baseBranch:content.dataset.baseBranch} : {}),
     ...(content?.dataset.publishRebased === 'true' ? {publishRebased:true} : {}),
@@ -25,6 +25,9 @@ export function installCardMenu(root, open, strip = false) {
     if (!target) return;
     event.preventDefault();
     event.stopPropagation();
+    // WebKit can select a word on right-click. Do not let that selection
+    // suppress later ordinary card clicks after the native menu closes.
+    root.ownerDocument?.getSelection()?.removeAllRanges();
     const rect = keyboard ? event.target.getBoundingClientRect() : null;
     const x = keyboard ? rect.left + Math.min(rect.width / 2, 20) : event.clientX;
     const y = keyboard ? rect.top + rect.height : event.clientY;

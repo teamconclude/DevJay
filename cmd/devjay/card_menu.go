@@ -7,6 +7,9 @@ import (
 )
 
 type cardMenuRequest struct {
+	RequestID      string      `json:"requestID,omitempty"`
+	Branch         string      `json:"branch,omitempty"`
+	Head           string      `json:"head,omitempty"`
 	Anchor         *cardAnchor `json:"anchor,omitempty"`
 	SiteID         string      `json:"siteID"`
 	Kind           string      `json:"kind"`
@@ -56,6 +59,7 @@ const (
 	cardMenuHideSites
 	cardMenuShowSites
 	cardMenuViewDiffs
+	cardMenuOpenPR
 )
 
 func normalizeCardMenuRequest(req cardMenuRequest) (cardMenuRequest, bool) {
@@ -72,7 +76,8 @@ func normalizeCardMenuRequest(req cardMenuRequest) (cardMenuRequest, bool) {
 			!req.PublishRebased && !req.PublishButton && req.GitAction == "" && req.Anchor == nil &&
 			validCoordinate(req.X) && validCoordinate(req.Y)
 	}
-	return req, req.SiteID != "" && (validViewKind(req.Kind) || req.Kind == "auto" || req.Kind == "site") &&
+	return req, req.SiteID != "" && (validViewKind(req.Kind) || req.Kind == "auto" || req.Kind == "site" || req.Kind == "review-status") &&
+		(req.Kind != "review-status" || req.Number > 0) &&
 		req.Number >= 0 && (req.BundleID == "" || (req.Number == 0 && validAppBundleID(req.BundleID))) &&
 		(req.BaseBranch == "" || (req.Kind == "branch" && req.Number == 0 && req.BundleID == "" && len(req.BaseBranch) <= 1024 && !strings.ContainsAny(req.BaseBranch, "\x00\r\n"))) &&
 		(!req.PublishRebased || (req.Kind == "branch" && req.Number == 0 && req.BundleID == "" && req.BaseBranch == "")) &&
@@ -88,6 +93,9 @@ type cardGitOption struct {
 }
 
 func makeCardGitOption(req cardMenuRequest, git GitStatus) *cardGitOption {
+	if req.Kind == "review-status" {
+		return nil
+	}
 	// A metric identifies the intended operation, never its eligibility.
 	if req.GitAction != "" {
 		if req.Kind != "branch" || req.Number != 0 || req.BundleID != "" || req.BaseBranch != "" || req.PublishRebased {
@@ -286,7 +294,7 @@ func validAppBundleID(bundle string) bool {
 // View branch chooses a tab from current local status without changing the
 // clicked metric's identity, which is also used to prepare suggested Git actions.
 func cardMenuViewKind(kind string, git GitStatus) string {
-	if kind == "auto" || kind == "branch" || kind == "edits" {
+	if kind == "auto" || kind == "branch" || kind == "edits" || kind == "review-status" {
 		if git.Changes > 0 || git.Conflicts > 0 || git.Branch == "" || git.LocalNote != "" {
 			return "edits"
 		}
@@ -301,8 +309,11 @@ func (m *siteManager) resolveCardMenuRequest(req cardMenuRequest, git GitStatus)
 }
 
 func cardMenuOffersDiffs(req cardMenuRequest, git GitStatus) bool {
-	if req.Kind == "strip" || req.Number > 0 || req.BundleID != "" || git.Head == "" || git.LocalNote != "" {
+	if req.Kind == "strip" || (req.Number > 0 && req.Kind != "review-status") || req.BundleID != "" || git.Head == "" || git.LocalNote != "" {
 		return false
+	}
+	if req.Kind == "review-status" {
+		return true
 	}
 	// Feature branches can differ from their base even when their upstream is
 	// in sync. Incoming commits alone on a default branch are an update, not
@@ -319,6 +330,9 @@ func cardMenuLabels(req cardMenuRequest) [4]string {
 		// The guarded Git action becomes the first item for its direct button.
 		return [4]string{"", "", "DevJay settings…", "Quit DevJay"}
 	}
+	if req.Kind == "review-status" {
+		return [4]string{"View branch", fmt.Sprintf("Open PR #%d in browser", req.Number), "DevJay settings…", "Quit DevJay"}
+	}
 	if req.Number > 0 {
 		return [4]string{fmt.Sprintf("Open PR #%d in browser", req.Number), fmt.Sprintf("Open PR #%d in new browser tab", req.Number), "DevJay settings…", "Quit DevJay"}
 	}
@@ -332,11 +346,41 @@ func cardMenuLabels(req cardMenuRequest) [4]string {
 	return [4]string{"View " + subject, "", "DevJay settings…", "Quit DevJay"}
 }
 
+func firstCardMenuAction(req cardMenuRequest, option *cardGitOption) cardMenuAction {
+	if req.Kind == "review-status" && req.viewDiffs {
+		return cardMenuViewDiffs
+	}
+	if !req.PublishButton && (req.Kind == "edits" || req.Kind == "auto" || req.Kind == "site" || req.Number > 0 || req.BundleID != "") {
+		return cardMenuView
+	}
+	if option != nil {
+		return cardMenuGitAction
+	}
+	if cardMenuLabels(req)[0] != "" {
+		return cardMenuView
+	}
+	return cardMenuDismissed
+}
+
 // Site/window membership is checked separately for every action. App actions
 // remain available even when the clicked PR disappears during menu tracking.
 func validCardMenuSelection(req cardMenuRequest, action cardMenuAction, originalPR PullRequestLink, status GitStatus) bool {
 	if action == cardMenuSettings || action == cardMenuQuit {
 		return true
+	}
+	if req.Kind == "review-status" {
+		current, ok := requestedPR(status, req.Number)
+		if !ok || current.URL != originalPR.URL {
+			return false
+		}
+		switch action {
+		case cardMenuView, cardMenuOpenPR, cardMenuViewNew:
+			return true
+		case cardMenuViewDiffs:
+			return req.viewDiffs && cardMenuOffersDiffs(req, status)
+		default:
+			return false
+		}
 	}
 	if action == cardMenuViewDiffs {
 		return req.viewDiffs && cardMenuOffersDiffs(req, status)

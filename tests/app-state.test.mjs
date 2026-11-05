@@ -54,7 +54,7 @@ function app(search='', actionResult=true) {
   Events:{On:(name,fn)=>events[name]=fn,Emit:(...args)=>{calls.push(args);return Promise.resolve();}},Window:{},
   createBridge:(send,report)=>{bridgeReport=report;return {emit:async(n,d)=>{await send(`devjay:${n}`,d);report(actionResult===false?'Delivery failed':'',actionResult===false);return actionResult;},reply:noop};},
   uiReady:()=>()=>readyCount++,installCardSizing:()=>noop,installPathLabels:()=>noop,mountEditorSettings:()=>({renderEditor:noop}),
-  mountGitViewer:()=>noop,cardStatus,rebasedPublishWarning,cardBounds,
+  mountGitViewer:()=>noop,cardStatus,rebasedPublishWarning,cardBounds,cardMenuTarget,
   mountViewerSuggestions:()=>noop,updatePresentation,
   installStripDrag:(_list,options)=>{drag=options;},installCardActivation,installDragOriginGuard:noop,installCardHover:noop,installCardMenu:noop,
  };
@@ -266,9 +266,9 @@ test('desktop Site and strip branch labels do not open the branch chooser',async
   assert.equal(branch.tag,'div');assert.equal(branch.textContent,'feature/topic');
   assert.equal(cardMenuTarget(branch).kind,'auto');
   assert.equal(cardMenuTarget(view.root.querySelector('.path')).kind,'auto');
-  if(!search){branch.closest('button').onclick();view.click(branch);await Promise.resolve();}
+  await branch.closest('button').onclick();view.click(branch);
   assert.equal(view.calls.some(([name])=>name==='devjay:branches-open'),false);
-  assert.deepEqual(view.calls.filter(([name])=>name==='devjay:activate'),search?[]:[['devjay:activate','a']]);
+  assert.deepEqual(view.calls.filter(([name])=>name==='devjay:card-default').map(([,req])=>req.kind),['auto']);
  }
 });
 
@@ -289,14 +289,14 @@ test('metric headings stay noninteractive while counts keep their viewer and bro
   for(const label of labels){assert.equal(label.tag,'span');assert.equal(label.onclick,undefined);}
   const counts=view.root.querySelectorAll('.metric');
   for(const count of counts){await count.onclick();view.click(count);}
-  assert.deepEqual(counts.map(node=>{const t=cardMenuTarget(node);return [t.kind,t.number];}),[['edits',0],['branch',0],['site',12]]);
-  assert.deepEqual(view.calls.filter(([name])=>name==='devjay:viewer-open').map(([,req])=>req.kind),['edits','branch']);
-  assert.equal(view.calls.filter(([name])=>name==='devjay:pr-open').length,1);
+  assert.deepEqual(counts.map(node=>{const t=cardMenuTarget(node);return [t.kind,t.number];}),[['edits',0],['branch',0],['review-status',12]]);
+  assert.deepEqual(view.calls.filter(([name])=>name==='devjay:card-default').map(([,req])=>req.kind),['edits','branch','review-status']);
+  assert.equal(view.calls.filter(([name])=>name==='devjay:pr-open').length,0);
   assert.equal(view.calls.some(([name])=>name==='devjay:activate'),false);
  }
 });
 
-test('only the newer-default-branch line adds rebase context while clicks still open history',async()=>{
+test('newer-default-branch clicks send the same rebase target as their menu',async()=>{
  for(const search of ['', '?site=a']) for(const branch of ['develop','main']) {
   const view=app(search), item=site('a','feature');
   item.git={...item.git,head:'head',ahead:2,base:{branch,tracking:`origin/${branch}`,behind:3}};
@@ -308,12 +308,12 @@ test('only the newer-default-branch line adds rebase context while clicks still 
   assert.equal(cardMenuTarget(view.root.querySelector('.metric')).baseBranch,undefined);
   assert.equal(cardMenuTarget(view.root.querySelector('.branch')).baseBranch,undefined);
   await row.onclick();
-  assert.equal(view.calls.find(([name])=>name==='devjay:viewer-open')[1].kind,'branch');
+  assert.equal(view.calls.find(([name])=>name==='devjay:card-default')[1].kind,'branch');
   assert.equal(view.calls.some(([name])=>name==='devjay:action-prepare'||name==='devjay:action-confirm'),false);
  }
 });
 
-test('incoming and outgoing metrics carry their own menu action without changing ordinary clicks',async()=>{
+test('incoming and outgoing clicks use the same action target as their menus',async()=>{
  for(const search of ['', '?site=a']) {
   const view=app(search),item=site('a','feature');
   item.git={...item.git,head:'head',ahead:2,behind:3,base:{branch:'develop',tracking:'origin/develop',behind:4}};
@@ -322,7 +322,7 @@ test('incoming and outgoing metrics carry their own menu action without changing
   assert.deepEqual(metrics.map(node=>cardMenuTarget(node.children.at(-1)).gitAction),['push','update']);
   assert.equal(cardMenuTarget(view.root.querySelector('.branch')).gitAction,undefined);
   for(const node of metrics) await node.onclick();
-  assert.deepEqual(view.calls.filter(([name])=>name==='devjay:viewer-open').map(([,req])=>req.kind),['branch','branch']);
+  assert.deepEqual(view.calls.filter(([name])=>name==='devjay:card-default').map(([,req])=>req.kind),['branch','branch']);
   assert.equal(view.calls.some(([name])=>name==='devjay:action-prepare'||name==='devjay:action-confirm'),false);
  }
 });
@@ -341,8 +341,8 @@ test('incoming main-branch clicks prepare an update and preserve their context m
   view.snapshot(state([item]));
   assert.equal(view.root.querySelector('.metric').disabled,true);
   await pending;
-  assert.deepEqual(JSON.parse(JSON.stringify(view.calls.filter(([name])=>name==='devjay:action-prepare'))),[
-   ['devjay:action-prepare',{siteID:'a',kind:'update',branch,head:'head',anchor:{x:10,y:20,width:270,height:140}}],
+  assert.deepEqual(JSON.parse(JSON.stringify(view.calls.filter(([name])=>name==='devjay:card-default'))),[
+   ['devjay:card-default',{siteID:'a',kind:'branch',number:0,bundleID:'',gitAction:'update',branch,head:'head',anchor:{x:10,y:20,width:270,height:140}}],
   ]);
   assert.equal(view.calls.some(([name])=>['devjay:viewer-open','devjay:action-confirm','devjay:activate'].includes(name)),false);
   for(const status of ['preparing','running']) {
@@ -354,14 +354,14 @@ test('incoming main-branch clicks prepare an update and preserve their context m
  }
 });
 
-test('incoming clicks retain history when a main-branch update is unavailable',async()=>{
+test('incoming clicks defer current action eligibility to the backend',async()=>{
  for(const change of [{isMainBranch:false},{changes:1},{conflicts:1},{localNote:'Unavailable'},{ahead:1},{tracking:''},{head:''},{rewritten:true},{canReplaceRemote:true},{comparison:{ahead:0,behind:3,tracking:'origin/develop'}}]) {
   const view=app(),item=site('a','develop');
   item.git={...item.git,head:'head',isMainBranch:true,ahead:0,behind:3,tracking:'origin/develop',...change};
   view.snapshot(state([item]));
   await view.root.querySelectorAll('.metric').find(node=>node.dataset.gitAction==='update').onclick();
   assert.equal(view.calls.some(([name])=>name==='devjay:action-prepare'),false);
-  assert.equal(view.calls.find(([name])=>name==='devjay:viewer-open')[1].kind,'branch');
+  assert.equal(view.calls.find(([name])=>name==='devjay:card-default')[1].kind,'branch');
  }
 });
 
@@ -373,7 +373,7 @@ test('incoming update controls recover after failed request delivery',async()=>{
  assert.equal(view.root.querySelector('.metric').disabled,false);
  assert.match(view.root.querySelector('.notice').textContent,/Delivery failed/);
  await view.root.querySelector('.metric').onclick();
- assert.equal(view.calls.filter(([name])=>name==='devjay:action-prepare').length,2);
+ assert.equal(view.calls.filter(([name])=>name==='devjay:card-default').length,2);
 });
 
 test('Changes and History clicks send the originating card bounds for placement',async()=>{
@@ -383,13 +383,13 @@ test('Changes and History clicks send the originating card bounds for placement'
   view.snapshot(state([item]));
   const controls=[view.root.querySelector('.metric'),view.root.querySelectorAll('.status-line').find(n=>n.textContent.includes('newer commits'))];
   for(const control of controls) await control.onclick();
-  const requests=JSON.parse(JSON.stringify(view.calls.filter(([name])=>name==='devjay:viewer-open').map(([,data])=>data)));
+  const requests=JSON.parse(JSON.stringify(view.calls.filter(([name])=>name==='devjay:card-default').map(([,data])=>data)));
   assert.deepEqual(requests.map(r=>r.kind),['edits','branch']);
   for(const request of requests) assert.deepEqual(request.anchor,{x:10,y:20,width:270,height:140});
  }
 });
 
-test('rebased status offers publication context while its ordinary click opens history',async()=>{
+test('rebased status uses the same publication target for clicks and menus',async()=>{
  const view=app(''),item=site('a','feature');
  item.git={...item.git,head:'head',rebased:true,ahead:2,behind:1,pushTarget:'origin/feature'};
  view.snapshot(state([item]));
@@ -398,7 +398,7 @@ test('rebased status offers publication context while its ordinary click opens h
  assert.equal(cardMenuTarget(row.children[0]).kind,'branch');
  assert.equal(cardMenuTarget(view.root.querySelector('.branch')).publishRebased,undefined);
  await row.onclick();
- assert.equal(view.calls.find(([name])=>name==='devjay:viewer-open')[1].kind,'branch');
+ assert.equal(view.calls.find(([name])=>name==='devjay:card-default')[1].kind,'branch');
  assert.equal(view.calls.some(([name])=>name==='devjay:action-prepare'||name==='devjay:action-confirm'),false);
 });
 
@@ -545,7 +545,7 @@ test('PR tags live in card headers, open the PR, and disappear when the PR is go
   const request=view.calls.find(([name])=>name==='devjay:pr-open')[1];
   assert.equal(request.siteID,'a');assert.equal(request.number,1234);
   assert.deepEqual(JSON.parse(JSON.stringify(request.anchor)),{x:10,y:20,width:270,height:140});
-  assert.equal(view.calls.some(([name])=>name==='devjay:activate'||name==='devjay:viewer-open'),false);
+  assert.equal(view.calls.some(([name])=>name==='devjay:activate'||name==='devjay:card-default'),false);
   view.snapshot(state([{...item,git:{branch:'feature',github:'No open pull request'}}]));
   assert.equal(view.root.querySelector('.pr-tag'),null);
   assert.equal(view.root.querySelector('.pr-status'),null);
@@ -567,11 +567,14 @@ test('failed CI marks only its PR tag, preserves review state, and opens the sam
   assert.equal(failed.attrs['aria-label'],'Open PR #1234 · Approved · CI failed in browser');
   assert.equal(passed.textContent,'#1235');assert.equal(passed.classList.contains('ci-failed'),false);
   assert.equal(passed.dataset.appTooltip,'PR #1235 · Review required · CI passed');
+  const required = view.root.querySelectorAll('.pr-status').find(node=>node.textContent.includes('Review required'));
+  assert.deepEqual(cardMenuTarget(required),{siteID:'a',kind:'review-status',number:1235,bundleID:''});
+  assert.equal(cardMenuTarget(passed).kind,'site');
   assert.equal(view.calls.some(([name])=>name==='devjay:activate'||name==='devjay:pr-open'),false);
   await failed.onclick();view.click(failed);
   assert.equal(view.calls.filter(([name])=>name==='devjay:pr-open').length,1);
   assert.equal(view.calls.find(([name])=>name==='devjay:pr-open')[1].number,1234);
-  assert.equal(view.calls.some(([name])=>name==='devjay:activate'||name==='devjay:viewer-open'),false);
+  assert.equal(view.calls.some(([name])=>name==='devjay:activate'||name==='devjay:card-default'),false);
  }
 });
 
@@ -620,7 +623,7 @@ test('edit and commit badges retain their category for click and context menus',
  const badges=view.root.querySelectorAll('.metric');
  assert.deepEqual(badges.map(n=>n.dataset.viewKind),['edits','branch','branch']);
  for(const badge of badges)await badge.onclick();
- assert.deepEqual(view.calls.filter(([name])=>name==='devjay:viewer-open').map(([,data])=>data.kind),['edits','branch','branch']);
+ assert.deepEqual(view.calls.filter(([name])=>name==='devjay:card-default').map(([,data])=>data.kind),['edits','branch','branch']);
 });
 
 
@@ -771,7 +774,7 @@ test('app and nested agent icons activate their host and use the same context-me
   const requests=view.calls.filter(([name])=>name==='devjay:app-activate');
   assert.equal(requests.length,targets.length);
   for(const [,req] of requests){assert.equal(req.siteID,'a');assert.equal(req.bundleID,'com.googlecode.iterm2');}
-  assert.equal(view.calls.some(([name])=>name==='devjay:activate'||name==='devjay:viewer-open'),false);
+  assert.equal(view.calls.some(([name])=>name==='devjay:activate'||name==='devjay:card-default'),false);
   view.click(indicator);
   assert.equal(view.calls.filter(([name])=>name==='devjay:activate').length,search?0:1,'row whitespace keeps desktop navigation');
  }
@@ -1096,7 +1099,7 @@ test('waiting markers remain decorative within the host activation button',()=>{
    view.click(marker);
   }
   assert.deepEqual(view.calls.filter(([name])=>name==='devjay:activate'),[]);
-  assert.equal(view.calls.some(([name])=>name==='devjay:viewer-open'),false);
+  assert.equal(view.calls.some(([name])=>name==='devjay:card-default'),false);
   view.snapshot({...snapshot,preferences:{showIDEStatus:false}});
   assert.equal(view.root.querySelector('.development-agent-input'),null,'turning status off hides waiting presentation too');
  }
@@ -1270,7 +1273,7 @@ test('approved and merged card PRs are green unless CI needs attention, and draf
  }
 });
 
-test('merged cards explicitly say PR merged and preserve browser click and menu targets',async()=>{
+test('PR merged status uses branch actions while the numbered badge keeps browser actions',async()=>{
  for(const search of ['', '?site=a']) {
   const view=app(search),item=site('a','feature');
   item.git={...item.git,summary:'Remote branch removed',tone:'warning',head:'head',defaultBranch:'develop',
@@ -1278,9 +1281,10 @@ test('merged cards explicitly say PR merged and preserve browser click and menu 
   view.snapshot(state([item]));
   const row=view.root.querySelector('.pr-status');
   assert.equal(row.textContent,'✓PR merged');
-  assert.equal(cardMenuTarget(row.children[1]).number,42);
+  assert.deepEqual(cardMenuTarget(row.children[1]),{siteID:'a',kind:'branch',number:0,bundleID:''});
+  assert.equal(cardMenuTarget(view.root.querySelector('.pr-tag')).number,42);
   await row.onclick();
-  assert.deepEqual(JSON.parse(JSON.stringify(view.calls.filter(([name])=>name==='devjay:pr-open'))),[['devjay:pr-open',{siteID:'a',number:42,anchor:{x:10,y:20,width:270,height:140}}]]);
+  assert.deepEqual(view.calls.filter(([name])=>name==='devjay:card-default').map(([,req])=>[req.siteID,req.kind,req.number]),[['a','branch',0]]);
   assert.equal(view.calls.some(([name])=>name==='devjay:action-prepare'||name==='devjay:action-confirm'),false);
  }
 });
@@ -1322,7 +1326,7 @@ test('custom Site hints show the assigned key instead of its ordinal',()=>{
 });
 
 
-test('stale review counts use gray without a label, open their PR, and regain color after a fresh review',async()=>{
+test('stale review counts stay gray, use their review menu action, and regain color after a fresh review',async()=>{
  for(const search of ['', '?site=a']) {
   const view=app(search),item=site('a','feature');
   const report={number:2865,blockers:1,warnings:4,earlier:true,changeNote:'Commits changed since review',detail:'Review is for an earlier commit'};
@@ -1335,10 +1339,10 @@ test('stale review counts use gray without a label, open their PR, and regain co
   assert.match(row.title,/Commits changed since review/);
   assert.equal(view.root.querySelectorAll('.freshness').length,0,'stale detail does not add another card row');
   for(const badge of row.querySelectorAll('.metric')) {
-   assert.equal(cardMenuTarget(badge).number,2865);
+   assert.deepEqual(cardMenuTarget(badge.querySelector('.metric-unit')),{siteID:'a',kind:'review-status',number:2865,bundleID:''});
    await badge.onclick(); view.click(badge);
   }
-  assert.equal(view.calls.filter(([name])=>name==='devjay:pr-open').length,2);
+  assert.deepEqual(view.calls.filter(([name])=>name==='devjay:card-default').map(([,req])=>req.kind),['review-status','review-status']);
   assert.equal(view.calls.some(([name])=>name==='devjay:activate'),false);
   item.git.reviews=[{...report,earlier:false,changeNote:'',blockers:0,warnings:0,detail:'Current clean report'}];
   view.snapshot(state([item]));
@@ -1346,6 +1350,7 @@ test('stale review counts use gray without a label, open their PR, and regain co
   assert.equal(current.querySelectorAll('.metric').length,1);
   assert.equal(current.querySelector('.metric').textContent,'✓No findings');
   assert.ok(current.querySelector('.metric').classList.contains('good'));
+  assert.equal(cardMenuTarget(current.querySelector('.metric')).kind,'site');
   assert.doesNotMatch(current.attrs['aria-label'],/Stale review/);
  }
 });
