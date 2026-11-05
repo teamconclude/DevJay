@@ -76,8 +76,9 @@ func normalizeCardMenuRequest(req cardMenuRequest) (cardMenuRequest, bool) {
 			!req.PublishRebased && !req.PublishButton && req.GitAction == "" && req.Anchor == nil &&
 			validCoordinate(req.X) && validCoordinate(req.Y)
 	}
-	return req, req.SiteID != "" && (validViewKind(req.Kind) || req.Kind == "auto" || req.Kind == "site" || req.Kind == "review-status") &&
+	return req, req.SiteID != "" && (validViewKind(req.Kind) || req.Kind == "auto" || req.Kind == "site" || req.Kind == "review-status" || req.Kind == "return-status") &&
 		(req.Kind != "review-status" || req.Number > 0) &&
+		(req.Kind != "return-status" || (req.Number == 0 && req.BundleID == "")) &&
 		req.Number >= 0 && (req.BundleID == "" || (req.Number == 0 && validAppBundleID(req.BundleID))) &&
 		(req.BaseBranch == "" || (req.Kind == "branch" && req.Number == 0 && req.BundleID == "" && len(req.BaseBranch) <= 1024 && !strings.ContainsAny(req.BaseBranch, "\x00\r\n"))) &&
 		(!req.PublishRebased || (req.Kind == "branch" && req.Number == 0 && req.BundleID == "" && req.BaseBranch == "")) &&
@@ -115,6 +116,24 @@ func makeCardGitOption(req cardMenuRequest, git GitStatus) *cardGitOption {
 			option.DisabledReason = "Resolve local conflicts before returning to the default branch."
 		case git.Changes > 0:
 			option.DisabledReason = "Commit or stash local edits before deleting this branch."
+		}
+		return option
+	}
+	if req.Kind == "return-status" {
+		// A removed remote does not prove a merge. Without that proof, offer the
+		// existing confirmed branch switch and retain the local feature branch.
+		if (git.Summary != "Remote branch removed" && git.RemoteNote != "Remote branch no longer exists") ||
+			git.DefaultBranch == "" || git.IsMainBranch || git.Branch == git.DefaultBranch {
+			return nil
+		}
+		option := &cardGitOption{Kind: "return", Branch: git.Branch, Head: git.Head, Target: git.DefaultBranch, Tracking: git.Tracking}
+		switch {
+		case git.LocalNote != "" || git.Head == "" || git.Branch == "" || git.Branch == "(detached)" || git.Branch == "Detached HEAD":
+			option.DisabledReason = "Local branch status is unavailable. Refresh the Site."
+		case git.Conflicts > 0:
+			option.DisabledReason = "Resolve local conflicts before returning to the default branch."
+		case git.Changes > 0:
+			option.DisabledReason = "Commit or stash local edits before returning to the default branch."
 		}
 		return option
 	}
@@ -229,8 +248,8 @@ func (option *cardGitOption) title() string {
 			return "Push 1 commit…"
 		}
 		return fmt.Sprintf("Push %d commits…", option.Commits)
-	case "merged":
-		return "Return to " + option.Target + " & delete branch…"
+	case "merged", "return":
+		return "Return to " + option.Target + "…"
 	case "publish":
 		return "Push rebased branch…"
 	default:
@@ -249,6 +268,10 @@ func (option *cardGitOption) tooltip() string {
 		return "Check the remote, then confirm pushing committed work. Local edits stay on your computer."
 	case "update":
 		return "Fetch the latest commits, then confirm a fast-forward update. Requires a clean checkout and no local-only commits."
+	case "merged":
+		return "Check the default branch, then confirm returning to it. The confirmation lets you keep or delete the merged local branch."
+	case "return":
+		return "Check the default branch, then confirm switching to it while keeping this local branch."
 	default:
 		return "Fetch the latest commits and check for conflicts before a separate confirmation."
 	}
@@ -267,12 +290,18 @@ func (option *cardGitOption) request(siteID string, git GitStatus) (ActionReques
 	if option.Kind == "merged" {
 		menu.BaseBranch, menu.Number = "", option.MergedNumber
 	}
+	if option.Kind == "return" {
+		menu.Kind, menu.BaseBranch = "return-status", ""
+	}
 	current := makeCardGitOption(menu, git)
 	if current == nil || current.DisabledReason != "" || current.Kind != option.Kind || current.Branch != option.Branch || current.Head != option.Head || current.Tracking != option.Tracking || current.Target != option.Target || current.MergedNumber != option.MergedNumber {
 		return ActionRequest{}, false
 	}
 	if option.Kind == "merged" {
 		return ActionRequest{SiteID: siteID, Kind: "merged", Branch: option.Branch, Head: option.Head, TargetBranch: option.Target, DeleteBranch: true}, true
+	}
+	if option.Kind == "return" {
+		return ActionRequest{SiteID: siteID, Kind: "switch", Branch: option.Branch, Head: option.Head, TargetBranch: option.Target}, true
 	}
 	if option.Kind == "publish" {
 		return ActionRequest{SiteID: siteID, Kind: "publish", Branch: option.Branch, Head: option.Head}, true
@@ -294,7 +323,7 @@ func validAppBundleID(bundle string) bool {
 // View branch chooses a tab from current local status without changing the
 // clicked metric's identity, which is also used to prepare suggested Git actions.
 func cardMenuViewKind(kind string, git GitStatus) string {
-	if kind == "auto" || kind == "branch" || kind == "edits" || kind == "review-status" {
+	if kind == "auto" || kind == "branch" || kind == "edits" || kind == "review-status" || kind == "return-status" {
 		if git.Changes > 0 || git.Conflicts > 0 || git.Branch == "" || git.LocalNote != "" {
 			return "edits"
 		}
@@ -309,7 +338,7 @@ func (m *siteManager) resolveCardMenuRequest(req cardMenuRequest, git GitStatus)
 }
 
 func cardMenuOffersDiffs(req cardMenuRequest, git GitStatus) bool {
-	if req.Kind == "strip" || (req.Number > 0 && req.Kind != "review-status") || req.BundleID != "" || git.Head == "" || git.LocalNote != "" {
+	if req.Kind == "strip" || req.Kind == "return-status" || (req.Number > 0 && req.Kind != "review-status") || req.BundleID != "" || git.Head == "" || git.LocalNote != "" {
 		return false
 	}
 	if req.Kind == "review-status" {
@@ -342,7 +371,7 @@ func cardMenuLabels(req cardMenuRequest) [4]string {
 	if req.Kind == "site" {
 		return [4]string{"Go to Site desktop", "", "DevJay settings…", "Quit DevJay"}
 	}
-	subject := map[string]string{"auto": "branch", "edits": "branch", "branch": "branch", "local": "local commits", "remote": "remote commits"}[req.Kind]
+	subject := map[string]string{"auto": "branch", "edits": "branch", "branch": "branch", "return-status": "branch", "local": "local commits", "remote": "remote commits"}[req.Kind]
 	return [4]string{"View " + subject, "", "DevJay settings…", "Quit DevJay"}
 }
 

@@ -76,10 +76,20 @@ func (m *siteManager) registerBranchPicker() {
 				if err != nil {
 					return
 				}
-				enriched := *result
-				enriched.Branches = readBranchPullRequests(ctx, r.Site.Path, catalog.Branches)
+				remoteCatalog := discoverSwitchBranches(ctx, r.Site.Path, catalog)
+				discovered := *result
+				discovered.Branches, discovered.Message = remoteCatalog.Branches, remoteCatalog.Message
 				m.send(func() {
 					if !m.currentActionDialog(d, generation, r) || d.action != result {
+						return
+					}
+					d.action = &discovered
+					m.broadcast()
+				})
+				enriched := discovered
+				enriched.Branches = readBranchPullRequests(ctx, r.Site.Path, remoteCatalog.Branches)
+				m.send(func() {
+					if !m.currentActionDialog(d, generation, r) || d.action != &discovered {
 						return
 					}
 					d.cancel, d.action = nil, &enriched

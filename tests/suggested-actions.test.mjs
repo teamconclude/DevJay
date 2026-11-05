@@ -349,6 +349,22 @@ test('branch rows show PR review and CI independently, support PR search, and pr
  assert.match(classNode(root,'branch-pr').className,/pr-approved/);assert.match(classNode(root,'branch-pr').textContent,/CI passed/);
 }));
 
+test('a typed PR number finds a newly discovered remote branch and selects it for confirmation',()=>withDocument(()=>{
+ const root=new Element('root'),calls=[],render=mountSuggestedActions(root,()=>{},(...args)=>calls.push(args)),state=branchState();
+ render(state);
+ const search=nodes(root).find(n=>n.type==='search');search.value='2972';search.oninput();
+ assert.equal(nodes(root).filter(n=>n.className==='branch-choice'&&!n.hidden).length,0);
+ const remote={name:'lars/teams-reply-edit',remote:'origin',local:false};
+ const discovered={...state,action:{...state.action,branches:[...state.action.branches,remote]}};
+ render(discovered);assert.equal(search.value,'2972');
+ assert.equal(nodes(root).filter(n=>n.className==='branch-choice'&&!n.hidden).length,0);
+ render({...discovered,action:{...discovered.action,branches:[...state.action.branches,{...remote,prStatus:'known',pullRequests:[{number:2972,state:'Review required'}]}]}});
+ const rows=nodes(root).filter(n=>n.className==='branch-choice'&&!n.hidden);
+ assert.equal(search.value,'2972');assert.equal(rows.length,1);assert.equal(rows[0].disabled,false);
+ rows[0].onclick();
+ assert.deepEqual(calls,[['action-prepare',{siteID:'site',kind:'switch',branch:'feature',head:'head123456',targetBranch:'lars/teams-reply-edit',targetRemote:'origin',updateTarget:false}]]);
+}));
+
 test('PR enrichment cannot unlock a branch request in flight and delivery failure still permits retry',async()=>{
  const previous=globalThis.document;globalThis.document={createElement:tag=>new Element(tag)};
  try {

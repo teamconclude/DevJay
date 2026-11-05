@@ -309,6 +309,7 @@ function details(site, parent, showIDEStatus) {
   metrics('Branch', [...status.local.filter(item=>item.view!=='edits'),...status.remote]);
   if (status.alert) {
     const row = line(status.alert.text, status.alert.tone, status.alert.symbol, status.alert.title || site.git.localNote || site.git.summary, status.alert.view);
+    if (status.alert.text === 'Remote branch removed') row.dataset.viewKind = 'return-status';
     if (status.alert.publishRebased) row.dataset.publishRebased = 'true';
   }
   if (status.quiet) line(status.quiet, 'good quiet-status', '✓', 'Matches the remote at the last successful check', 'branch');
@@ -321,7 +322,7 @@ function details(site, parent, showIDEStatus) {
       const text = singlePR ? label.replace(/^PR #\d+ · /, '') : label;
       const row = line(text === 'Merged' ? 'PR merged' : text, `pr-status ${status.prTone}`, ['good', 'merged'].includes(status.prTone) ? '✓' : '⑂', status.prTitle, 'edits', prNumber);
       if (label.endsWith(' · Merged')) {
-        row.dataset.viewKind = 'branch';
+        row.dataset.viewKind = 'return-status';
         delete row.dataset.prNumber;
       } else if (prNumber && label.endsWith(' · Review required')) row.dataset.viewKind = 'review-status';
     }
@@ -333,7 +334,7 @@ function details(site, parent, showIDEStatus) {
     metrics(singlePR ? 'Review' : review.label, review.values, review.title, prNumber);
     if (review.note && !review.stale) line(review.note, 'freshness warning', '◷', review.title, 'edits', prNumber);
   }
-  if (status.freshness) line(status.freshness, 'freshness muted', '◷', [site.git.remoteNote, site.git.remoteChecked ? `Last checked ${new Date(site.git.remoteChecked).toLocaleString()}` : ''].filter(Boolean).join('\n'), 'branch');
+  if (status.freshness) line(status.freshness, 'freshness muted', '◷', [site.git.remoteNote, site.git.remoteChecked ? `Last checked ${new Date(site.git.remoteChecked).toLocaleString()}` : ''].filter(Boolean).join('\n'), status.freshness === 'Remote branch removed' ? 'return-status' : 'branch');
   parent.append(body);
   if (siteID && site.git.rebased) {
     const warning = rebasedPublishWarning(site.git);

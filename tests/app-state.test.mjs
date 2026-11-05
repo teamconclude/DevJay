@@ -1273,7 +1273,7 @@ test('approved and merged card PRs are green unless CI needs attention, and draf
  }
 });
 
-test('PR merged status uses branch actions while the numbered badge keeps browser actions',async()=>{
+test('PR merged status uses return actions while the numbered badge keeps browser actions',async()=>{
  for(const search of ['', '?site=a']) {
   const view=app(search),item=site('a','feature');
   item.git={...item.git,summary:'Remote branch removed',tone:'warning',head:'head',defaultBranch:'develop',
@@ -1281,11 +1281,29 @@ test('PR merged status uses branch actions while the numbered badge keeps browse
   view.snapshot(state([item]));
   const row=view.root.querySelector('.pr-status');
   assert.equal(row.textContent,'✓PR merged');
-  assert.deepEqual(cardMenuTarget(row.children[1]),{siteID:'a',kind:'branch',number:0,bundleID:''});
+  assert.deepEqual(cardMenuTarget(row.children[1]),{siteID:'a',kind:'return-status',number:0,bundleID:''});
   assert.equal(cardMenuTarget(view.root.querySelector('.pr-tag')).number,42);
   await row.onclick();
-  assert.deepEqual(view.calls.filter(([name])=>name==='devjay:card-default').map(([,req])=>[req.siteID,req.kind,req.number]),[['a','branch',0]]);
+  assert.deepEqual(view.calls.filter(([name])=>name==='devjay:card-default').map(([,req])=>[req.siteID,req.kind,req.number]),[['a','return-status',0]]);
   assert.equal(view.calls.some(([name])=>name==='devjay:action-prepare'||name==='devjay:action-confirm'),false);
+ }
+});
+
+test('removed remote alert and freshness rows use the same return action as PR merged',async()=>{
+ for(const search of ['', '?site=a']) for(const summary of ['Remote branch removed','Up to date']) {
+  const view=app(search),item=site('a','feature');
+  item.git={...item.git,summary,head:'head',defaultBranch:'develop',remoteNote:'Remote branch no longer exists'};
+  view.snapshot(state([item]));
+  const rows=view.root.querySelectorAll('.status-line').filter(row=>row.textContent.includes('Remote branch removed'));
+  assert.equal(rows.length,1);
+  assert.deepEqual(cardMenuTarget(rows[0]),{siteID:'a',kind:'return-status',number:0,bundleID:''});
+  await rows[0].onclick();
+  const requests=view.calls.filter(([name])=>name==='devjay:card-default').map(([,req])=>req);
+  assert.equal(requests.length,1);
+  assert.equal(requests[0].kind,'return-status');
+  assert.equal(requests[0].branch,'feature');
+  assert.equal(requests[0].head,'head');
+  assert.equal(view.calls.some(([name])=>name==='devjay:action-confirm'),false);
  }
 });
 

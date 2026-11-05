@@ -316,6 +316,36 @@ func TestMergedCardActionAfterRemoteDeletion(t *testing.T) {
 	}
 }
 
+func TestRemovedRemoteCardReturnKeepsUnmergedLocalBranch(t *testing.T) {
+	repo, seed := rebaseFixture(t, false)
+	head := fixtureGit(t, repo, "rev-parse", "HEAD")
+	fixtureGit(t, seed, "push", "origin", "--delete", "feature")
+	status := GitStatus{Branch: "feature", Head: head, DefaultBranch: "develop", Tracking: "origin/feature", Summary: "Remote branch removed"}
+	option := makeCardGitOption(cardMenuRequest{Kind: "return-status"}, status)
+	req, ok := option.request("site", status)
+	if !ok || req.Kind != "switch" || req.DeleteBranch {
+		t.Fatalf("missing safe return request: %+v", req)
+	}
+	before := checkoutFingerprint(t, repo)
+	plan, err := prepareCheckoutAction(context.Background(), repo, req, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after := checkoutFingerprint(t, repo)
+	for key, value := range before {
+		if after[key] != value {
+			t.Fatalf("preparing return changed %s", key)
+		}
+	}
+	result := applyCheckoutAction(context.Background(), plan)
+	if result.Status != "complete" || fixtureGit(t, repo, "branch", "--show-current") != "develop" {
+		t.Fatalf("return did not switch to develop: %+v", result)
+	}
+	if fixtureGit(t, repo, "rev-parse", "refs/heads/feature") != head {
+		t.Fatal("return changed the unmerged local branch")
+	}
+}
+
 func TestRebaseStopsForIgnoredCollisionAndNewUpstream(t *testing.T) {
 	for _, scenario := range []string{"ignored", "upstream"} {
 		t.Run(scenario, func(t *testing.T) {

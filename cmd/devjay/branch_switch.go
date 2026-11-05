@@ -232,6 +232,24 @@ func validateBranchSwitch(ctx context.Context, p *CheckoutPlan, checkRemote bool
 }
 
 func applyBranchSwitch(ctx context.Context, p *CheckoutPlan) error {
+	if p.CreateTarget {
+		// A branch discovered with ls-remote has objects from the private preview
+		// fetch, but may have no tracking ref yet. Create only a missing direct
+		// ref after confirmation, before switching; never replace a concurrent ref
+		// or follow a symbolic ref into a local branch.
+		if _, err := git(ctx, p.path, "symbolic-ref", "-q", p.trackingRef); !exitedWith(err, 1) {
+			return errors.New("The remote tracking reference is symbolic or unavailable. No branch was switched.")
+		}
+		tracked, err := refHead(ctx, p.path, p.trackingRef)
+		if err != nil {
+			return errors.New("Could not read the remote tracking reference. No branch was switched.")
+		}
+		if tracked == "" {
+			if _, err := publishTrackingRef(ctx, p.path, p.trackingRef, p.TargetHead, "", "DevJay: track confirmed remote branch"); err != nil {
+				return errors.New("Could not create the remote tracking reference. No branch was switched; review the action again.")
+			}
+		}
+	}
 	base := []string{"switch", "--no-guess", "--no-overwrite-ignore", "--no-recurse-submodules"}
 	if p.UpdateTarget {
 		if _, err := actionGit(ctx, p.path, append(base, "--detach", p.TargetHead)...); err != nil {

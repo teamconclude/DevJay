@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sort"
 	"strings"
+	"time"
 )
 
 type switchRemoteMapping struct {
@@ -75,6 +76,10 @@ func switchTrackingRef(ctx context.Context, path, remote, branch string) (string
 	if err != nil {
 		return "", err
 	}
+	return mappedSwitchTrackingRef(mappings, remote, branch)
+}
+
+func mappedSwitchTrackingRef(mappings []switchRemoteMapping, remote, branch string) (string, error) {
 	source := "refs/heads/" + branch
 	if excludedSwitchRef(mappings, remote, source) {
 		return "", errors.New("This branch is excluded by the remote fetch configuration.")
@@ -114,7 +119,7 @@ func readSwitchBranches(ctx context.Context, path string) (BranchCatalog, error)
 	if meta.ReadError != nil || meta.Initial || meta.Branch == "(detached)" || meta.OID == "" {
 		return BranchCatalog{}, errors.New("Could not read the current checked-out branch. Refresh the Site and try again.")
 	}
-	result := BranchCatalog{Branch: meta.Branch, Head: meta.OID, Branches: []BranchChoice{}, Message: "Local branches and previously fetched remote branches. Select a branch to check its upstream."}
+	result := BranchCatalog{Branch: meta.Branch, Head: meta.OID, Branches: []BranchChoice{}, Message: "Local and previously fetched remote branches. Checking the remotes for new branches…"}
 	mappings, err := readSwitchRemoteMappings(ctx, path)
 	if err != nil {
 		return result, err
@@ -184,8 +189,19 @@ func readSwitchBranches(ctx context.Context, path string) (BranchCatalog, error)
 			choice.prRemote, choice.prBranch = matches[0].prRemote, matches[0].prBranch
 		}
 	}
-	sort.Slice(result.Branches, func(i, j int) bool {
-		a, b := result.Branches[i], result.Branches[j]
+	sortSwitchBranches(result.Branches)
+	if len(lines) > 1000 || len(result.Branches) > 1000 {
+		if len(result.Branches) > 1000 {
+			result.Branches = result.Branches[:1000]
+		}
+		result.Message += " The list is limited to the first 1,000 refs; use Git for other branches."
+	}
+	return result, nil
+}
+
+func sortSwitchBranches(branches []BranchChoice) {
+	sort.Slice(branches, func(i, j int) bool {
+		a, b := branches[i], branches[j]
 		if a.Current != b.Current {
 			return a.Current
 		}
@@ -197,11 +213,90 @@ func readSwitchBranches(ctx context.Context, path string) (BranchCatalog, error)
 		}
 		return a.Remote < b.Remote
 	})
-	if len(lines) > 1000 || len(result.Branches) > 1000 {
-		if len(result.Branches) > 1000 {
-			result.Branches = result.Branches[:1000]
-		}
-		result.Message += " The list is limited to the first 1,000 refs; use Git for other branches."
+}
+
+// Discover advertised branches without fetching objects or changing any refs.
+// Keep the initial choices usable while this runs, and retain cached choices
+// for unavailable remotes. Preparation still checks and fetches the selected tip.
+func discoverSwitchBranches(ctx context.Context, path string, catalog BranchCatalog) BranchCatalog {
+	result := catalog
+	result.Branches = nil
+	mappings, err := readSwitchRemoteMappings(ctx, path)
+	if err != nil {
+		result.Branches = append([]BranchChoice(nil), catalog.Branches...)
+		result.Message = "Could not check remote branches. Showing local and previously fetched branches."
+		return result
 	}
-	return result, nil
+	checked, attempted := map[string]bool{}, map[string]bool{}
+	discovered := map[string]BranchChoice{}
+	var unavailable []string
+	limited := strings.Contains(catalog.Message, "limited")
+	for _, mapping := range mappings {
+		remote := mapping.remote
+		if mapping.negative || attempted[remote] {
+			continue
+		}
+		if len(attempted) >= 4 {
+			limited = true
+			break
+		}
+		attempted[remote] = true
+		out, err := networkGit(ctx, remoteCommandSlots, 8*time.Second, path, "ls-remote", "--heads", "--refs", "--", remote)
+		if err != nil {
+			unavailable = append(unavailable, remote)
+			continue
+		}
+		checked[remote] = true
+		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+			_, ref, ok := strings.Cut(line, "\t")
+			name, head := strings.CutPrefix(ref, "refs/heads/")
+			if !ok || !head || name == "" || name == "HEAD" || name == "@" || strings.HasPrefix(name, "-") {
+				continue
+			}
+			if _, err := mappedSwitchTrackingRef(mappings, remote, name); err != nil {
+				continue
+			}
+			if len(discovered) >= 1000 {
+				limited = true
+				break
+			}
+			discovered[remote+"\x00"+name] = BranchChoice{Name: name, Remote: remote, prRemote: remote, prBranch: name}
+		}
+	}
+	local := map[string]bool{}
+	for _, choice := range catalog.Branches {
+		if choice.Local {
+			local[choice.Name] = true
+			result.Branches = append(result.Branches, choice)
+		} else if !checked[choice.Remote] {
+			discovered[choice.Remote+"\x00"+choice.Name] = choice
+		}
+	}
+	localRemotes := map[string][]BranchChoice{}
+	for _, choice := range discovered {
+		if local[choice.Name] {
+			localRemotes[choice.Name] = append(localRemotes[choice.Name], choice)
+		} else {
+			result.Branches = append(result.Branches, choice)
+		}
+	}
+	for i := range result.Branches {
+		choice := &result.Branches[i]
+		if matches := localRemotes[choice.Name]; choice.Local && choice.prRemote == "" && len(matches) == 1 {
+			choice.prRemote, choice.prBranch = matches[0].prRemote, matches[0].prBranch
+		}
+	}
+	sortSwitchBranches(result.Branches)
+	result.Message = "Local and remote branches. Selecting a remote branch prepares a local tracking branch; switching requires confirmation."
+	if len(unavailable) > 0 {
+		result.Message += " Could not check " + strings.Join(unavailable, ", ") + "; showing previously fetched branches for those remotes."
+	}
+	if len(result.Branches) > 1000 {
+		result.Branches = result.Branches[:1000]
+		limited = true
+	}
+	if limited {
+		result.Message += " Discovery is limited to four remotes and 1,000 branches; use Git for other branches."
+	}
+	return result
 }

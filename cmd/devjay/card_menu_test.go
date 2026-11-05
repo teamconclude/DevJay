@@ -13,7 +13,7 @@ func TestNormalizeCardMenuRequest(t *testing.T) {
 	if !ok || got.Kind != "site" {
 		t.Fatalf("card background should select desktop navigation: %#v, %v", got, ok)
 	}
-	for _, kind := range []string{"auto", "site", "edits", "branch", "local", "remote"} {
+	for _, kind := range []string{"auto", "site", "edits", "branch", "local", "remote", "return-status"} {
 		req := valid
 		req.Kind = kind
 		if got, ok := normalizeCardMenuRequest(req); !ok || got.Kind != kind {
@@ -25,6 +25,8 @@ func TestNormalizeCardMenuRequest(t *testing.T) {
 		func(r *cardMenuRequest) { r.Kind = "settings" },
 		func(r *cardMenuRequest) { r.BaseBranch = "develop" },
 		func(r *cardMenuRequest) { r.PublishButton = true },
+		func(r *cardMenuRequest) { r.Kind = "return-status"; r.Number = 42 },
+		func(r *cardMenuRequest) { r.Kind = "return-status"; r.BundleID = "app" },
 		func(r *cardMenuRequest) { r.Kind = "branch"; r.BaseBranch = "develop\nother" },
 		func(r *cardMenuRequest) { r.Number = -1 },
 		func(r *cardMenuRequest) { r.BundleID = "app\x00other" },
@@ -178,9 +180,9 @@ func TestMergedCardMenuPreparesDeletionAndRejectsChangedState(t *testing.T) {
 			MergedPR: &MergedPullRequest{Number: 42, Head: "head", SameHead: true, Base: "develop"}}
 	}
 	var option *cardGitOption
-	for _, menu := range []cardMenuRequest{{Kind: "site"}, {Kind: "branch"}, {Kind: "edits"}, {Kind: "site", Number: 42}} {
+	for _, menu := range []cardMenuRequest{{Kind: "site"}, {Kind: "branch"}, {Kind: "edits"}, {Kind: "site", Number: 42}, {Kind: "return-status"}} {
 		option = makeCardGitOption(menu, status())
-		if option == nil || option.DisabledReason != "" || option.title() != "Return to develop & delete branch…" {
+		if option == nil || option.DisabledReason != "" || option.title() != "Return to develop…" {
 			t.Fatalf("missing merged action: %+v", option)
 		}
 		action, ok := option.request("site", status())
@@ -213,6 +215,70 @@ func TestMergedCardMenuPreparesDeletionAndRejectsChangedState(t *testing.T) {
 	dirty.Changes = 1
 	if option := makeCardGitOption(cardMenuRequest{Kind: "branch"}, dirty); option == nil || option.DisabledReason == "" {
 		t.Fatal("dirty merged branch must explain why cleanup is disabled")
+	}
+}
+
+func TestReturnStatusMenuUsesReturnThenViewWithoutReviewOrBrowser(t *testing.T) {
+	m := &siteManager{}
+	for _, merged := range []bool{false, true} {
+		for _, branch := range []string{"develop", "main"} {
+			status := GitStatus{Branch: "feature", Head: "head", DefaultBranch: branch, Tracking: "origin/feature", Summary: "Remote branch removed"}
+			if merged {
+				status.MergedPR = &MergedPullRequest{Number: 42, Head: "head", SameHead: true, Base: branch}
+			}
+			req := m.resolveCardMenuRequest(cardMenuRequest{Kind: "return-status"}, status)
+			option := makeCardGitOption(req, status)
+			if option == nil || option.title() != "Return to "+branch+"…" || firstCardMenuAction(req, option) != cardMenuGitAction {
+				t.Fatalf("missing primary return action: %+v", option)
+			}
+			if labels := cardMenuLabels(req); labels[0] != "View branch" || labels[1] != "" || req.viewDiffs {
+				t.Fatalf("unexpected status actions: %v, review=%v", labels, req.viewDiffs)
+			}
+			for _, action := range []cardMenuAction{cardMenuViewDiffs, cardMenuOpenPR, cardMenuViewNew} {
+				if validCardMenuSelection(req, action, PullRequestLink{}, status) {
+					t.Fatalf("unexpected navigation action %d", action)
+				}
+			}
+			action, ok := option.request("site", status)
+			if !ok || action.TargetBranch != branch || action.DeleteBranch != merged || (!merged && action.Kind != "switch") || (merged && action.Kind != "merged") {
+				t.Fatalf("incorrect return preparation: %+v", action)
+			}
+			if cardMenuViewKind(req.Kind, status) != "branch" {
+				t.Fatal("View branch did not select History")
+			}
+			status.Changes = 1
+			if cardMenuViewKind(req.Kind, status) != "edits" || makeCardGitOption(req, status).DisabledReason == "" {
+				t.Fatal("local edits must remain viewable and block returning")
+			}
+		}
+	}
+}
+
+func TestRemovedRemoteReturnRejectsChangedStateAndOtherGitSuggestions(t *testing.T) {
+	status := GitStatus{Branch: "feature", Head: "head", DefaultBranch: "main", Tracking: "origin/feature", RemoteNote: "Remote branch no longer exists"}
+	menu := cardMenuRequest{Kind: "return-status"}
+	option := makeCardGitOption(menu, status)
+	if option == nil || option.Kind != "return" {
+		t.Fatal("missing return action for the freshness row")
+	}
+	for _, change := range []func(*GitStatus){
+		func(s *GitStatus) { s.Changes = 1 }, func(s *GitStatus) { s.Conflicts = 1 }, func(s *GitStatus) { s.LocalNote = "unavailable" },
+		func(s *GitStatus) { s.Branch = "other" }, func(s *GitStatus) { s.Head = "new" }, func(s *GitStatus) { s.Tracking = "other/feature" },
+		func(s *GitStatus) { s.DefaultBranch = "develop" }, func(s *GitStatus) { s.DefaultBranch = "" }, func(s *GitStatus) { s.IsMainBranch = true },
+		func(s *GitStatus) { s.RemoteNote = "" },
+		func(s *GitStatus) {
+			s.MergedPR = &MergedPullRequest{Number: 42, Head: "head", SameHead: true, Base: "main"}
+		},
+	} {
+		current := status
+		change(&current)
+		if _, ok := option.request("site", current); ok {
+			t.Fatalf("accepted changed return action: %+v", current)
+		}
+	}
+	status.RemoteNote, status.Ahead, status.PushTarget = "", 2, "origin/feature"
+	if makeCardGitOption(menu, status) != nil {
+		t.Fatal("return status must not fall back to a push")
 	}
 }
 
