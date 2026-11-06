@@ -169,11 +169,19 @@ export function createPRReview(root, request) {
     if (!pendingClick || !draft || !snapshot) return;
     const {info,id,body,knownLocation} = pendingClick; pendingClick = null;
     draft.composer = {local:info, id, body, location:knownLocation}; persist();
-    if (knownLocation) { anchorPending = false; composerStatus.textContent = 'Add saves this inline comment to your private pending review on GitHub.'; updateControls(); return; }
+    if (knownLocation) { anchorPending = false; describeLocation(knownLocation); updateControls(); return; }
     anchorPending = true; const idRequest = ++anchorID;
     requestPR('pr-review-anchor', {token:snapshot.token, prAnchor:{id:idRequest, path:info.path, side:info.side, line:info.line, startLine:info.startLine || 0, text:info.text}}).catch(() => { if (anchorID !== idRequest) return; anchorPending = false; composerStatus.textContent = 'Could not check this line. Cancel and try again.'; updateControls(); });
   }
   function hideComposer() { composer.hidden = true; composer.remove(); target = null; comment.value = ''; anchorPending = false; }
+  function describeLocation(location) {
+    const label = location?.summary ? 'Add to review summary' : draft?.composer?.id ? 'Save comment' : 'Add review comment';
+    saveComment.textContent = label;
+    saveComment.setAttribute('aria-label', location?.summary ? label : 'Save inline comment to draft review');
+    composerStatus.textContent = location?.summary
+      ? (location.permalink ? 'Your review summary will include a link to these lines.' : 'Your review summary will reference the file and line numbers as shown locally.')
+      : 'Add saves this inline comment to your private pending review on GitHub.';
+  }
   function allComments() {
     return [...(pendingReview?.comments || []).map(c=>({...c,id:`github-${c.id}`,remoteID:c.id,local:draft?.locations?.[c.id]})), ...(draft?.comments || [])];
   }
@@ -198,6 +206,21 @@ export function createPRReview(root, request) {
   function saveInline() {
     if (!draft?.composer?.location || anchorPending || busy || draft.pending || draft.commentWrite || conflict || !comment.value.trim()) return;
     const c=draft.composer, saved=allComments().find(n=>n.id===c.id);
+    if (c.location.summary) {
+      const ref = c.location;
+      const lines = ref.start_line ? `${ref.start_line}–${ref.line}` : String(ref.line);
+      const label = `${ref.path}:${lines}`.replace(/[\r\n\t]/g, ' ').replace(/[\\\[\]`*_~<>|&]/g, '\\$&');
+      const source = ref.permalink ? `[${label}](<${ref.permalink}>)` : `${label} (${ref.side === 'LEFT' ? 'original' : 'working copy'}, local line numbers)`;
+      const body = [draft.body, `${source}\n\n${comment.value}`].filter(Boolean).join('\n\n');
+      if (new TextEncoder().encode(body).length > 60000) {
+        error = 'The combined review summary exceeds 60,000 bytes. Shorten the summary or this comment and try again.'; updateNotice(); return;
+      }
+      const previous = draft.body;
+      draft.body = body; draft.composer = null;
+      if (!persist()) { draft.body = previous; draft.composer = c; updateControls(); return; }
+      hideComposer(); error = ''; success = 'Comment added to the summary. Submit review to share it on GitHub.';
+      panel.hidden = false; renderDrafts(); summary.focus(); return;
+    }
     queueComment(saved?.remoteID?'update':'add',{...c.location,body:comment.value,remoteID:saved?.remoteID,originalBody:saved?.body},c.local,saved&&!saved.remoteID?saved.id:'');
   }
   function locationText(c) { return `${c.path} · ${c.side === 'LEFT' ? 'original' : 'new'} ${c.start_line ? c.start_line+'–' : ''}${c.line}`; }
@@ -272,7 +295,8 @@ export function createPRReview(root, request) {
     }
     if (anchorPending && state.anchor?.id === anchorID && draft?.composer) {
       anchorPending=false;draft.composer.location=state.anchor.location || null;persist();
-      composerStatus.textContent=state.anchor.error || 'Add saves this inline comment to your private pending review on GitHub.';
+      describeLocation(state.anchor.location);
+      if (state.anchor.error) composerStatus.textContent = state.anchor.error;
     }
     if (state.error) {error=state.error;loadFailed=!snapshot;}
     if(draft?.commentWrite && state.comment?.requestID===draft.commentWrite.requestID && !busy){

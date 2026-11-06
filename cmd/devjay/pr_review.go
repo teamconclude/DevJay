@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -72,14 +73,22 @@ type PRReviewAnchor struct {
 	Text      string `json:"text"`
 }
 
+// Only native inline locations are sent to the comment API. Other locations
+// become references in the editable review summary at the user's request.
+type PRReviewLocation struct {
+	PRReviewDraftComment
+	Summary   bool   `json:"summary,omitempty"`
+	Permalink string `json:"permalink,omitempty"`
+}
+
 type PRReviewAnchorResult struct {
-	ID       uint64                `json:"id"`
-	Location *PRReviewDraftComment `json:"location,omitempty"`
-	Error    string                `json:"error,omitempty"`
+	ID       uint64            `json:"id"`
+	Location *PRReviewLocation `json:"location,omitempty"`
+	Error    string            `json:"error,omitempty"`
 }
 
 // Map only unchanged lines. Local insertions/replacements have no published
-// location, and ranges crossing a local edit must be selected again.
+// location, so they can only be referenced with displayed line numbers.
 func prReviewMapLine(line int, hunks []BranchReviewHunk) int {
 	offset := 0
 	for _, h := range hunks {
@@ -98,9 +107,22 @@ func prReviewMapLine(line int, hunks []BranchReviewHunk) int {
 	return line + offset
 }
 
-func resolvePRReviewAnchor(ctx context.Context, root string, s *PRReviewSnapshot, a PRReviewAnchor) (*PRReviewDraftComment, error) {
+func resolvePRReviewAnchor(ctx context.Context, root string, s *PRReviewSnapshot, a PRReviewAnchor) (*PRReviewLocation, error) {
 	if a.ID == 0 || len(a.Text) > branchReviewFileLimit || !branchReviewSafePath(a.Path) || (a.Side != "LEFT" && a.Side != "RIGHT") {
 		return nil, errors.New("Choose a complete text line in the review.")
+	}
+	lineCount := strings.Count(strings.TrimSuffix(a.Text, "\n"), "\n") + 1
+	start := a.StartLine
+	if start == 0 {
+		start = a.Line
+	}
+	if start < 1 || a.Line < start || a.Line > lineCount || a.Text == "" {
+		return nil, errors.New("Choose a valid line or range.")
+	}
+	// The displayed location is usable even if this text exists only locally.
+	location := &PRReviewLocation{PRReviewDraftComment: PRReviewDraftComment{Path: a.Path, Side: a.Side, Line: a.Line}, Summary: true}
+	if start != a.Line {
+		location.StartLine, location.StartSide = start, a.Side
 	}
 	var file *PRReviewFile
 	for i := range s.Files {
@@ -109,47 +131,36 @@ func resolvePRReviewAnchor(ctx context.Context, root string, s *PRReviewSnapshot
 			break
 		}
 	}
-	if file == nil || len(file.Lines) == 0 {
-		return nil, errors.New("This file has no commentable changes in the pushed PR.")
-	}
 	revision, path := s.Head, a.Path
 	if a.Side == "LEFT" {
 		base, err := viewerGit(ctx, root, "merge-base", "--all", s.Base, s.Head)
 		if err != nil || len(strings.Fields(string(base))) != 1 {
-			return nil, errors.New("The PR's original revision is not available locally. Fetch the branch before commenting on original lines.")
+			return location, nil
 		}
 		revision = strings.TrimSpace(string(base))
-		if file.OldPath != "" {
+		if file != nil && file.OldPath != "" {
 			path = file.OldPath
 		}
 	}
 	text, mode, err := branchReviewBlob(ctx, root, revision, path)
 	if err != nil || mode == "" {
-		return nil, errors.New("The pushed file revision is not available locally. Fetch the branch before commenting on this line.")
-	}
-	localLines := strings.Split(strings.TrimSuffix(a.Text, "\n"), "\n")
-	start := a.StartLine
-	if start == 0 {
-		start = a.Line
-	}
-	if start < 1 || a.Line < start || a.Line > len(localLines) {
-		return nil, errors.New("Choose a valid line or range.")
+		return location, nil
 	}
 	var hunks []BranchReviewHunk
 	if string(text) != a.Text {
 		diff, err := branchReviewTextDiff(ctx, root, text, []byte(a.Text), false)
 		if err != nil {
-			return nil, errors.New("Could not match this line to the pushed PR.")
+			return location, nil
 		}
 		hunks = branchReviewParseHunks(diff)
 	}
 	first, last := prReviewMapLine(start, hunks), prReviewMapLine(a.Line, hunks)
 	if first < 1 || last < first || last-first != a.Line-start {
-		return nil, errors.New("This line or range includes unpublished changes. Push those changes before commenting on them.")
+		return location, nil
 	}
 	for line := start; line <= a.Line; line++ {
 		if prReviewMapLine(line, hunks) != first+line-start {
-			return nil, errors.New("This range crosses unpublished changes. Select unchanged lines instead.")
+			return location, nil
 		}
 	}
 	c := PRReviewDraftComment{Path: a.Path, Side: a.Side, Line: last, Body: "location check"}
@@ -157,11 +168,24 @@ func resolvePRReviewAnchor(ctx context.Context, root string, s *PRReviewSnapshot
 		c.StartLine, c.StartSide = first, a.Side
 	}
 	err = validatePRReviewSubmission(s, PRReviewSubmission{Token: s.Token, RequestID: "location-check-000000", Event: "COMMENT", Comments: []PRReviewDraftComment{c}})
-	if err != nil {
-		return nil, errors.New("This line is outside the PR's commentable diff. Choose a changed line or nearby context.")
-	}
 	c.Body = ""
-	return &c, nil
+	location.PRReviewDraftComment = c
+	if err == nil {
+		location.Summary = false
+		return location, nil
+	}
+	// The selected text exists in this commit, though GitHub cannot anchor
+	// a thread here. A blob permalink can still identify the entire selection.
+	location.Path = path
+	parts := strings.Split(path, "/")
+	for i := range parts {
+		parts[i] = url.PathEscape(parts[i])
+	}
+	location.Permalink = fmt.Sprintf("https://github.com/%s/blob/%s/%s#L%d", s.Repo, revision, strings.Join(parts, "/"), first)
+	if first != last {
+		location.Permalink += fmt.Sprintf("-L%d", last)
+	}
+	return location, nil
 }
 
 type prReviewMetadata struct {

@@ -316,11 +316,11 @@ func TestPRReviewMapsWorkingLinesWithoutPublishingLocalEdits(t *testing.T) {
 	check := func(text, side string, line, start, want int, valid bool) {
 		t.Helper()
 		c, err := resolvePRReviewAnchor(ctx, repo, s, PRReviewAnchor{ID: 1, Path: "app.go", Side: side, Line: line, StartLine: start, Text: text})
-		if valid && (err != nil || c.Line != want) {
+		if valid && (err != nil || c.Summary || c.Line != want) {
 			t.Fatalf("line %d: %+v %v", line, c, err)
 		}
-		if !valid && err == nil {
-			t.Fatalf("accepted unpublished range: %+v", c)
+		if !valid && (err != nil || !c.Summary || c.Permalink != "" || c.Line != line) {
+			t.Fatalf("unpublished range should use local line numbers: %+v %v", c, err)
 		}
 	}
 	check(pushed, "RIGHT", 4, 0, 4, true)
@@ -338,5 +338,44 @@ func TestPRReviewMapsWorkingLinesWithoutPublishingLocalEdits(t *testing.T) {
 	_, err = resolvePRReviewAnchor(ctx, repo, s, PRReviewAnchor{ID: 3, Path: "../app.go", Side: "RIGHT", Line: 1, Text: pushed})
 	if err == nil {
 		t.Fatal("accepted outside path")
+	}
+}
+
+func TestPRReviewSummaryReferencesPinnedLinesOutsidePatch(t *testing.T) {
+	ctx := context.Background()
+	repo := branchReviewFixture(t)
+	const originalName = "old guide #1.txt"
+	const renamed = "new guide #1.txt"
+	const original = "one\ntwo\nthree\nfour\nfive\nsix\n"
+	writeFixture(t, repo, originalName, original)
+	fixtureGit(t, repo, "add", ".")
+	fixtureGit(t, repo, "commit", "-m", "Base text")
+	base := fixtureGit(t, repo, "rev-parse", "HEAD")
+	fixtureGit(t, repo, "mv", originalName, renamed)
+	pushed := strings.Replace(original, "one", "edit", 1)
+	writeFixture(t, repo, renamed, pushed)
+	fixtureGit(t, repo, "add", ".")
+	fixtureGit(t, repo, "commit", "-m", "Rename and revise")
+	s := testPRReviewSnapshot()
+	s.Base, s.Head = base, fixtureGit(t, repo, "rev-parse", "HEAD")
+	s.Files = []PRReviewFile{{Path: renamed, OldPath: originalName, Lines: parsePRReviewPatch("@@ -1 +1 @@\n-one\n+edit")}}
+	for _, tc := range []struct {
+		path, side, text  string
+		start, end        int
+		wantPath, wantURL string
+	}{
+		{renamed, "RIGHT", "local\n" + pushed, 5, 7, renamed, s.Head + "/new%20guide%20%231.txt#L4-L6"},
+		{renamed, "LEFT", original, 2, 2, originalName, base + "/old%20guide%20%231.txt#L2"},
+		{"deleted.txt", "RIGHT", "remove this\n", 1, 1, "deleted.txt", s.Head + "/deleted.txt#L1"},
+		{"untracked.go", "RIGHT", "local only\n", 1, 1, "untracked.go", ""},
+	} {
+		c, err := resolvePRReviewAnchor(ctx, repo, s, PRReviewAnchor{ID: 1, Path: tc.path, Side: tc.side, StartLine: tc.start, Line: tc.end, Text: tc.text})
+		want := tc.wantURL
+		if want != "" {
+			want = "https://github.com/team/project/blob/" + want
+		}
+		if err != nil || !c.Summary || c.Path != tc.wantPath || c.Permalink != want {
+			t.Fatalf("reference for %s %s: %+v %v", tc.path, tc.side, c, err)
+		}
 	}
 }

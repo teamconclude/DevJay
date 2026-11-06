@@ -37,7 +37,7 @@ function viewer(storage=new Map(),failure=false) {
     dispatchEvent(event){event.target??=this;event.currentTarget=this;for(const listener of listeners[event.type]||[])listener(event);return !event.defaultPrevented;}};
   html.append(body);body.append(root);
   const frames=new Map();let frameID=0,closed=0;
-  const context=vm.createContext({document,requestAnimationFrame:fn=>{frames.set(++frameID,fn);return frameID;},cancelAnimationFrame:id=>frames.delete(id),localStorage:{getItem:key=>storage.get(key)||null,setItem:(key,value)=>{if(failure)throw new Error('quota');storage.set(key,value);}}});
+  const context=vm.createContext({document,TextEncoder,requestAnimationFrame:fn=>{frames.set(++frameID,fn);return frameID;},cancelAnimationFrame:id=>frames.delete(id),localStorage:{getItem:key=>storage.get(key)||null,setItem:(key,value)=>{if(failure)throw new Error('quota');storage.set(key,value);}}});
   vm.runInContext(source.replace(/^export /gm,''),context);
   const frame=new Element('section');frame.className='branch-review';const footer=new Element('footer');footer.className='br-footer';const card=new Element('article');card.className='br-file-card';root.append(frame);frame.append(card,footer);
   const requests=[],api=context.createPRReview(root,data=>{requests.push(JSON.parse(JSON.stringify(data)));return true;},()=>closed++);
@@ -92,8 +92,8 @@ test('pending comment edits and deletes address the saved comment instead of mak
  assert.equal(v.requests.at(-1).prComment.action,'update');assert.equal(v.requests.at(-1).prComment.commentID,100);assert.equal(v.requests.at(-1).prComment.originalBody,'Please simplify this.');confirmComment(v);
  button(v,'Delete draft comment on new.go · new 2').click();assert.equal(v.requests.at(-1).prComment.action,'delete');confirmComment(v);assert.equal(v.pending.comments.length,0);
 });
-test('unpublished lines are rejected and stale mapping results cannot move a newer comment',()=>{
- const v=viewer();open(v);v.gutter('RIGHT',1);const id=v.requests.at(-1).prAnchor.id;v.gutter('RIGHT',2);v.api.receive({loadID:1,anchor:{id,location:{path:'new.go',side:'RIGHT',line:99}}});resolve(v,'Unpublished line');const n=field(v,'Review comment (Markdown supported)');n.value='Keep my thought';n.oninput();assert.equal(button(v,'Save inline comment to draft review').disabled,true);
+test('invalid selections are rejected and stale mapping results cannot move a newer comment',()=>{
+ const v=viewer();open(v);v.gutter('RIGHT',1);const id=v.requests.at(-1).prAnchor.id;v.gutter('RIGHT',2);v.api.receive({loadID:1,anchor:{id,location:{path:'new.go',side:'RIGHT',line:99}}});resolve(v,'Invalid selection');const n=field(v,'Review comment (Markdown supported)');n.value='Keep my thought';n.oninput();assert.equal(button(v,'Save inline comment to draft review').disabled,true);
 });
 test('unfinished text survives recreation without posting and cannot be overwritten by a new location',()=>{
  const storage=new Map(),v=viewer(storage);open(v);v.gutter('RIGHT',2);resolve(v);const n=field(v,'Review comment (Markdown supported)');n.value='Unfinished';n.oninput();v.api.destroy();const next=viewer(storage);open(next);finish(next);button(next,'Continue unfinished PR comment').click();next.gutter('RIGHT',3);assert.equal(field(next,'Review comment (Markdown supported)').value,'Unfinished');assert.equal(next.requests.filter(r=>r.prComment).length,0);
@@ -122,4 +122,27 @@ test('storage failures cannot save remote comments and keep the native draft gua
 });
 test('own approvals stay disabled and empty reviews require a summary',()=>{
  const v=viewer();open(v,fixture({viewer:'AUTHOR'}));finish(v);assert.equal(v.root.querySelector('.pr-action').children[1].disabled,true);button(v,'Submit review to GitHub').click();assert.equal(v.requests.length,1);
+});
+
+test('out-of-diff range joins the existing summary and submits with the existing review',()=>{
+ const storage=new Map(), v=viewer(storage), pending=existing(); open(v,fixture({pending}));
+ v.gutter('RIGHT',1); v.gutter('RIGHT',3,{shiftKey:true});
+ const id=v.requests.at(-1).prAnchor.id, permalink='https://github.com/team/project/blob/'+fixture().head+'/new.go#L1-L3';
+ v.api.receive({loadID:1,anchor:{id,location:{path:'new.go',side:'RIGHT',line:3,start_line:1,summary:true,permalink}}});
+ const text=field(v,'Review comment (Markdown supported)');text.value='Consider the caller here.';text.oninput();
+ button(v,'Add to review summary').click();
+ const body=field(v,'Review summary (Markdown supported)').value;
+ assert.equal(body,'Summary started on GitHub\n\n[new.go:1–3](<'+permalink+'>)\n\nConsider the caller here.');
+ assert.equal(v.requests.filter(r=>r.prComment||r.prSubmission).length,0);
+ v.api.destroy(); const next=viewer(storage);open(next,fixture({pending}));finish(next);button(next,'Submit review to GitHub').click();
+ const submission=next.requests.at(-1).prSubmission;assert.equal(submission.reviewID,pending.id);assert.equal(submission.body,body);assert.deepEqual(submission.comments,[]);
+});
+test('a local-only selection uses a labeled reference without sending source or losing oversized text',()=>{
+ const v=viewer();open(v);v.gutter('RIGHT',2);const id=v.requests.at(-1).prAnchor.id;
+ v.api.receive({loadID:1,anchor:{id,location:{path:'new.go',side:'RIGHT',line:2,summary:true}}});
+ const text=field(v,'Review comment (Markdown supported)');text.value='🐦'.repeat(16000);text.oninput();button(v,'Add to review summary').click();
+ assert.equal(text.value.length,32000);assert.match(v.root.querySelector('.pr-notice').textContent,/60,000/);
+ text.value='Check this before pushing';text.oninput();button(v,'Add to review summary').click();
+ assert.equal(field(v,'Review summary (Markdown supported)').value,'new.go:2 (working copy, local line numbers)\n\nCheck this before pushing');
+ button(v,'Submit review to GitHub').click();assert.equal(v.requests.at(-1).prSubmission.reviewID,0);
 });

@@ -46,7 +46,7 @@ int main(void) {
             [js appendFormat:@"\n%@\n",[source stringByReplacingOccurrencesOfString:@"export " withString:@""]];
         }
         [js appendString:@"\nconst saved=new Map();Object.defineProperty(window,'localStorage',{value:{getItem:k=>saved.get(k)||null,setItem:(k,v)=>saved.set(k,v)}});"
-         "const requests=[];let pr,pending=null;const request=r=>{requests.push(r);if(r.operation==='pr-review-anchor')pr.receive({loadID:1,anchor:{id:r.prAnchor.id,location:{path:r.prAnchor.path,side:r.prAnchor.side,line:r.prAnchor.line}}});"
+         "const requests=[];let pr,pending=null;const request=r=>{requests.push(r);if(r.operation==='pr-review-anchor')pr.receive({loadID:1,anchor:{id:r.prAnchor.id,location:{path:r.prAnchor.path,side:r.prAnchor.side,line:r.prAnchor.line,summary:r.prAnchor.line===1}}});"
          "if(r.operation==='pr-review-comment'){const c=r.prComment;pending||={id:70,comments:[],version:'1'};pending={...pending,version:String(Number(pending.version)+1)};if(c.action==='delete')pending.comments=pending.comments.filter(n=>n.id!==c.commentID);else pending.comments.push({...c.comment,id:100,requestID:c.requestID});pr.receive({loadID:1,pending,comment:{requestID:c.requestID,done:true}});}return true;};"
          "const root=document.querySelector('#app');const review=createBranchReview(root,request,{commentLine:(node,info)=>pr.decorateGutter(node,info),beforeRender:card=>pr.beforeRender(card),afterRender:()=>pr.afterRender()});pr=createPRReview(root,request);"
          "const file={path:'app.go',oldText:'before\\nold\\nafter\\n',newText:'before\\nnew\\nafter\\n',hunks:[{oldStart:2,oldLines:1,newStart:2,newLines:1}],commits:[]};"
@@ -85,8 +85,10 @@ int main(void) {
         }
         evaluate(web,@"control('Unified').click();control('Add PR comment on app.go, original line 2').click();void 0");
         check(web,@"document.querySelector('.br-unified')&&document.querySelector('.pr-composer').textContent.includes('Original · 2')&&visible(document.querySelector('.pr-composer'))");
-        evaluate(web,@"control('Cancel inline comment').click();control('Finish PR review').click();const summary=document.querySelector('.pr-summary');summary.value='Overall feedback';summary.dispatchEvent(new Event('input'));control('Submit review to GitHub').click();void 0");
-        check(web,@"requests.at(-1).operation==='pr-review-submit'&&requests.at(-1).prSubmission.body==='Overall feedback'&&control('Submit review to GitHub').disabled");
+        evaluate(web,@"control('Cancel inline comment').click();control('Add PR comment on app.go, new line 1').click();const comment=document.querySelector('.pr-comment-text');comment.value='Check this caller';comment.dispatchEvent(new Event('input'));control('Add to review summary').click();void 0");
+        check(web,@"visible(document.querySelector('.pr-submit-panel'))&&document.querySelector('.pr-summary').value.includes('app.go:1 (working copy, local line numbers)')&&document.activeElement===document.querySelector('.pr-summary')");
+        evaluate(web,@"control('Submit review to GitHub').click();void 0");
+        check(web,@"requests.at(-1).operation==='pr-review-submit'&&requests.at(-1).prSubmission.body.endsWith('Check this caller')&&control('Submit review to GitHub').disabled");
         puts("Integrated PR comment WebKit layout and interaction checks passed");
     }
     return 0;
