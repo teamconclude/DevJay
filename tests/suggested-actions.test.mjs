@@ -264,6 +264,27 @@ test('optional merged-branch deletion requires a newly prepared confirmation',()
  nodes(root).find(n=>n.tag==='button'&&n.textContent==='Return to develop & delete branch').onclick();assert.deepEqual(calls[1],['action-confirm','new']);
 }));
 
+test('approved return names the open PR and requires a click to delete the local branch',t=>withDocument(()=>{
+ t.mock.timers.enable({apis:['setTimeout','Date'],now:1000});
+ const root=new Element('root'),calls=[];
+ const render=mountSuggestedActions(root,()=>{},(...args)=>calls.push(args));
+ const site={id:'site',git:{branch:'feature',defaultBranch:'develop'}};
+ const plan={id:'delete',kind:'approved',approvedPR:{number:42},branch:'feature',head:'tip',target:'develop',targetHead:'base',deleteBranch:true};
+ const state={suggestedSite:'site',sites:[site],action:{siteID:'site',kind:'approved',status:'ready',plan}};
+ render(state);
+ assert.match(suggestionSteps(plan,true).join(' '),/PR #42 is still open and approved/);
+ assert.equal(classNode(root,'action-countdown').hidden,true);
+ t.mock.timers.tick(10000);assert.deepEqual(calls,[]);
+ const checkbox=nodes(root).find(n=>n.tag==='input'&&n.type==='checkbox'&&n.className==='');
+ assert.equal(checkbox.checked,true);assert.equal(checkbox.disabled,false);
+ assert.equal(classNode(root,'suggestion-primary').textContent,'Return to develop & delete branch');
+ checkbox.checked=false;checkbox.onchange();
+ assert.deepEqual(calls,[['action-prepare',{siteID:'site',kind:'approved',branch:'feature',head:'tip',targetBranch:'develop',deleteBranch:false}]]);
+ render({...state,action:{...state.action,plan:{...plan,id:'keep',deleteBranch:false}}});
+ classNode(root,'suggestion-primary').onclick();
+ assert.deepEqual(calls[1],['action-confirm','keep']);
+}));
+
 test('return discloses default replacement and preserves both recovery references',()=>withDocument(()=>{
  const root=new Element('root'),calls=[];
  const render=mountSuggestedActions(root,()=>{},(...args)=>calls.push(args));

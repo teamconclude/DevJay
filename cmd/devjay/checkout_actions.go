@@ -14,20 +14,22 @@ import (
 )
 
 type ActionRequest struct {
-	Anchor       *cardAnchor `json:"anchor,omitempty"`
-	RequestID    string      `json:"requestID,omitempty"`
-	SiteID       string      `json:"siteID"`
-	Kind         string      `json:"kind"`
-	Branch       string      `json:"branch"`
-	Head         string      `json:"head"`
-	DeleteBranch bool        `json:"deleteBranch"`
-	TargetBranch string      `json:"targetBranch,omitempty"`
-	TargetRemote string      `json:"targetRemote,omitempty"`
-	UpdateTarget bool        `json:"updateTarget,omitempty"`
+	approvedPR   *approvedBranchPR // Supplied only by the card menu or its existing confirmation.
+	Anchor       *cardAnchor       `json:"anchor,omitempty"`
+	RequestID    string            `json:"requestID,omitempty"`
+	SiteID       string            `json:"siteID"`
+	Kind         string            `json:"kind"`
+	Branch       string            `json:"branch"`
+	Head         string            `json:"head"`
+	DeleteBranch bool              `json:"deleteBranch"`
+	TargetBranch string            `json:"targetBranch,omitempty"`
+	TargetRemote string            `json:"targetRemote,omitempty"`
+	UpdateTarget bool              `json:"updateTarget,omitempty"`
 }
 
 type CheckoutPlan struct {
-	Commits                                                            int `json:"commits,omitempty"`
+	ApprovedPR                                                         *approvedBranchPR `json:"approvedPR,omitempty"`
+	Commits                                                            int               `json:"commits,omitempty"`
 	branchGeneration                                                   string
 	ID                                                                 string    `json:"id"`
 	Kind                                                               string    `json:"kind"`
@@ -193,7 +195,7 @@ func prepareCheckoutAction(ctx context.Context, path string, req ActionRequest, 
 			return nil, errors.New("A matching origin upstream is required. Publish this branch manually.")
 		}
 		p.Target, p.remote, p.remoteRef, p.trackingRef = s.Tracking, m.Remote, m.Merge, m.Ref
-	case "merged", "rebase":
+	case "merged", "approved", "rebase":
 		if m.DefaultBranch == "" || s.IsMainBranch {
 			return nil, errors.New("Could not determine a different default branch.")
 		}
@@ -208,10 +210,18 @@ func prepareCheckoutAction(ctx context.Context, path string, req ActionRequest, 
 			if merged == nil {
 				return nil, errors.New("The merged PR is no longer available. Refresh the Site.")
 			}
-			p.DeleteBranch = req.DeleteBranch
 			if !mergedPRMatchesBranch(merged, m) || merged.Base != p.Target {
 				return nil, errors.New("This branch does not exactly match a PR merged into the default branch. No checkout changes were made.")
 			}
+		}
+		if req.Kind == "approved" {
+			if !req.approvedPR.matchesCheckout(s, m) {
+				return nil, errors.New("The approved PR and its upstream must match the current checkout.")
+			}
+			p.ApprovedPR = req.approvedPR
+		}
+		if p.returnsToDefault() {
+			p.DeleteBranch = req.DeleteBranch
 			p.switchTarget, err = readSwitchBranch(ctx, path, p.Target)
 			p.targetLocalHead = p.switchTarget.head
 			if err != nil {
@@ -241,7 +251,7 @@ func prepareCheckoutAction(ctx context.Context, path string, req ActionRequest, 
 		return nil, errors.New("The remote branch is unavailable.")
 	}
 	old := p.Head
-	if p.Kind == "merged" {
+	if p.returnsToDefault() {
 		old = p.targetLocalHead
 	}
 	if p.Kind == "push" {
@@ -267,14 +277,14 @@ func prepareCheckoutAction(ctx context.Context, path string, req ActionRequest, 
 	}
 	if p.Kind != "rebase" && !isPushAction(p.Kind) && p.Kind != "replace" && old != "" {
 		if _, err := git(ctx, path, "merge-base", "--is-ancestor", old, p.TargetHead); err != nil {
-			if p.Kind != "merged" || !exitedWith(err, 1) {
+			if !p.returnsToDefault() || !exitedWith(err, 1) {
 				branch := p.Branch
-				if p.Kind == "merged" {
+				if p.returnsToDefault() {
 					branch = p.Target
 				}
 				return nil, fmt.Errorf("Local branch %s cannot be fast-forwarded. Update it manually; no checkout changes were made.", branch)
 			}
-			// Returning after a verified merge may replace a stale default branch,
+			// A confirmed return may replace a stale default branch,
 			// but the confirmation must disclose the replacement and retain its tip.
 			p.ReplaceDefault = true
 			p.RemoteTarget = strings.TrimPrefix(p.trackingRef, "refs/remotes/")
@@ -311,7 +321,7 @@ func prepareCheckoutAction(ctx context.Context, path string, req ActionRequest, 
 			return nil, errors.New("The branches changed during the check. Review the action again.")
 		}
 	}
-	if err := validateCheckoutPlan(ctx, p, false); err != nil {
+	if err := validateCheckoutPlan(ctx, p, p.Kind == "approved"); err != nil {
 		return nil, err
 	}
 	return p, nil
@@ -329,7 +339,7 @@ func validateCheckoutPlan(ctx context.Context, p *CheckoutPlan, checkRemote bool
 	if err != nil || p.gitDirInfo == nil || !os.SameFile(info, p.gitDirInfo) || gitString(ctx, p.path, "rev-parse", "--absolute-git-dir") != p.gitDir {
 		return errors.New("The checkout folder was replaced. Review the action again.")
 	}
-	_, m, err := inspectActionCheckout(ctx, p.path, p.Kind == "push")
+	s, m, err := inspectActionCheckout(ctx, p.path, p.Kind == "push")
 	if err != nil {
 		return err
 	}
@@ -351,12 +361,22 @@ func validateCheckoutPlan(ctx context.Context, p *CheckoutPlan, checkRemote bool
 	if p.Kind != "update" && !isPushAction(p.Kind) && p.Kind != "replace" && (m.DefaultBranch != p.Target || m.DefaultRef != p.trackingRef) {
 		return errors.New("The default branch changed. Review the action again.")
 	}
+	if p.Kind == "approved" {
+		if !p.ApprovedPR.matchesCheckout(s, m) {
+			return errors.New("The checkout no longer matches the approved PR and its upstream.")
+		}
+		if checkRemote {
+			if err := p.ApprovedPR.verifyPublished(ctx, p); err != nil {
+				return err
+			}
+		}
+	}
 	if p.Kind == "replace" {
 		if err := validateReplacement(ctx, p, m); err != nil {
 			return err
 		}
 	}
-	if p.Kind == "merged" {
+	if p.returnsToDefault() {
 		target, err := readSwitchBranch(ctx, p.path, p.Target)
 		if err != nil || target != p.switchTarget || branchInOtherWorktree(ctx, p.path, p.Target) {
 			return errors.New("The local default branch changed or is in use elsewhere. Review the action again.")
@@ -385,9 +405,7 @@ func validateCheckoutPlan(ctx context.Context, p *CheckoutPlan, checkRemote bool
 		}
 	}
 	if checkRemote {
-		out, err := actionGit(ctx, p.path, "ls-remote", "--exit-code", "--heads", "--", p.remote, p.remoteRef)
-		fields := strings.Fields(string(out))
-		if err != nil || len(fields) != 2 || fields[0] != p.TargetHead || fields[1] != p.remoteRef {
+		if !remoteBranchAt(ctx, p.path, p.remote, p.remoteRef, p.TargetHead) {
 			if isPublishAction(p.Kind) || p.Kind == "rebase" {
 				return errors.New("The remote changed or could not be verified. The action was stopped." + manualPublish)
 			}
@@ -395,6 +413,12 @@ func validateCheckoutPlan(ctx context.Context, p *CheckoutPlan, checkRemote bool
 		}
 	}
 	return nil
+}
+
+func remoteBranchAt(ctx context.Context, path, remote, ref, head string) bool {
+	out, err := actionGit(ctx, path, "ls-remote", "--exit-code", "--heads", "--", remote, ref)
+	fields := strings.Fields(string(out))
+	return err == nil && len(fields) == 2 && fields[0] == head && fields[1] == ref
 }
 
 func applyCheckoutAction(ctx context.Context, p *CheckoutPlan) (result CheckoutAction) {
@@ -422,7 +446,7 @@ func applyCheckoutAction(ctx context.Context, p *CheckoutPlan) (result CheckoutA
 		}
 		result.CurrentBranch, result.CurrentHead = s.Branch, meta.OID
 		branch := p.Branch
-		if p.Kind == "merged" || p.Kind == "switch" {
+		if p.returnsToDefault() || p.Kind == "switch" {
 			branch = p.Target
 		}
 		if result.Status == "complete" && (meta.Branch != branch || meta.OID != expectedResultHead) {
@@ -548,11 +572,11 @@ func applyCheckoutAction(ctx context.Context, p *CheckoutPlan) (result CheckoutA
 		result.Status, result.Message = "complete", "Replaced "+p.Branch+" with the confirmed "+p.Target+" history. Original commits remain in the recovery reference. Nothing was pushed."
 		return result
 	}
-	if p.Kind == "merged" && p.ReplaceDefault {
+	if p.returnsToDefault() && p.ReplaceDefault {
 		if err := replaceDefaultForReturn(ctx, p, &result); err != nil {
 			return fail(err)
 		}
-	} else if p.Kind == "merged" {
+	} else if p.returnsToDefault() {
 		args := []string{"switch", "--no-guess", "--no-overwrite-ignore", "--no-recurse-submodules"}
 		if p.targetLocalHead == "" {
 			args = append(args, "--create", p.Target, "--no-track", p.TargetHead)
@@ -569,7 +593,7 @@ func applyCheckoutAction(ctx context.Context, p *CheckoutPlan) (result CheckoutA
 		}
 	}
 	expectedBranch, expectedHead := p.Branch, p.Head
-	if p.Kind == "merged" {
+	if p.returnsToDefault() {
 		expectedBranch, expectedHead = p.Target, p.targetLocalHead
 		if expectedHead == "" || p.ReplaceDefault {
 			expectedHead = p.TargetHead
@@ -578,7 +602,7 @@ func applyCheckoutAction(ctx context.Context, p *CheckoutPlan) (result CheckoutA
 	_, current, err := cleanCheckout(ctx, p.path)
 	if err != nil || current.Branch != expectedBranch || current.OID != expectedHead {
 		if p.ReplaceDefault {
-			return fail(fmt.Errorf("The checkout changed after updating %s. The merged branch was kept and the previous default tip is preserved in its recovery reference. Inspect the checkout manually.", p.Target))
+			return fail(fmt.Errorf("The checkout changed after updating %s. The feature branch was kept and the previous default tip is preserved in its recovery reference. Inspect the checkout manually.", p.Target))
 		}
 		return fail(errors.New("The checkout changed during the operation. Stopped before updating or deleting any branch."))
 	}
@@ -588,6 +612,11 @@ func applyCheckoutAction(ctx context.Context, p *CheckoutPlan) (result CheckoutA
 		}
 	}
 	if p.DeleteBranch {
+		if p.Kind == "approved" {
+			if err := p.ApprovedPR.verifyPublished(ctx, p); err != nil {
+				return fail(fmt.Errorf("Switched to %s and kept the local branch %s. %w", p.Target, p.Branch, err))
+			}
+		}
 		state, current, err := cleanCheckout(ctx, p.path)
 		if err != nil && current.ReadError == nil && current.Branch == p.Target && current.OID == p.TargetHead && state.Changes > 0 {
 			result.Status, result.Message = "complete", "Updated "+p.Target+" from the remote. Kept local branch "+p.Branch+" because edits appeared before deletion. Nothing was pushed."

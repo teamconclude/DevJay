@@ -37,11 +37,16 @@ func pullRequestHeads(data []byte, repo string) map[int]string {
 	return heads
 }
 
+// Full refreshes and lightweight checks must observe the same PR fields.
+func listOpenBranchPRs(ctx context.Context, m gitMeta) ([]byte, error) {
+	return runCommand(ctx, 15*time.Second, "gh", "pr", "list", "--repo", m.GitHubRepo, "--head", m.pullRequestBranch(),
+		"--state", "open", "--limit", "20", "--json", approvedPRFields+",statusCheckRollup")
+}
+
 // Recent interaction uses a small status query without a
 // fetch or review bodies. A changed PR/head requests a full refresh.
 func refreshPullRequestChecks(ctx context.Context, m gitMeta, cache *remoteCache) bool {
-	out, err := runCommand(ctx, 15*time.Second, "gh", "pr", "list", "--repo", m.GitHubRepo, "--head", m.pullRequestBranch(),
-		"--state", "open", "--limit", "20", "--json", "number,isDraft,reviewDecision,headRepositoryOwner,headRefOid,statusCheckRollup")
+	out, err := listOpenBranchPRs(ctx, m)
 	cache.ChecksAttempted = time.Now()
 	heads := pullRequestHeads(out, m.GitHubRepo)
 	if err != nil || heads == nil {
@@ -49,6 +54,7 @@ func refreshPullRequestChecks(ctx context.Context, m gitMeta, cache *remoteCache
 		cache.PullRequests = slices.Clone(cache.PullRequests)
 		for i := range cache.PullRequests {
 			cache.PullRequests[i].CIState = "unknown"
+			cache.PullRequests[i].approvedReturn = nil
 		}
 		return false
 	}

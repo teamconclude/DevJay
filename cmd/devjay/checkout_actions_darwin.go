@@ -44,7 +44,7 @@ func (m *siteManager) cardUpdateSource(req ActionRequest, sender string) *applic
 		return nil
 	}
 	option := makeCardSyncOption("update", site.Git)
-	if _, ok := option.request(req.SiteID, site.Git); !ok {
+	if option == nil || option.DisabledReason != "" {
 		return nil
 	}
 	return parent
@@ -57,7 +57,7 @@ func (m *siteManager) prepareAction(req ActionRequest, r *siteRuntime, parent *a
 		m.actionReply(req.RequestID, "The Site is not ready or an action is already running for this Site. Refresh and try again.")
 		return
 	}
-	title := map[string]string{"switch": "Confirm branch switch", "replace": "Confirm branch replacement", "push": "Confirm push", "publish": "Confirm rebased push", "update": "Confirm branch update", "rebase": "Confirm rebase", "rebase-push": "Rebase and push", "merged": "Confirm return to default branch"}[req.Kind]
+	title := map[string]string{"switch": "Confirm branch switch", "replace": "Confirm branch replacement", "push": "Confirm push", "publish": "Confirm rebased push", "update": "Confirm branch update", "rebase": "Confirm rebase", "rebase-push": "Rebase and push", "merged": "Confirm return to default branch", "approved": "Confirm return to default branch"}[req.Kind]
 	if title == "" {
 		m.actionReply(req.RequestID, "Unknown action.")
 		return
@@ -140,6 +140,16 @@ func (m *siteManager) registerCheckoutActions() {
 			if req.Kind == "switch" && !branchSwitchPreparationAllowed(d, req.SiteID) {
 				m.actionReply(req.RequestID, "Choose a branch from this Site's branch picker before continuing.")
 				return
+			}
+			if req.Kind == "approved" {
+				// Only an existing approved-return dialog can change its deletion choice.
+				// Always keep the PR captured from the native menu.
+				if d == nil || d.action == nil || d.action.Plan == nil || d.action.Plan.ApprovedPR == nil ||
+					req.Branch != d.action.Plan.Branch || req.Head != d.action.Plan.Head || req.TargetBranch != d.action.Plan.Target {
+					m.actionReply(req.RequestID, "Open this action from the approved branch’s card menu.")
+					return
+				}
+				req.approvedPR = d.action.Plan.ApprovedPR
 			}
 			var parent *application.WebviewWindow
 			if d != nil {

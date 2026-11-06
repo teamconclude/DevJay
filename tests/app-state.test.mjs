@@ -552,6 +552,24 @@ test('PR tags live in card headers, open the PR, and disappear when the PR is go
  }
 });
 
+test('approved status and review badges identify the PR for local cleanup menus',async()=>{
+ for(const search of ['', '?site=a']) {
+  const view=app(search), item=site('a');
+  item.git={branch:'feature',head:'tip',summary:'Up to date',github:'PR #42 · Approved',pullRequests:[{number:42,state:'Approved'}]};
+  for(const reviews of [[],[{number:42,blockers:0,warnings:0}]]) {
+   item.git={...item.git,reviews};
+   view.snapshot(state([item]));
+   const approved=view.root.querySelector(reviews.length ? '.metric' : '.pr-status');
+   assert.deepEqual(cardMenuTarget(approved),{siteID:'a',kind:'pr-status',number:42,bundleID:''});
+   assert.equal(cardMenuTarget(view.root.querySelector('.quiet-status')).kind,'branch');
+   assert.equal(cardMenuTarget(view.root.querySelector('.card-title')).kind,'auto');
+   assert.equal(cardMenuTarget(view.root.querySelector('.pr-tag')).kind,'site');
+   await approved.onclick();
+   assert.equal(view.calls.at(-1)[1].kind,'pr-status');
+  }
+ }
+});
+
 test('failed CI marks only its PR tag, preserves review state, and opens the same PR',async()=>{
  for(const search of ['', '?site=a']) {
   const view=app(search), item=site('a');
@@ -1368,7 +1386,7 @@ test('stale review counts stay gray, use their review menu action, and regain co
   assert.equal(current.querySelectorAll('.metric').length,1);
   assert.equal(current.querySelector('.metric').textContent,'✓No findings');
   assert.ok(current.querySelector('.metric').classList.contains('good'));
-  assert.equal(cardMenuTarget(current.querySelector('.metric')).kind,'site');
+  assert.equal(cardMenuTarget(current.querySelector('.metric')).kind,'pr-status');
   assert.doesNotMatch(current.attrs['aria-label'],/Stale review/);
  }
 });

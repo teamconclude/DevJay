@@ -514,7 +514,7 @@ func refreshRemote(ctx context.Context, m gitMeta, c *remoteCache) {
 	c.PullRequests = nil
 	c.MergedPR = nil
 	if m.GitHubRepo != "" && m.Branch != "(detached)" && !m.Initial {
-		out, err := runCommand(ctx, 15*time.Second, "gh", "pr", "list", "--repo", m.GitHubRepo, "--head", m.pullRequestBranch(), "--state", "open", "--limit", "20", "--json", "number,isDraft,reviewDecision,headRepositoryOwner,headRefOid,statusCheckRollup")
+		out, err := listOpenBranchPRs(ctx, m)
 		c.ChecksAttempted = time.Now()
 		c.CheckHeads = pullRequestHeads(out, m.GitHubRepo)
 		c.ChecksRetry = err != nil || c.CheckHeads == nil

@@ -44,52 +44,36 @@ static NSPoint card_menu_screen_point(NSPoint point, NSSize size, NSRect visible
 
 // Invoked on AppKit's main thread. The target and menu belong to this single
 // tracking loop; no registrations or callbacks survive its return.
-int devjay_card_menu(void *pointer, double x, double y, const char *first, const char *second, const char *settings, const char *quit, const char *newPRTab, const char *action, const char *actionDisabled, const char *hint, int strip, int siteWindowsHidden, int viewDiffs, int reviewStatus, int primaryAction) {
+int devjay_card_menu(void *pointer, double x, double y, const char *itemsJSON) {
     if (![NSThread isMainThread] || !pointer || !isfinite(x) || !isfinite(y)) return 0;
     @autoreleasepool {
         NSWindow *window = (NSWindow *)pointer;
         WKWebView *view = card_menu_webview(window.contentView);
         if (!view || !window.visible || x < 0 || y < 0 || x > NSWidth(view.bounds) || y > NSHeight(view.bounds)) return 0;
-        NSString *firstTitle = first ? [NSString stringWithUTF8String:first] : nil;
-        NSString *secondTitle = second ? [NSString stringWithUTF8String:second] : nil;
-        NSString *settingsTitle = settings ? [NSString stringWithUTF8String:settings] : nil;
-        NSString *quitTitle = quit ? [NSString stringWithUTF8String:quit] : nil;
-        NSString *newPRTabTitle = newPRTab ? [NSString stringWithUTF8String:newPRTab] : @"";
-        NSString *actionTitle = action ? [NSString stringWithUTF8String:action] : @"";
-        NSString *disabledReason = actionDisabled ? [NSString stringWithUTF8String:actionDisabled] : @"";
-        NSString *hintText = hint ? [NSString stringWithUTF8String:hint] : @"";
-        if (!firstTitle || !secondTitle || !settingsTitle.length || !quitTitle.length || !newPRTabTitle || !actionTitle || !disabledReason || !hintText) return 0;
-        if (!firstTitle.length && (secondTitle.length || (!actionTitle.length && !strip))) return 0;
+        if (!itemsJSON) return 0;
+        NSData *data = [NSData dataWithBytes:itemsJSON length:strlen(itemsJSON)];
+        NSArray *rows = [NSJSONSerialization JSONObjectWithData:data options:0 error:NULL];
+        if (![rows isKindOfClass:NSArray.class] || !rows.count) return 0;
 
         DevJayCardMenuSelection *selection = [[[DevJayCardMenuSelection alloc] init] autorelease];
         NSMenu *menu = [[[NSMenu alloc] initWithTitle:@""] autorelease];
         menu.autoenablesItems = NO;
         menu.allowsContextMenuPlugIns = NO;
         menu.delegate = selection;
-        NSArray<NSString *> *titles = @[actionTitle, firstTitle, reviewStatus ? @"" : secondTitle, viewDiffs ? @"Review" : @"", reviewStatus ? secondTitle : @"", reviewStatus ? newPRTabTitle : @"", strip ? @"Minimize strip" : @"", strip ? @"Hide strip" : @"", strip ? (siteWindowsHidden ? @"Show site windows" : @"Hide site windows") : @"", settingsTitle, quitTitle];
-        const NSInteger tags[] = {5, 1, 2, 10, 11, 2, 6, 7, siteWindowsHidden ? 9 : 8, 3, 4};
-        for (NSUInteger index = 0; index < titles.count; index++) {
-            if (!titles[index].length) continue;
-            if ((tags[index] == 6 || (tags[index] == 3 && !strip)) && menu.numberOfItems) [menu addItem:[NSMenuItem separatorItem]];
-            NSMenuItem *item = [[[NSMenuItem alloc] initWithTitle:titles[index] action:@selector(selectItem:) keyEquivalent:@""] autorelease];
-            item.target = selection;
-            item.tag = tags[index];
-            if (item.tag == 10) item.toolTip = @"Compare the branch fork point with current files, including uncommitted edits";
-            if (item.tag == 6) item.toolTip = @"Show a single row of Site names";
-            if (item.tag == 7) item.toolTip = @"Hide the strip completely";
-            if (item.tag == 8 || item.tag == 9) item.toolTip = @"Hide or restore independent Site windows without changing the strip";
-            if (item.tag == 5) {
-                item.enabled = !disabledReason.length;
-                item.toolTip = disabledReason.length ? disabledReason : hintText;
+        for (NSDictionary *row in rows) {
+            if (![row isKindOfClass:NSDictionary.class] || ![row[@"action"] isKindOfClass:NSNumber.class]) return 0;
+            NSInteger action = [row[@"action"] integerValue];
+            if (action == 0) {
+                [menu addItem:[NSMenuItem separatorItem]];
+                continue;
             }
-            [menu addItem:item];
-        }
-        NSMenuItem *primary = primaryAction > 0 ? [menu itemWithTag:primaryAction] : nil;
-        if (primary && [menu indexOfItem:primary] > 0) {
-            [primary retain];
-            [menu removeItem:primary];
-            [menu insertItem:primary atIndex:0];
-            [primary release];
+            NSString *title = row[@"title"];
+            if (![title isKindOfClass:NSString.class] || !title.length) return 0;
+            NSMenuItem *item = [menu addItemWithTitle:title action:@selector(selectItem:) keyEquivalent:@""];
+            item.target = selection;
+            item.tag = action;
+            item.enabled = ![row[@"disabled"] boolValue];
+            item.toolTip = row[@"hint"];
         }
         NSPoint point = NSMakePoint(NSMinX(view.bounds) + x,
             view.isFlipped ? NSMinY(view.bounds) + y : NSMaxY(view.bounds) - y);

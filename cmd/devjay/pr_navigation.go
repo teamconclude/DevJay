@@ -10,12 +10,13 @@ import (
 // URLs are derived from verified repository identity and PR numbers, never
 // supplied by a frontend event or copied from arbitrary GitHub response text.
 type PullRequestLink struct {
-	Number      int                `json:"number"`
-	URL         string             `json:"url"`
-	State       string             `json:"state"`
-	IsDraft     bool               `json:"isDraft"`
-	CIState     string             `json:"ciState,omitempty"`
-	OtherAuthor *PullRequestAuthor `json:"otherAuthor,omitempty"`
+	approvedReturn *approvedBranchPR
+	Number         int                `json:"number"`
+	URL            string             `json:"url"`
+	State          string             `json:"state"`
+	IsDraft        bool               `json:"isDraft"`
+	CIState        string             `json:"ciState,omitempty"`
+	OtherAuthor    *PullRequestAuthor `json:"otherAuthor,omitempty"`
 }
 
 type prOpenRequest struct {
@@ -61,6 +62,7 @@ func openPullRequestLinks(data []byte, repo string) []PullRequestLink {
 		}
 		if link, ok := pullRequestLink(repo, pr.Number, state, pr.IsDraft); ok {
 			link.CIState = pullRequestCIState(pr)
+			link.approvedReturn = pr.approvedReturn(repo)
 			result = append(result, link)
 			seen[pr.Number] = true
 		}

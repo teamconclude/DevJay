@@ -3,13 +3,12 @@ package main
 /*
 #cgo LDFLAGS: -framework AppKit -framework WebKit
 #include <stdlib.h>
-int devjay_card_menu(void *window, double x, double y, const char *first, const char *second, const char *settings, const char *quit, const char *newPRTab, const char *action, const char *disabledReason, const char *hint, int strip, int siteWindowsHidden, int viewDiffs, int reviewStatus, int primaryAction);
+int devjay_card_menu(void *window, double x, double y, const char *itemsJSON);
 */
 import "C"
 
 import (
 	"encoding/json"
-	"fmt"
 	"unsafe"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -17,47 +16,16 @@ import (
 
 // Run off the manager queue: AppKit tracks the menu synchronously until it is
 // dismissed. A per-popup result avoids mutable context-menu callback targets.
-func showCardMenu(window *application.WebviewWindow, req cardMenuRequest, option *cardGitOption, strip, siteWindowsHidden bool) cardMenuAction {
-	labels := cardMenuLabels(req)
-	actionTitle, actionReason, hintText := "", "", ""
-	if option != nil {
-		actionTitle, actionReason, hintText = option.title(), option.DisabledReason, option.tooltip()
+func showCardMenu(window *application.WebviewWindow, req cardMenuRequest, items []cardMenuItem) cardMenuAction {
+	data, err := json.Marshal(items)
+	if err != nil {
+		return cardMenuDismissed
 	}
-	actionLabel, disabled, hint := C.CString(actionTitle), C.CString(actionReason), C.CString(hintText)
-	defer C.free(unsafe.Pointer(actionLabel))
-	defer C.free(unsafe.Pointer(disabled))
-	defer C.free(unsafe.Pointer(hint))
-	first, second, settings := C.CString(labels[0]), C.CString(labels[1]), C.CString(labels[2])
-	quit := C.CString(labels[3])
-	defer C.free(unsafe.Pointer(first))
-	defer C.free(unsafe.Pointer(second))
-	defer C.free(unsafe.Pointer(settings))
-	defer C.free(unsafe.Pointer(quit))
-	newPRTabTitle := ""
-	if req.Kind == "review-status" {
-		newPRTabTitle = fmt.Sprintf("Open PR #%d in new browser tab", req.Number)
-	}
-	newPRTab := C.CString(newPRTabTitle)
-	defer C.free(unsafe.Pointer(newPRTab))
-	var stripMenu C.int
-	if strip {
-		stripMenu = 1
-	}
-	var sitesHidden C.int
-	if siteWindowsHidden {
-		sitesHidden = 1
-	}
-	var viewDiffs C.int
-	if req.viewDiffs {
-		viewDiffs = 1
-	}
-	var reviewStatus C.int
-	if req.Kind == "review-status" {
-		reviewStatus = 1
-	}
+	encoded := C.CString(string(data))
+	defer C.free(unsafe.Pointer(encoded))
 	var selected C.int
 	application.InvokeSync(func() {
-		selected = C.devjay_card_menu(window.NativeWindow(), C.double(req.X), C.double(req.Y), first, second, settings, quit, newPRTab, actionLabel, disabled, hint, stripMenu, sitesHidden, viewDiffs, reviewStatus, C.int(firstCardMenuAction(req, option)))
+		selected = C.devjay_card_menu(window.NativeWindow(), C.double(req.X), C.double(req.Y), encoded)
 	})
 	return cardMenuAction(selected)
 }
@@ -118,41 +86,18 @@ func (m *siteManager) registerCardMenuEvents() {
 					replyError = "The branch changed. Refresh the Site and try again."
 					return
 				}
-				siteWindowsHidden := m.config.SiteWindowsHidden // Capture on the manager queue before the popup goroutine.
-				if req.Kind == "strip" {
-					if defaultAction {
-						return
+				status := func() GitStatus {
+					if site == nil { // Strip background.
+						return GitStatus{}
 					}
-					menuOpen = true
-					go func() {
-						selected := showCardMenu(parent, req, nil, true, siteWindowsHidden)
-						m.send(func() {
-							menuOpen = false
-							if current, _ := m.cardMenuSource(req, sender); current != parent {
-								return
-							}
-							switch selected {
-							case cardMenuMinimize:
-								m.setStripMode(stripCompact)
-							case cardMenuHide:
-								m.setStripMode(stripHidden)
-							case cardMenuHideSites, cardMenuShowSites:
-								m.setSiteWindowsHidden(selected == cardMenuHideSites)
-							case cardMenuSettings:
-								m.openSettings()
-							case cardMenuQuit:
-								go m.app.Quit()
-							}
-						})
-					}()
-					return
+					return site.Git
 				}
-				pr, knownPR := requestedPR(site.Git, req.Number)
+				git := status()
+				pr, knownPR := requestedPR(git, req.Number)
 				if req.Number > 0 && !knownPR {
 					return
 				}
-				req = m.resolveCardMenuRequest(req, site.Git)
-				option := makeCardGitOption(req, site.Git)
+				option := makeCardGitOption(req, git)
 				if option != nil && m.siteActionBusy(req.SiteID) {
 					option.DisabledReason = "A Git action is already running for this Site. Wait for it to finish."
 				}
@@ -163,24 +108,21 @@ func (m *siteManager) registerCardMenuEvents() {
 					}
 					req.appName = app.Name
 				}
+				actions := cardMenuActions(req, git, option)
+				items := withCardMenuControls(actions, sender == "strip", m.config.SiteWindowsHidden)
 				applySelection := func(selected cardMenuAction) {
 					currentParent, currentSite := m.cardMenuSource(req, sender)
-					if currentParent != parent || currentSite != site {
+					if currentParent != parent || currentSite != site || !validCardMenuSelection(items, req, selected, pr, status()) {
 						return
 					}
-					if (selected == cardMenuMinimize || selected == cardMenuHide) && sender == "strip" {
-						mode := stripCompact
-						if selected == cardMenuHide {
-							mode = stripHidden
-						}
-						m.setStripMode(mode)
-						return
-					}
-					if (selected == cardMenuHideSites || selected == cardMenuShowSites) && sender == "strip" {
+					switch selected {
+					case cardMenuMinimize:
+						m.setStripMode(stripCompact)
+					case cardMenuHide:
+						m.setStripMode(stripHidden)
+					case cardMenuHideSites, cardMenuShowSites:
 						m.setSiteWindowsHidden(selected == cardMenuHideSites)
-						return
-					}
-					if selected == cardMenuGitAction {
+					case cardMenuGitAction:
 						if m.siteActionBusy(req.SiteID) {
 							return
 						}
@@ -188,26 +130,16 @@ func (m *siteManager) registerCardMenuEvents() {
 							action.Anchor = req.Anchor
 							m.prepareAction(action, site, parent)
 						}
-						return
-					}
-					if !validCardMenuSelection(req, selected, pr, site.Git) {
-						return
-					}
-					switch selected {
 					case cardMenuViewDiffs:
 						m.openViewer(viewerRequest{SiteID: req.SiteID, Kind: "review", Anchor: req.Anchor}, parent, site)
-					case cardMenuOpenPR, cardMenuViewNew:
-						m.openPR(prOpenRequest{SiteID: req.SiteID, Number: req.Number, NewTab: selected == cardMenuViewNew, Anchor: req.Anchor}, sender)
+					case cardMenuOpenPR, cardMenuOpenPRNew:
+						m.openPR(prOpenRequest{SiteID: req.SiteID, Number: req.Number, NewTab: selected == cardMenuOpenPRNew, Anchor: req.Anchor}, sender)
+					case cardMenuShowApp:
+						m.activateDevelopmentApp(appActivateRequest{SiteID: req.SiteID, BundleID: req.BundleID}, sender)
+					case cardMenuGoToSite:
+						m.activate(req.SiteID)
 					case cardMenuView:
-						if req.Number > 0 && req.Kind != "review-status" {
-							m.openPR(prOpenRequest{SiteID: req.SiteID, Number: req.Number, Anchor: req.Anchor}, sender)
-						} else if req.BundleID != "" {
-							m.activateDevelopmentApp(appActivateRequest{SiteID: req.SiteID, BundleID: req.BundleID}, sender)
-						} else if req.Kind == "site" {
-							m.activate(req.SiteID)
-						} else {
-							m.openViewer(viewerRequest{SiteID: req.SiteID, Kind: cardMenuViewKind(req.Kind, site.Git), Anchor: req.Anchor}, parent, site)
-						}
+						m.openViewer(viewerRequest{SiteID: req.SiteID, Kind: cardMenuViewKind(req.Kind, site.Git), Anchor: req.Anchor}, parent, site)
 					case cardMenuSettings:
 						m.openSettings()
 					case cardMenuQuit:
@@ -217,17 +149,20 @@ func (m *siteManager) registerCardMenuEvents() {
 					}
 				}
 				if defaultAction {
-					selected := firstCardMenuAction(req, option)
-					if selected == cardMenuGitAction && option.DisabledReason != "" {
-						replyError = option.DisabledReason
+					if len(actions) == 0 {
 						return
 					}
-					applySelection(selected)
+					first := actions[0]
+					if first.Disabled {
+						replyError = first.Hint
+						return
+					}
+					applySelection(first.Action)
 					return
 				}
 				menuOpen = true
 				go func() {
-					selected := showCardMenu(parent, req, option, sender == "strip", siteWindowsHidden)
+					selected := showCardMenu(parent, req, items)
 					m.send(func() {
 						menuOpen = false
 						applySelection(selected)

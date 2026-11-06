@@ -74,6 +74,8 @@ export function siteSuggestions(site) {
   return suggestions;
 }
 
+const returnsToDefault = kind => kind === 'merged' || kind === 'approved';
+
 export function suggestionSteps(suggestion, deleteBranch) {
   if (suggestion.kind === 'rebase-push') return [`Rebase ${suggestion.branch} onto the latest ${suggestion.publishBase || suggestion.target}, then push the branch.`, 'Stop if either branch changes. Keep recovery copies of the original commits.'];
   if (suggestion.kind === 'publish') return [
@@ -112,7 +114,8 @@ export function suggestionSteps(suggestion, deleteBranch) {
     'Do not push automatically. Previously pushed commits may need a separately confirmed force-with-lease push.',
   ];
   return [
-    'Check that local work is saved and refresh the remote status.',
+    suggestion.kind === 'approved' ? `Verify that PR #${suggestion.approvedPR.number} is still open and approved and that its remote branch matches your local commit.` :
+      'Check that local work is saved and refresh the remote status.',
     suggestion.replaceDefault ? `Preserve the current ${suggestion.target} tip in a recovery reference, then replace ${suggestion.target} with the confirmed ${suggestion.remoteTarget} version and switch to it.` :
       `Switch to ${suggestion.target} and fast-forward it to the confirmed remote version.`,
     deleteBranch ? `Delete local branch ${suggestion.branch} after the switch succeeds.` : `Keep local branch ${suggestion.branch}.`,
@@ -128,9 +131,9 @@ export function actionLabels(plan, status = 'ready') {
     'rebase-push': {ready:'Rebase and push',preparing:'Checking rebase and push…',running:'Rebasing and pushing…',complete:'Branch rebased and pushed',failed:'Rebase and push stopped',button:'Rebase and push'},
     update: {ready:'Confirm branch update',preparing:'Checking branch update…',running:'Updating branch…',complete:'Branch updated',failed:'Branch update stopped',button:'Update branch'},
     rebase: {ready:'Confirm rebase',preparing:'Checking rebase…',running:'Rebasing branch…',complete:'Branch rebased',failed:'Rebase stopped',button:'Rebase branch'},
-    merged: {ready:'Confirm return to default branch',preparing:'Checking return to default branch…',running:'Returning to default branch…',complete:'Returned to default branch',failed:'Return to default branch stopped',button:`Return to ${plan.target}${plan.deleteBranch ? ' & delete branch' : ''}`},
+    return: {ready:'Confirm return to default branch',preparing:'Checking return to default branch…',running:'Returning to default branch…',complete:'Returned to default branch',failed:'Return to default branch stopped',button:`Return to ${plan.target}${plan.deleteBranch ? ' & delete branch' : ''}`},
   };
-  const label = labels[plan.kind] || labels.merged;
+  const label = labels[returnsToDefault(plan.kind) ? 'return' : plan.kind] || labels.return;
   return {title:label[status] || label.ready,button:label.button};
 }
 
@@ -278,10 +281,10 @@ export function mountSuggestedActions(root, close, actionEvent) {
     });
   };
   checkbox.onchange = () => {
-    if (checkbox.disabled || current?.status !== 'ready' || current.plan?.kind !== 'merged') return;
+    if (checkbox.disabled || current?.status !== 'ready' || !returnsToDefault(current.plan?.kind)) return;
     checkbox.disabled = next.disabled = true;
     const pending = current;
-    return recoverRequest(() => actionEvent('action-prepare', {siteID:pending.siteID,kind:'merged',branch:pending.plan.branch,
+    return recoverRequest(() => actionEvent('action-prepare', {siteID:pending.siteID,kind:pending.plan.kind,branch:pending.plan.branch,
       head:pending.plan.head,targetBranch:pending.plan.target,deleteBranch:checkbox.checked}), () => {
         if (current === pending) { checkbox.disabled = next.disabled = false; checkbox.checked = !!pending.plan.deleteBranch; }
       });
@@ -330,7 +333,7 @@ export function mountSuggestedActions(root, close, actionEvent) {
     cancel.textContent = action?.status === 'complete' ? 'Done' : action?.status === 'failed' ? 'Close' : 'Cancel';
     const finished = action?.status === 'complete' || action?.status === 'failed';
     dismiss.title = finished ? 'Close' : 'Cancel'; dismiss.setAttribute('aria-label', finished ? 'Close dialog' : 'Cancel action');
-    deletion.hidden = action?.status !== 'ready' || kind !== 'merged';
+    deletion.hidden = action?.status !== 'ready' || !returnsToDefault(kind);
     checkbox.disabled = deletion.hidden; checkbox.checked = !!p?.deleteBranch;
     deleteText.textContent = `Delete local branch ${p?.branch || ''} afterward`;
     remoteOption.hidden = action?.status !== 'ready' || kind !== 'switch' || !p?.canUpdateTarget || p.createTarget || p.localAhead > 0 || !(p.remoteAhead > 0);
@@ -339,6 +342,7 @@ export function mountSuggestedActions(root, close, actionEvent) {
     preview.hidden = compact || action?.status === 'complete';
     preview.textContent = action?.status === 'running' ? 'Finishing the operation before this window can close.' :
       choosing ? 'Select a branch to review before switching.' :
+      kind === 'approved' ? 'This cleans up your local checkout. The pull request stays open on GitHub.' :
       kind === 'switch' ? (site?.git.conflicts ? 'Resolve the conflicted files before switching branches.' :
         site?.git.changes ? 'Stash unfinished edits in your Git client, or commit them if ready, then switch branches. DevJay does not stash or restore edits automatically.' :
         'Switching requires a clean working tree. Your current branch is kept.') :
@@ -411,7 +415,7 @@ export function mountSuggestedActions(root, close, actionEvent) {
       const revisions = p.kind === 'push' || p.kind === 'publish' ? `${p.targetHead.slice(0,8)} → ${p.head.slice(0,8)}` : `${p.head.slice(0,8)} → ${p.targetHead.slice(0,8)}`;
       plan.replaceChildren(el('p', 'help copyable', revisions), list);
       if (p.deleteBranch) plan.append(el('p', 'warning', `This also deletes local branch ${p.branch}. A recovery reference will retain its commits.`));
-      if (p.kind === 'merged' && p.replaceDefault) plan.append(el('p', 'warning default-return', `Local ${p.target} has ${p.localAhead} ${p.localAhead === 1 ? 'commit' : 'commits'} outside ${p.remoteTarget}'s history. Their changes may already exist upstream under different commit IDs. All current ${p.target} commits will be retained in a separate recovery reference; only the remote version will be used for ${p.target}.`));
+      if (returnsToDefault(p.kind) && p.replaceDefault) plan.append(el('p', 'warning default-return', `Local ${p.target} has ${p.localAhead} ${p.localAhead === 1 ? 'commit' : 'commits'} outside ${p.remoteTarget}'s history. Their changes may already exist upstream under different commit IDs. All current ${p.target} commits will be retained in a separate recovery reference; only the remote version will be used for ${p.target}.`));
       if (p.kind === 'replace') plan.append(el('p', 'warning', 'The local branch will use the rewritten remote history. Its old commits will be kept in a recovery reference.'));
       if (p.kind === 'rebase') plan.append(el('p', 'warning', 'Rebasing rewrites commit IDs. Review the result before pushing.'));
       if (p.kind === 'publish') plan.append(el('p', 'warning', 'Remote commit IDs will change. Git conflict checks do not replace tests or code review.'));

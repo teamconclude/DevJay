@@ -14,14 +14,16 @@ import (
 )
 
 type pullRequest struct {
-	Number              int
-	IsDraft             bool
-	ReviewDecision      string
-	HeadRefOid          string
-	StatusCheckRollup   json.RawMessage
-	HeadRepositoryOwner struct{ Login string }
-	TitleEditedAt       time.Time
-	BodyEditedAt        time.Time
+	Number                          int
+	IsDraft                         bool
+	ReviewDecision                  string
+	HeadRefOid                      string
+	State, HeadRefName, BaseRefName string
+	HeadRepository                  struct{ NameWithOwner string }
+	StatusCheckRollup               json.RawMessage
+	HeadRepositoryOwner             struct{ Login string }
+	TitleEditedAt                   time.Time
+	BodyEditedAt                    time.Time
 }
 
 type ReviewFindings struct {
