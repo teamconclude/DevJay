@@ -1,6 +1,8 @@
 import { mountFileEditor } from './file-editor.js';
 import { syntaxLines } from './syntax-highlight.js';
 import { filterSearchRows, appendSearchSyntax } from './diff-search.js';
+import { defaultReviewIgnorePatterns, reviewIgnoreMatchers, reviewFileIgnored, ignorePatternsStorageKey, storedIgnorePatterns, saveIgnorePatterns } from './file-ignore.js';
+import { storedViewPreference, saveViewPreference, diffLayoutPreference, diffLayouts } from './view-preferences.js';
 // Diff contents are always text nodes, never HTML. Line numbers remain aligned
 // with unified hunks; combined conflict hunks are displayed verbatim.
 export function diffRows(text) {
@@ -21,12 +23,15 @@ export function diffRows(text) {
 // Pair each contiguous deletion/addition block without inventing matching
 // lines. Missing counterparts remain blank, and context keeps both numbers.
 export function splitDiff(text) {
-  const unified=diffRows(text), rows=[];
+  const unified=diffRows(text), rows=[], budget={cells:inlineDiffBudget};
   let changes=0, block=[], last=null;
   const flush=()=>{
     if(!block.length)return;
     const change=changes++, before=block.filter(row=>row.kind==='delete'), after=block.filter(row=>row.kind==='add');
     for(const row of block)row.change=change;
+    // Both layouts render these same row objects, so they share the ranges.
+    const inline=before.length&&after.length?inlineChanges(before.map(row=>row.line.slice(1)),after.map(row=>row.line.slice(1)),budget):null;
+    if(inline){before.forEach((row,i)=>{row.inline=inline.before[i];});after.forEach((row,i)=>{row.inline=inline.after[i];});}
     for(let i=0;i<Math.max(before.length,after.length);i++)rows.push({kind:'change',change,before:before[i],after:after[i]});
     block=[];
   };
@@ -40,13 +45,60 @@ export function splitDiff(text) {
   return {unified,rows,changes,supported:!text.split('\n').some(line=>line.startsWith('@@@'))};
 }
 
-export function changedText(before, after) {
-  const left=Array.from(before),right=Array.from(after);
-  let start=0,end=0;
-  while(start<left.length&&start<right.length&&left[start]===right[start])start++;
-  while(end<left.length-start&&end<right.length-start&&left[left.length-1-end]===right[right.length-1-end])end++;
-  const parts=chars=>[chars.slice(0,start).join(''),chars.slice(start,chars.length-end).join(''),end?chars.slice(-end).join(''):''];
-  return [parts(left),parts(right)];
+// Word-level changes within a block of deleted and added lines. Each side is
+// compared as one text, so a statement reflowed across lines (gofmt/prettier)
+// only marks its real edits; line breaks and indentation are not changes.
+// Returns per-line [start, end) UTF-16 ranges, or null when the sides are too
+// different for marks to help, or the comparison exceeds its cell budget.
+const inlineDiffBudget=2000000, inlineBlockCells=250000, inlineSimilarity=0.4;
+const inlineTokenPattern=/\n|[ \t]+|[\p{L}\p{N}_]+|[^\s\p{L}\p{N}_]/gu;
+export function inlineChanges(before, after, budget={cells:inlineDiffBudget}) {
+  const tokenize=lines=>{
+    const tokens=[];let line=0,column=0;
+    for(const [text] of lines.join('\n').matchAll(inlineTokenPattern)){
+      tokens.push({text,line,column,space:/^\s+$/.test(text)});
+      if(text==='\n'){line++;column=0;}else column+=text.length;
+    }
+    return tokens;
+  };
+  const a=tokenize(before),b=tokenize(after);
+  let prefix=0,suffix=0;
+  while(prefix<a.length&&prefix<b.length&&a[prefix].text===b[prefix].text)prefix++;
+  while(suffix<a.length-prefix&&suffix<b.length-prefix&&a[a.length-1-suffix].text===b[b.length-1-suffix].text)suffix++;
+  const n=a.length-prefix-suffix,m=b.length-prefix-suffix,cells=(n+1)*(m+1);
+  if(cells>inlineBlockCells||cells>budget.cells)return null;
+  budget.cells-=cells;
+  // Suffix LCS table, then a forward walk that marks tokens outside the LCS.
+  const width=m+1,table=new Uint32Array(cells);
+  for(let i=n-1;i>=0;i--)for(let j=m-1;j>=0;j--){
+    table[i*width+j]=a[prefix+i].text===b[prefix+j].text?table[(i+1)*width+j+1]+1:Math.max(table[(i+1)*width+j],table[i*width+j+1]);
+  }
+  for(let i=0,j=0;i<n||j<m;){
+    if(i<n&&j<m&&a[prefix+i].text===b[prefix+j].text){i++;j++;}
+    else if(j>=m||(i<n&&table[(i+1)*width+j]>=table[i*width+j+1]))a[prefix+i++].changed=true;
+    else b[prefix+j++].changed=true;
+  }
+  const visible=tokens=>tokens.reduce((sum,token)=>sum+(token.space||token.text==='\n'?0:token.text.length),0);
+  const common=visible(a.filter(token=>!token.changed));
+  if(2*common<inlineSimilarity*(visible(a)+visible(b)))return null;
+  const ranges=(tokens,lines)=>{
+    const result=lines.map(()=>[]);
+    for(const token of tokens){
+      if(!token.changed||token.text==='\n')continue;
+      const line=result[token.line],range=[token.column,token.column+token.text.length];
+      // Join neighbouring marks separated only by whitespace into one span.
+      const previous=line.at(-1);
+      if(previous&&/^\s*$/.test(lines[token.line].slice(previous[1],range[0])))previous[1]=range[1];
+      else line.push(range);
+    }
+    // Whitespace is layout here (reflowed calls, indentation); trim it from
+    // marks and drop whitespace-only marks. Ignore whitespace hides the rest.
+    return result.map((line,index)=>line.map(([from,to])=>{
+      const text=lines[index].slice(from,to);
+      return text.trim()?[from+text.length-text.trimStart().length,to-(text.length-text.trimEnd().length)]:null;
+    }).filter(Boolean));
+  };
+  return {before:ranges(a,before),after:ranges(b,after)};
 }
 
 // A patch does not include the whole file. Keep before/after lexer states
@@ -167,19 +219,19 @@ function historyDay(date) {
 export function mountGitViewer(root, request, suggestions, openBranches) {
   const el=(tag,cls,text)=>{const node=document.createElement(tag);node.className=cls;if(text!==undefined)node.textContent=text;return node;};
   const button=(text,run,cls='')=>{const node=el('button',cls,text);node.type='button';node.onclick=run;return node;};
-  function summaryHeading(node, files, label, limited=false){
+  function summaryHeading(node, files, label, limited=false, hidden=0){
     const counts=summarizeFiles(files,limited);
-    const title=`${counts.count}${limited?'+':''} ${label|| (counts.count===1?'FILE':'FILES')}`;
+    const title=`${counts.count}${hidden?` / ${counts.count+hidden}`:''}${limited?'+':''} ${label|| (counts.count+hidden===1?'FILE':'FILES')}`;
     const totals=el('span','git-line-totals');
     totals.append(el('span','git-added',`+${counts.added.toLocaleString()}`),el('span','git-removed',`−${counts.removed.toLocaleString()}`));
     if(counts.partial)totals.append(el('span','muted','partial'));
     node.replaceChildren(el('span','',title),totals);
     node.classList.add('git-summary');
-    node.title=`${counts.added} lines added, ${counts.removed} lines removed${counts.binary?`; ${counts.binary} binary file changes excluded from line counts`:''}${counts.partial?'; totals are incomplete because some files could not be counted or the list is limited':''}. Staged and unstaged changes are counted separately.`;
+    node.title=`${counts.added} lines added, ${counts.removed} lines removed${counts.binary?`; ${counts.binary} binary file changes excluded from line counts`:''}${counts.partial?'; totals are incomplete because some files could not be counted or the list is limited':''}${hidden?`; ${hidden} ignored ${hidden===1?'file is':'files are'} hidden and not counted`:''}. Staged and unstaged changes are counted separately.`;
   }
   let state=null, renderedVersion=null, renderedState=null, initialFocus=true, activeList=null;
   let commitRowsKey=null, fileRowsKey=null, overviewKey=null;
-  let requestedListItem=null, queuedListItem=null;
+  let requestedListItem=null, queuedListItem=null, pendingEdge=null, ignoredRedirect=null;
   const send=(operation,extra={})=>{if(state&&!state.loading)request({version:state.version,operation,...extra});};
   function selectListItem(list,item,operation,extra){
     activeList=list;list.focus({preventScroll:true});
@@ -294,7 +346,40 @@ export function mountGitViewer(root, request, suggestions, openBranches) {
   const pageLabel=el('span','muted');const next=button('Next',()=>send('page',{page:state.page+1}));
   pagination.append(previous,pageLabel,next);commits.append(branchSummary,commitList,pagination);
   const files=el('aside','git-view-files');files.setAttribute('aria-label','Changed files');
-  const fileHeading=el('h2','','Files'),fileList=navigableList('Changed files');files.append(fileHeading,fileList);
+  const fileHeading=el('h2','','Files'),fileList=navigableList('Changed files');
+  // Shared with Review: patterns are saved per repository, while showing
+  // ignored files is a temporary choice for this window.
+  const ignoreOptions=el('details','git-ignore-options');
+  const ignoreSummary=el('summary','','Ignored files');
+  const showIgnoredLabel=el('label','git-show-ignored'),showIgnored=el('input','');
+  showIgnored.type='checkbox';showIgnored.setAttribute('aria-label','Show ignored files');
+  showIgnoredLabel.append(showIgnored,el('span','','Show ignored files'));
+  const patternsLabel=el('label','git-ignore-label','Ignore patterns');
+  const ignorePatterns=el('textarea','git-ignore-patterns');ignorePatterns.rows=3;ignorePatterns.maxLength=4096;
+  ignorePatterns.spellcheck=false;ignorePatterns.setAttribute('aria-label','Ignore file patterns');
+  ignorePatterns.value=defaultReviewIgnorePatterns;patternsLabel.append(ignorePatterns);
+  const ignoreHelp=el('p','git-ignore-help','Separate patterns with commas or new lines. Names match in any folder; use folder/ for a folder, or ** to match across folders. Shared with Review for this repository.');
+  ignoreOptions.append(ignoreSummary,showIgnoredLabel,patternsLabel,ignoreHelp);
+  files.append(fileHeading,ignoreOptions,fileList);
+  let ignoreKey='',ignoreMatchers=reviewIgnoreMatchers(ignorePatterns.value);
+  const fileHidden=file=>!showIgnored.checked&&reviewFileIgnored(file,ignoreMatchers);
+  function loadIgnorePatterns(v){
+    const key=ignorePatternsStorageKey(v.path||v.siteID),stored=storedIgnorePatterns(key);
+    // Follow patterns saved by Review, without replacing text being edited here.
+    const value=key!==ignoreKey?stored??defaultReviewIgnorePatterns:document.activeElement===ignorePatterns?null:stored;
+    ignoreKey=key;
+    if(value!==null&&value!==ignorePatterns.value){ignorePatterns.value=value;ignoreMatchers=reviewIgnoreMatchers(value);}
+  }
+  function applyFileFilters(){
+    if(!state||state.loading)return; // The next completed read applies them.
+    renderedVersion=null;render(state);
+  }
+  ignorePatterns.oninput=()=>{
+    ignoreMatchers=reviewIgnoreMatchers(ignorePatterns.value);
+    if(ignoreKey)saveIgnorePatterns(ignoreKey,ignorePatterns.value);
+    applyFileFilters();
+  };
+  showIgnored.onchange=applyFileFilters;
   const content=el('section','git-view-content');
   const commitDetail=el('div','git-commit-detail');
   const diffHeader=el('div','git-diff-header');
@@ -304,7 +389,7 @@ export function mountGitViewer(root, request, suggestions, openBranches) {
   const renderEditor=mountFileEditor(editorControls,request);
   const note=el('p','git-diff-note');
   const diff=el('div','git-diff');diff.tabIndex=0;diff.setAttribute('aria-label','File diff');
-  let layout='unified',difference=-1,model=null,changeNodes=[],fileRows=[];
+  let layout=storedViewPreference(diffLayoutPreference,diffLayouts)||'unified',difference=-1,model=null,changeNodes=[],fileRows=[];
   const diffToolbar=el('div','git-diff-toolbar');diffToolbar.setAttribute('aria-label','Diff navigation');
   const differenceStatus=el('span','git-diff-position'),fileStatus=el('span','git-file-position');
   differenceStatus.setAttribute('aria-live','polite');
@@ -316,9 +401,15 @@ export function mountGitViewer(root, request, suggestions, openBranches) {
   const differenceControls=el('div','git-diff-navigation');differenceControls.append(previousDiff,nextDiff,differenceStatus);
   const fileControls=el('div','git-diff-navigation');fileControls.append(previousFile,fileStatus,nextFile);
   const layoutControls=el('div','git-diff-layout');layoutControls.setAttribute('aria-label','Diff layout');
-  const unifiedButton=button('Unified',()=>setLayout('unified'));
-  const splitButton=button('Side by side',()=>setLayout('split'));
-  layoutControls.append(unifiedButton,splitButton);diffToolbar.append(differenceControls,fileControls,layoutControls);
+  // Only explicit layout choices are remembered; All branch changes switches
+  // this window to side by side without changing the saved preference.
+  const chooseLayout=next=>{if(setLayout(next))saveViewPreference(diffLayoutPreference,next);};
+  const unifiedButton=button('Unified',()=>chooseLayout('unified'));
+  const splitButton=button('Side by side',()=>chooseLayout('split'));
+  layoutControls.append(unifiedButton,splitButton);
+  const whitespaceButton=button('Ignore whitespace',()=>{if(state&&!state.loading)send('whitespace',{ignoreWhitespace:!state.ignoreWhitespace});},'git-diff-whitespace');
+  whitespaceButton.title='Hide changes that only add, remove, or reindent whitespace';
+  diffToolbar.append(differenceControls,fileControls,layoutControls,whitespaceButton);
   const findBar=el('div','diff-find');findBar.hidden=true;
   const findInput=el('input','diff-find-input');findInput.type='search';findInput.maxLength=512;findInput.placeholder='Find in diff…';findInput.setAttribute('aria-label','Find text in diff');
   const findStatus=el('span','diff-find-status');findStatus.setAttribute('role','status');
@@ -346,13 +437,17 @@ export function mountGitViewer(root, request, suggestions, openBranches) {
     const loading=!state||state.loading, count=model?.changes||0;
     const index=fileRows.findIndex(row=>row.selected);
     const visible=visibleDifferences();
-    previousDiff.disabled=loading||!visible.some(index=>index<difference);
-    nextDiff.disabled=loading||!visible.some(index=>index>difference);
+    // At either end of a file, difference navigation continues into the
+    // adjacent displayed file, matching Review.
+    previousDiff.disabled=loading||(!visible.some(index=>index<difference)&&index<=0);
+    nextDiff.disabled=loading||(!visible.some(index=>index>difference)&&(index<0||index>=fileRows.length-1));
     previousFile.disabled=loading||index<=0;
     nextFile.disabled=loading||index<0||index>=fileRows.length-1;
     differenceStatus.textContent=count&&difference>=0?`${difference+1} / ${count} ${count===1?'difference':'differences'}`:findInput.value?'No visible differences':'No text differences';
     fileStatus.textContent=`${index<0?0:index+1} / ${fileRows.length}${state?.filesLimited?'+':''} files`;
     unifiedButton.disabled=loading;splitButton.disabled=loading||model?.supported===false;
+    whitespaceButton.disabled=loading;
+    whitespaceButton.classList.toggle('selected',!!state?.ignoreWhitespace);whitespaceButton.setAttribute('aria-pressed',String(!!state?.ignoreWhitespace));
     splitButton.title=model?.supported===false?'Combined conflict diffs are shown in unified form.':'Show aligned before and after versions';
     for(const [node,value] of [[unifiedButton,'unified'],[splitButton,'split']]){
       const selected=(layout==='split'&&model?.supported!==false?'split':'unified')===value;
@@ -360,11 +455,19 @@ export function mountGitViewer(root, request, suggestions, openBranches) {
     }
   }
   function moveDifference(direction){
-    if(!state||state.loading||!model?.changes)return;
+    if(!state||state.loading)return;
     const visible=visibleDifferences(),next=(direction<0?visible.reverse():visible).find(index=>direction<0?index<difference:index>difference);
-    if(next===undefined)return;
-    difference=next;markDifference();updateDiffControls();
-    changeNodes[difference]?.scrollIntoView({block:'center',inline:'nearest'});
+    if(next!==undefined){
+      difference=next;markDifference();updateDiffControls();
+      changeNodes[difference]?.scrollIntoView({block:'center',inline:'nearest'});
+      return;
+    }
+    // Open the adjacent file at its nearest difference. Files without text
+    // differences are still shown; pressing again continues past them.
+    const index=fileRows.findIndex(row=>row.selected),row=fileRows[index+direction];
+    if(index<0||!row)return;
+    pendingEdge={file:row.index,edge:direction<0?'last':'first'};
+    send('file',{file:row.index});
   }
   function markDifference(){
     diff.querySelectorAll('.git-difference').forEach(node=>node.classList.toggle('current-difference',Number(node.dataset.change)===difference));
@@ -374,15 +477,25 @@ export function mountGitViewer(root, request, suggestions, openBranches) {
     if(index>=0&&row)send('file',{file:row.index});
   }
   function setLayout(next){
-    if(!state||state.loading||next===layout)return;
+    if(!state||state.loading)return false;
+    if(next===layout)return true;
     layout=next;placeFiles();paintDiff(state);
     changeNodes[difference]?.scrollIntoView({block:'center',inline:'nearest'});
+    return true;
+  }
+  function appendInline(code,text,tokens,query,ranges,budget){
+    let cursor=0;
+    for(const [start,end] of ranges||[]){
+      if(start>cursor)appendSearchSyntax(code,text,tokens,query,cursor,start,budget);
+      const mark=el('mark','git-inline-change');appendSearchSyntax(mark,text,tokens,query,start,end,budget);code.append(mark);cursor=end;
+    }
+    if(cursor<text.length)appendSearchSyntax(code,text,tokens,query,cursor,text.length,budget);
   }
   function paintDiff(v){
     const split=layout==='split'&&model?.supported!==false;
     const file=v.files?.[v.file];
     const syntax=model?.supported===false?new Map():patchSyntaxRows(model?.unified||[],file?.path||'',file?.oldPath||file?.path||'');
-    diff.classList.toggle('side-by-side',split);sides.hidden=!split||!v.files?.[v.file];
+    diff.classList.toggle('side-by-side',split);sides.hidden=!split||!v.files?.[v.file]||fileHidden(v.files[v.file]);
     updateDiffLabels(v);
     const fragment=document.createDocumentFragment(),highlightBudget={remaining:2048};changeNodes=[];
     const register=(line,row)=>{
@@ -403,20 +516,13 @@ export function mountGitViewer(root, request, suggestions, openBranches) {
       if(split&&row.kind==='meta'&&/^(diff --git |index |--- |\+\+\+ )/.test(row.line))continue;
       if(split&&(row.kind==='change'||row.kind==='context')){
         const line=el('div','git-split-line');register(line,row);
-        const parts=row.before&&row.after&&row.kind==='change'?changedText(row.before.line.slice(1),row.after.line.slice(1)):null;
-        for(const [side,source,index] of [['before',row.before,0],['after',row.after,1]]){
+        for(const [side,source] of [['before',row.before],['after',row.after]]){
           const cell=el('div',`git-split-cell ${source?.kind||'blank'}`);
           const number=el('span','git-line-number',source?(side==='before'?source.old:source.current):'');number.setAttribute('aria-hidden','true');
           const code=el('span','git-code');
           if(source){
             const text=source.line.slice(1),tokens=syntax.get(source)?.[side];
-            if(parts){
-              let offset=0;
-              parts[index].forEach((part,partIndex)=>{
-                const node=el(partIndex===1?'mark':'span',partIndex===1?'git-inline-change':'');
-                appendSearchSyntax(node,text,tokens,query,offset,offset+part.length,highlightBudget);offset+=part.length;code.append(node);
-              });
-            }else appendSearchSyntax(code,text,tokens,query,0,text.length,highlightBudget);
+            appendInline(code,text,tokens,query,row.kind==='change'?source.inline:null,highlightBudget);
             if(source.noNewline)code.append(el('span','git-no-newline',' ⏎ No newline at end of file'));
           }
           cell.append(number,code);line.append(cell);
@@ -429,7 +535,7 @@ export function mountGitViewer(root, request, suggestions, openBranches) {
         const code=el('span','git-code');
         if(['context','add','delete'].includes(row.kind)){
           code.append(el('span','git-diff-prefix',row.line.slice(0,1)));
-          appendSearchSyntax(code,row.line.slice(1),syntax.get(row)?.[row.kind==='delete'?'before':'after'],query,0,row.line.length-1,highlightBudget);
+          appendInline(code,row.line.slice(1),syntax.get(row)?.[row.kind==='delete'?'before':'after'],query,row.inline,highlightBudget);
         }else if(model?.supported===false)appendSearchSyntax(code,row.line,null,query,0,row.line.length,highlightBudget);
         else code.textContent=row.line;
         line.append(left,right,code);fragment.append(line);
@@ -475,7 +581,7 @@ export function mountGitViewer(root, request, suggestions, openBranches) {
   function holdReadControls(loading){
     if(loading){
       if(pendingControls.size)return;
-      for(const control of [reviewBranch,branchDiffButton,branchHistoryButton,fullHistoryButton,historyOrder,previousDiff,nextDiff,previousFile,nextFile,unifiedButton,splitButton]){
+      for(const control of [reviewBranch,branchDiffButton,branchHistoryButton,fullHistoryButton,historyOrder,previousDiff,nextDiff,previousFile,nextFile,unifiedButton,splitButton,whitespaceButton]){
         pendingControls.set(control,control.disabled);
         // Keep the last frame's contrast while still blocking stale requests.
         control.classList.toggle('git-read-pending',!control.disabled);
@@ -490,6 +596,7 @@ export function mountGitViewer(root, request, suggestions, openBranches) {
     const changedContext=state?.siteID!==v.siteID||state?.kind!==v.kind;
     if(changedContext){requestedListItem=null;queuedListItem=null;}
     state=v;
+    loadIgnorePatterns(v);
     root.setAttribute('aria-busy',String(v.loading));
     commitList.setAttribute('aria-busy',String(v.loading));fileList.setAttribute('aria-busy',String(v.loading));
     renderEditor(v);
@@ -533,7 +640,7 @@ export function mountGitViewer(root, request, suggestions, openBranches) {
     }
     updateBranchButton();
     refresh.disabled=v.loading;
-    const nextOverviewKey=JSON.stringify([v.siteID,v.kind,v.name,v.path,v.branch,v.branchOnly,v.oldestFirst,v.allChanges,v.branchCommits,v.branchDiff,v.counts,v.incomingCount,v.upstream,v.tracking,v.comparisonOnly,v.branchWork,v.rebased,v.captured,v.remoteNote,v.historyNote,v.error,!!v.loading]);
+    const nextOverviewKey=JSON.stringify([v.siteID,v.kind,v.name,v.path,v.branch,v.branchOnly,v.oldestFirst,v.allChanges,v.branchCommits,v.branchDiff,v.counts,v.incomingCount,v.upstream,v.tracking,v.comparisonOnly,v.branchWork,v.rebased,v.captured,v.remoteNote,v.historyNote,v.error,!!v.loading,!!v.ignoreWhitespace]);
     if(overviewKey!==nextOverviewKey){
       overviewKey=nextOverviewKey;
       name.textContent=v.name||'Changes';name.title=v.path;
@@ -568,12 +675,21 @@ export function mountGitViewer(root, request, suggestions, openBranches) {
         context.title=branchHistoryContext(v);
       }
       statusbar.textContent=[v.loading?'Refreshing…':edits?'Uncommitted changes':v.branchOnly||v.allChanges?`Branch changes since the common ancestor with ${v.branchDiff?.target||'the base'}`:v.tracking?`Compared with ${v.tracking}`:'Local history',
-        !v.loading&&capture?`Read at ${capture}`:'',v.comparisonOnly?'No upstream configured':'',v.remoteNote,v.historyNote,
+        !v.loading&&capture?`Read at ${capture}`:'',v.ignoreWhitespace?'Whitespace ignored':'',v.comparisonOnly?'No upstream configured':'',v.remoteNote,v.historyNote,
         v.rebased?'Rebased history: equivalent changes can have different commit IDs.':v.counts?.local>0&&v.incomingCount>0?'History differs: remote-only commits may be older versions after a rebase.':'',
         v.branchWork?.inherited?`${v.branchWork.inherited} additional commits already on ${v.branchWork.base}`:''].filter(Boolean).join(' · ');
     }
     // Keep scroll and text selection intact for duplicate/loading-only emissions.
     if(v.loading)return;
+    const allRows=edits?changeFileRows(v.files||[],v.file):(v.files||[]).map((file,index)=>({path:file.path,file,index,selected:index===v.file,parts:[{file,index}]}));
+    const rows=allRows.filter(row=>!fileHidden(row.file));
+    // Reads select the first file in Git order. When that is ignored, keep the
+    // current frame and select the first displayed file instead of painting it.
+    // Request once per read; repeated emissions of the same version wait for it.
+    if(v.files?.[v.file]&&fileHidden(v.files[v.file])&&rows.length&&!v.error){
+      if(ignoredRedirect!==v.version){ignoredRedirect=v.version;send('file',{file:rows[0].index});}
+      return;
+    }
     renderedVersion=v.version;
     const previousState=renderedState;
     const sameList=previousState?.siteID===v.siteID&&previousState?.kind===v.kind&&!!previousState?.branchOnly===!!v.branchOnly&&previousState?.page===v.page;
@@ -619,10 +735,11 @@ export function mountGitViewer(root, request, suggestions, openBranches) {
     commitList.removeAttribute('aria-activedescendant');
     commitList.querySelectorAll('button').forEach((item,index)=>listOption(commitList,item,item.id,v.commits[index].id===v.commit));
     previous.disabled=v.page===0;next.disabled=!v.more;pageLabel.textContent=`Page ${v.page+1}`;
-    summaryHeading(fileHeading,v.files||[],null,v.filesLimited);
-    const rows=edits?changeFileRows(v.files||[],v.file):(v.files||[]).map((file,index)=>({path:file.path,file,index,selected:index===v.file,parts:[{file,index}]}));
+    const hiddenRows=allRows.length-rows.length;
+    summaryHeading(fileHeading,(v.files||[]).filter(file=>!fileHidden(file)),null,v.filesLimited,hiddenRows);
+    ignoreSummary.textContent=`Ignored files · ${hiddenRows} hidden`;
     fileRows=rows;
-    const nextFileRowsKey=JSON.stringify([v.siteID,v.kind,v.commit,v.allChanges,v.files,rows.map(row=>row.file.status),v.filesLimited,!!v.error]);
+    const nextFileRowsKey=JSON.stringify([v.siteID,v.kind,v.commit,v.allChanges,v.files,rows.map(row=>[row.path,row.file.status]),v.filesLimited,!!v.error]);
     if(fileRowsKey!==nextFileRowsKey){
       fileRowsKey=nextFileRowsKey;
       fileList.replaceChildren();
@@ -643,6 +760,7 @@ export function mountGitViewer(root, request, suggestions, openBranches) {
         item.title=row.parts.map(part=>part.file.oldPath?`${part.file.oldPath} → ${part.file.path}`:part.file.path).filter((path,index,all)=>all.indexOf(path)===index).join('\n');
         item.setAttribute('aria-label',`${file.path}, ${row.parts.map(part=>changePartLabel(part.file.group)).join(' and ')} (${file.status})`);fileList.append(item);
       }
+      if(!rows.length&&hiddenRows)fileList.append(el('p','git-empty',`All ${hiddenRows===1?'changed file is':`${hiddenRows} changed files are`} hidden. Open Ignored files above to show them.`));
       if(!(v.files||[]).length)fileList.append(el('p','git-empty',v.error?'File list unavailable.':v.kind==='edits'?'No uncommitted changes.':v.allChanges?'No branch changes.':v.commit?'This commit has no changed files.':'Select a commit.'));
       if(v.filesLimited)fileList.append(el('p','git-empty','Showing the first 2,000 files.'));
     }
@@ -696,16 +814,19 @@ export function mountGitViewer(root, request, suggestions, openBranches) {
         else if(!v.parent)commitDetail.append(el('p','muted','Initial commit · compared with an empty tree'));
       }
     }
-    const file=v.files?.[v.file];
+    const selectedFile=v.files?.[v.file],ignoredSelection=!!selectedFile&&fileHidden(selectedFile);
+    const file=ignoredSelection?null:selectedFile;
     emptyDetail.hidden=!!file;diffHeader.hidden=!file;diff.hidden=!file;
-    if(!file){
+    if(ignoredSelection){
+      emptyDetail.replaceChildren(el('strong','','All changed files are ignored'),el('p','','Open Ignored files above the file list and choose Show ignored files, or edit the patterns.'));
+    }else if(!file){
       const clean=edits&&v.counts?.edits===0&&!v.error;
       emptyDetail.replaceChildren(el('strong','',v.error?'Changes unavailable':clean?'No uncommitted changes':edits?'No file selected':v.allChanges?'No branch changes':v.commit?'No file changes':'No commit selected'),
         el('p','',v.error?'Review the error above, then refresh to try again.':clean?'Your working tree is clean. Open History to review commits.':edits?'Select a file to inspect its changes.':v.allChanges?'The branch matches its common ancestor. Select a commit to inspect its changes.':v.commit?'This commit does not change any files.':'Select a commit from the history to inspect its changes.'));
     }
     diffTitle.textContent=file?(file.oldPath?`${file.oldPath} → ${file.path}`:file.path):'Select a file to view its diff';
     diffTitle.title=diffTitle.textContent;
-    note.hidden=!v.diffNote;note.textContent=v.diffNote||'';
+    note.hidden=!v.diffNote||!file;note.textContent=v.diffNote||'';
     if(!sameDiff||previousState?.diff!==v.diff){
       model=splitDiff(v.diff||'');
       difference=model.changes?(sameDiff?Math.max(0,Math.min(difference,model.changes-1)):0):-1;
@@ -714,6 +835,13 @@ export function mountGitViewer(root, request, suggestions, openBranches) {
     updateDiffControls();
     updateDiffLabels(v);
     diff.scrollTop=diffScroll.top;diff.scrollLeft=diffScroll.left;
+    const edge=pendingEdge;pendingEdge=null;
+    if(edge&&edge.file===v.file&&!sameDiff){
+      const visible=visibleDifferences();
+      difference=(edge.edge==='last'?visible.at(-1):visible[0])??-1;
+      markDifference();updateDiffControls();
+      changeNodes[difference]?.scrollIntoView({block:'center',inline:'nearest'});
+    }
     const queued=queuedListItem;requestedListItem=null;queuedListItem=null;
     // Use the completed read's version; discard queued rows replaced by a
     // different history/page or file list, and stop on a failed read.

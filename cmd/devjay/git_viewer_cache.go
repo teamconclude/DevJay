@@ -5,6 +5,7 @@ const viewerDiffCacheBytes = 8 << 20
 
 type viewerDiffKey struct {
 	root, parent, revision, path, oldPath string
+	ignoreWhitespace                      bool
 }
 
 type viewerCachedDiff struct {
@@ -24,7 +25,7 @@ func viewFileCacheKey(v *GitView, index int) (viewerDiffKey, bool) {
 		return viewerDiffKey{}, false
 	}
 	f := v.Files[index]
-	return viewerDiffKey{v.root, v.Parent, viewDiffRevision(v), f.Path, f.OldPath}, true
+	return viewerDiffKey{v.root, v.Parent, viewDiffRevision(v), f.Path, f.OldPath, v.IgnoreWhitespace}, true
 }
 
 func (c *viewerDiffCache) has(key viewerDiffKey) bool {

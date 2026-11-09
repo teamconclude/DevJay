@@ -7,7 +7,11 @@ const syntaxSource = await readFile(new URL('../cmd/devjay/frontend/syntax-highl
 const searchSource = await readFile(new URL('../cmd/devjay/frontend/diff-search.js',import.meta.url),'utf8');
 const syntaxURL = `data:text/javascript;base64,${Buffer.from(syntaxSource).toString('base64')}`;
 const searchURL = `data:text/javascript;base64,${Buffer.from(searchSource.replace('./syntax-highlight.js',syntaxURL)).toString('base64')}`;
-const moduleSource = source.replace('./syntax-highlight.js',syntaxURL).replace('./diff-search.js',searchURL);
+const ignoreSource = await readFile(new URL('../cmd/devjay/frontend/file-ignore.js',import.meta.url),'utf8');
+const ignoreURL = `data:text/javascript;base64,${Buffer.from(ignoreSource).toString('base64')}`;
+const preferenceSource = await readFile(new URL('../cmd/devjay/frontend/view-preferences.js',import.meta.url),'utf8');
+const preferenceURL = `data:text/javascript;base64,${Buffer.from(preferenceSource).toString('base64')}`;
+const moduleSource = source.replace('./syntax-highlight.js',syntaxURL).replace('./diff-search.js',searchURL).replace('./file-ignore.js',ignoreURL).replace('./view-preferences.js',preferenceURL);
 const {reviewTextLines,reviewDiffModel,reviewVisibleRows,reviewUnifiedRows,reviewCommitSummary,reviewFileMatches,reviewIgnoreMatchers,reviewFileIgnored} = await import(`data:text/javascript;base64,${Buffer.from(moduleSource).toString('base64')}`);
 
 test('full-file model preserves prefix and suffix, beginning/end insertions, deletions and CRLF',()=>{
@@ -74,7 +78,7 @@ function viewer(storage = new Map()) {
     dispatchEvent(event){event.target??=this;event.currentTarget=this;for(const listener of listeners[event.type]||[])listener(event);return !event.defaultPrevented;}};
   html.append(body);body.append(root);
   const frames=new Map(),timers=new Map();let nextFrame=0,nextTimer=0,now=0;
-  const context=vm.createContext({document,setTimeout:(fn,delay)=>{timers.set(++nextTimer,{fn,at:now+delay});return nextTimer;},clearTimeout:id=>timers.delete(id),requestAnimationFrame:fn=>{frames.set(++nextFrame,fn);return nextFrame;},cancelAnimationFrame:id=>frames.delete(id),localStorage:{setItem:(key,value)=>storage.set(key,value),getItem:key=>storage.has(key)?storage.get(key):null},sessionStorage:{setItem:(key,value)=>storage.set(key,value),getItem:key=>storage.get(key)||null,removeItem:key=>storage.delete(key)}});vm.runInContext(syntaxSource.replace(/^export /gm,'')+'\n'+searchSource.replace(/^import .*;\n/gm,'').replace(/^export /gm,'')+'\n'+source.replace(/^import .*;\n/gm,'').replace(/^export /gm,''),context);
+  const context=vm.createContext({document,setTimeout:(fn,delay)=>{timers.set(++nextTimer,{fn,at:now+delay});return nextTimer;},clearTimeout:id=>timers.delete(id),requestAnimationFrame:fn=>{frames.set(++nextFrame,fn);return nextFrame;},cancelAnimationFrame:id=>frames.delete(id),localStorage:{setItem:(key,value)=>storage.set(key,value),getItem:key=>storage.has(key)?storage.get(key):null},sessionStorage:{setItem:(key,value)=>storage.set(key,value),getItem:key=>storage.get(key)||null,removeItem:key=>storage.delete(key)}});vm.runInContext(syntaxSource.replace(/^export /gm,'')+'\n'+searchSource.replace(/^import .*;\n/gm,'').replace(/^export /gm,'')+'\n'+ignoreSource.replace(/^export /gm,'')+'\n'+preferenceSource.replace(/^export /gm,'')+'\n'+source.replace(/^import .*;\n/gm,'').replace(/^export \{.*\};\n/gm,'').replace(/^export /gm,''),context);
   const requests=[],prefetchRequests=[];const api=context.createBranchReview(root,data=>{(data.operation==='review-prefetch'?prefetchRequests:requests).push(JSON.parse(JSON.stringify(data)));return true;});
   const flushFrames=()=>{const pending=[...frames.values()];frames.clear();for(const fn of pending)fn();};
   return {root,document,requests,prefetchRequests,frames,timers,flushFrames,advance(ms){now+=ms;for(const [id,timer] of [...timers])if(timer.at<=now){timers.delete(id);timer.fn();}},...api,prefetch(next){flushFrames();api.prefetch({prefetchID:prefetchRequests.at(-1)?.prefetchID,...next});}};
@@ -771,6 +775,27 @@ test('custom and empty ignore patterns survive reopening and stay scoped to the 
   const second=viewer(storage);second.render(state());assert.equal(second.root.querySelector('.br-ignore-patterns').value,'*.pb.go');
   const third=viewer(storage);third.render(state({path:'/other'}));assert.match(third.root.querySelector('.br-ignore-patterns').value,/_test.go/);
   patterns.value='';patterns.oninput();const cleared=viewer(storage);cleared.render(state());assert.equal(cleared.root.querySelector('.br-ignore-patterns').value,'');
+});
+
+test('layout and display options are remembered for new review windows',()=>{
+  const option=(view,label)=>view.root.querySelectorAll('label').find(node=>node.textContent===label).querySelector('input');
+  const fresh=viewer();fresh.render(state());
+  assert.equal(control(fresh,'Side by side').attrs['aria-pressed'],'true');
+  assert.equal(fresh.root.querySelector('.br-presentation').value,'file');
+  assert.equal(option(fresh,'Wrap long lines').checked,false);assert.equal(option(fresh,'Syntax highlighting').checked,true);
+  const storage=new Map(),first=viewer(storage);first.render(state());
+  control(first,'Unified').click();
+  const mode=first.root.querySelector('.br-presentation');mode.value='continuous';mode.onchange();
+  const wrap=option(first,'Wrap long lines');wrap.checked=true;wrap.onchange();
+  const syntax=option(first,'Syntax highlighting');syntax.checked=false;syntax.onchange();
+  const second=viewer(storage);second.render(state());
+  assert.equal(control(second,'Unified').attrs['aria-pressed'],'true');
+  assert.equal(second.root.querySelector('.br-presentation').value,'continuous');
+  assert.equal(option(second,'Wrap long lines').checked,true);assert.equal(option(second,'Syntax highlighting').checked,false);
+  assert.equal(second.root.querySelector('.br-content').classList.contains('br-wrap'),true);
+  // Unknown stored values fall back to the defaults.
+  const damaged=new Map([['devjay-view:diff-layout','columns'],['devjay-view:review-presentation','pages']]),third=viewer(damaged);third.render(state());
+  assert.equal(control(third,'Side by side').attrs['aria-pressed'],'true');assert.equal(third.root.querySelector('.br-presentation').value,'file');
 });
 
 test('ignore controls cannot interrupt an edit and recovery preserves a now-ignored draft',()=>{

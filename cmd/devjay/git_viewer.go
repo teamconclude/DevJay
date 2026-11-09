@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -56,6 +57,8 @@ type GitView struct {
 	OldestFirst    bool              `json:"oldestFirst,omitempty"` // Applies only to branch history, not full/local/remote history.
 	BranchCommits  *int              `json:"branchCommits,omitempty"`
 	BranchDiff     *ViewBranchDiff   `json:"branchDiff,omitempty"`
+	// Changes/History display option for this window; Review keeps its own.
+	IgnoreWhitespace bool `json:"ignoreWhitespace,omitempty"`
 
 	Counts        *ViewCounts  `json:"counts"`
 	Editor        *EditorState `json:"editor,omitempty"`
@@ -710,6 +713,9 @@ func selectViewFile(ctx context.Context, v *GitView, index int) {
 		}
 	}
 	args := []string{"diff", "--no-color", "--no-ext-diff", "--no-textconv", "--find-renames", "--unified=3", "--src-prefix=a/", "--dst-prefix=b/"}
+	if v.IgnoreWhitespace {
+		args = append(args, "--ignore-all-space")
+	}
 	if v.Kind == "edits" {
 		if file.Group == "Staged" {
 			args = append(args, "--cached")
@@ -730,9 +736,35 @@ func selectViewFile(ctx context.Context, v *GitView, index int) {
 		return
 	}
 	v.Diff, v.DiffNote = boundViewDiff(out)
-	if v.Diff == "" {
+	if v.Diff == "" && v.IgnoreWhitespace {
+		// Git omits whitespace-only changes entirely when ignoring whitespace.
+		v.DiffNote = "No text differences with whitespace ignored."
+	} else if v.Diff == "" {
 		v.DiffNote = "No textual difference. The file may have only a mode change, or its changes have moved since this list was loaded. Refresh to update the list."
 	}
+}
+
+// Whitespace is a display option for this window. Toggling it rereads only
+// the captured files' statistics and the selected diff, never the lists.
+func selectViewWhitespace(ctx context.Context, v *GitView, ignore bool) error {
+	if v.Kind == "review" {
+		return errors.New("Use Review options to ignore whitespace in Review.")
+	}
+	if v.IgnoreWhitespace == ignore {
+		return nil
+	}
+	v.IgnoreWhitespace = ignore
+	// The worker's copy shares this slice with the published snapshot.
+	v.Files = slices.Clone(v.Files)
+	for i := range v.Files {
+		f := &v.Files[i]
+		f.Added, f.Removed, f.Binary, f.StatsKnown = 0, 0, false, false
+	}
+	populateViewStats(ctx, v)
+	if v.File >= 0 {
+		selectViewFile(ctx, v, v.File)
+	}
+	return nil
 }
 
 func boundViewDiff(data []byte) (string, string) {

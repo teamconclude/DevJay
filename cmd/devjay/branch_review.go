@@ -519,3 +519,19 @@ func branchReviewWorktreeFingerprint(ctx context.Context, root string, files []V
 	}
 	return fmt.Sprintf("%x", hash.Sum(nil)), nil
 }
+
+// A new Review starts with the last whitespace choice; a Review opened from
+// another Review window keeps that window's choice instead. A new window from
+// the strip, Settings, a Site, or a Changes/History window has no Review choice.
+func reviewOpenWhitespace(req viewerRequest, config SiteConfig) bool {
+	if req.reviewWhitespace {
+		return req.IgnoreWhitespace
+	}
+	return config.ReviewIgnoreWhitespace
+}
+
+// Only a whitespace change made in a Review window updates the saved choice;
+// base-branch changes resend the window's current value.
+func reviewWhitespaceChoiceChanged(config SiteConfig, current *BranchReview, ignore bool) bool {
+	return current != nil && current.IgnoreWhitespace != ignore && config.ReviewIgnoreWhitespace != ignore
+}

@@ -65,6 +65,14 @@ func (m *siteManager) handleReviewRequest(id string, req viewerRequest) {
 	case "refresh":
 		m.viewerLoad(id, refreshGitView)
 	case "review-options":
+		if reviewWhitespaceChoiceChanged(m.config, r.state.Review, req.IgnoreWhitespace) {
+			config := m.config
+			config.ReviewIgnoreWhitespace = req.IgnoreWhitespace
+			if err := m.save(config); err != nil {
+				m.viewerLoad(id, func(context.Context, *GitView) error { return err })
+				return
+			}
+		}
 		m.viewerLoad(id, func(ctx context.Context, v *GitView) error {
 			return loadBranchReview(ctx, v, req.BaseRef, req.IgnoreWhitespace)
 		})

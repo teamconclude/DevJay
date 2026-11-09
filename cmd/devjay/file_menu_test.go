@@ -42,8 +42,11 @@ func TestFileMenuDuplicatesSourceWindowAndReviewOptions(t *testing.T) {
 				if m.existingViewer(req) != nil {
 					t.Fatal("New Window reused the source window")
 				}
-				if kind == "review" && (req.BaseRef != "origin/develop" || !req.IgnoreWhitespace) {
+				if kind == "review" && (req.BaseRef != "origin/develop" || !req.IgnoreWhitespace || !reviewOpenWhitespace(req, SiteConfig{})) {
 					t.Fatalf("lost review comparison options: %+v", req)
+				}
+				if kind != "review" && review && !reviewOpenWhitespace(req, SiteConfig{ReviewIgnoreWhitespace: true}) {
+					t.Fatalf("a Review from a %s window ignored the saved whitespace choice", kind)
 				}
 			}
 		})
@@ -63,6 +66,13 @@ func TestFileMenuUsesSiteWindowAndCurrentDesktop(t *testing.T) {
 		req, parent, site := m.fileMenuTarget("strip", false)
 		if site == nil || req.SiteID != want || parent != m.strip || !req.NewWindow {
 			t.Fatalf("strip target = %+v, want %s", req, want)
+		}
+	}
+	// Sources without a Review window open Reviews with the saved choice.
+	saved := SiteConfig{ReviewIgnoreWhitespace: true}
+	for _, source := range []string{"site-one", "strip", "settings"} {
+		if req, _, site := m.fileMenuTarget(source, true); site == nil || req.Kind != "review" || !reviewOpenWhitespace(req, saved) {
+			t.Fatalf("New Review Window from %s ignored the saved whitespace choice: %+v", source, req)
 		}
 	}
 	check("two") // No Site here: use the most recently used one.

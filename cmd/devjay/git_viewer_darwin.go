@@ -35,6 +35,9 @@ type viewerRequest struct {
 	PrefetchID       uint64              `json:"prefetchID"`
 	Page             int                 `json:"page"`
 	NewWindow        bool                `json:"newWindow"`
+	// A source Review window supplied IgnoreWhitespace. Unexported so only the
+	// manager sets it; other new Reviews start from the saved choice.
+	reviewWhitespace bool
 }
 
 // Each window owns its snapshot, selections, and cancellable read. UI events
@@ -228,6 +231,9 @@ func (m *siteManager) openViewer(req viewerRequest, parent *application.WebviewW
 		}
 		return
 	}
+	if req.Kind == "review" {
+		req.IgnoreWhitespace = reviewOpenWhitespace(req, m.config)
+	}
 	m.viewerSequence++
 	id := fmt.Sprintf("git-viewer-%d", m.viewerSequence)
 	title := gitViewerTitle(filepath.Base(site.Site.Path), req.Kind, site.Git.Branch, site.Git)
@@ -243,6 +249,9 @@ func (m *siteManager) openViewer(req viewerRequest, parent *application.WebviewW
 	})
 	state := &GitView{SiteID: req.SiteID, Name: filepath.Base(site.Site.Path), Path: site.Site.Path, Branch: site.Git.Branch, File: -1, RemoteNote: site.Git.RemoteNote, Rebased: site.Git.Rebased}
 	state.OldestFirst = m.config.BranchHistoryOldestFirst
+	if req.Kind != "review" {
+		state.IgnoreWhitespace = req.IgnoreWhitespace // Only a duplicated window carries this choice.
+	}
 	setViewMode(state, req.Kind)
 	m.viewers[id] = &gitViewerWindow{window: w, title: title, parent: parent, anchor: req.Anchor, used: m.viewerSequence, state: state, navigation: navigation}
 	m.watchView(id, w)
@@ -355,7 +364,7 @@ func (m *siteManager) registerViewerEvents() {
 				if site := m.runtime[r.state.SiteID]; site != nil && site.Ready {
 					open := viewerRequest{SiteID: r.state.SiteID, Kind: "review", NewWindow: true}
 					if r.state.Review != nil {
-						open.BaseRef, open.IgnoreWhitespace = r.state.Review.BaseRef, r.state.Review.IgnoreWhitespace
+						open.BaseRef, open.IgnoreWhitespace, open.reviewWhitespace = r.state.Review.BaseRef, r.state.Review.IgnoreWhitespace, true
 					}
 					m.openViewer(open, r.window, site)
 				}
@@ -414,6 +423,8 @@ func (m *siteManager) registerViewerEvents() {
 					return selectViewHistoryScope(ctx, v, req.Scope)
 				case "file":
 					selectViewFile(ctx, v, req.File)
+				case "whitespace":
+					return selectViewWhitespace(ctx, v, req.IgnoreWhitespace)
 				}
 				return nil
 			})
