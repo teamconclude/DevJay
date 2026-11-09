@@ -26,6 +26,7 @@ func TestViewerDiffCacheKeysAndLimits(t *testing.T) {
 		func(v *GitView) { v.Files = []ViewFile{{Path: "file.go", OldPath: "another.go"}} },
 		func(v *GitView) { v.Kind = "edits" }, func(v *GitView) { v.Kind = "review" },
 		func(v *GitView) { v.AllChanges, v.Head = true, "other-head" },
+		func(v *GitView) { v.IgnoreWhitespace = true },
 	} {
 		next := v
 		change(&next)

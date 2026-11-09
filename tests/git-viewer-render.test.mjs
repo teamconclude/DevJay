@@ -7,6 +7,7 @@ const editorSource=(await readFile(new URL('../cmd/devjay/frontend/file-editor.j
 const syntaxSource=(await readFile(new URL('../cmd/devjay/frontend/syntax-highlight.js',import.meta.url),'utf8')).replace(/^export /gm,'');
 const searchSource=(await readFile(new URL('../cmd/devjay/frontend/diff-search.js',import.meta.url),'utf8')).replace(/^import .*;\n/gm,'').replace(/^export /gm,'');
 const viewerSource=(await readFile(new URL('../cmd/devjay/frontend/git-viewer.js',import.meta.url),'utf8')).replace(/^import .*;\n/gm,'').replace(/^export /gm,'');
+const ignoreSource=(await readFile(new URL('../cmd/devjay/frontend/file-ignore.js',import.meta.url),'utf8')).replace(/^export /gm,'');
 
 // Mount the production renderer. Fragments, focus and scroll are represented
 // here so assertions cover updates to the actual diff DOM, not just helpers.
@@ -51,7 +52,7 @@ function viewer(openBranches) {
     dispatchEvent(event){event.target??=this;event.currentTarget=this;for(const listener of listeners[event.type]||[])listener(event);return !event.defaultPrevented;}};
   html.append(body);body.append(root);
   const context=vm.createContext({document});
-  vm.runInContext(syntaxSource+'\n'+searchSource+'\n'+editorSource+'\n'+viewerSource,context);
+  vm.runInContext(syntaxSource+'\n'+searchSource+'\n'+editorSource+'\n'+ignoreSource+'\n'+viewerSource,context);
   const requests=[];
   return {root,document,requests,render:context.mountGitViewer(root,request=>requests.push(request),null,openBranches)};
 }
@@ -608,16 +609,17 @@ test('Cmd+F filters either diff side, retains syntax and file navigation, and sk
  assert.equal(view.root.querySelector('.current-difference').dataset.change,'0');
  control(view,'Next difference').click();assert.equal(view.root.querySelector('.current-difference').dataset.change,'2');
  assert.match(view.root.querySelector('.git-diff-position').textContent,/3 \/ 4/);
- assert.equal(control(view,'Next difference').disabled,true);
+ // The last visible match continues into two.go rather than stopping.
+ assert.equal(control(view,'Next difference').disabled,false);
  control(view,'Previous difference').click();assert.equal(view.root.querySelector('.current-difference').dataset.change,'0');
  layoutButton(view,'Side by side').click();
- assert.equal(diff.querySelectorAll('.diff-search-hit').length,2);assert.ok(diff.querySelectorAll('.git-inline-change').length);
+ assert.equal(diff.querySelectorAll('.diff-search-hit').length,2);
  input.value='<script>';input.oninput();
  assert.equal(diff.querySelector('.diff-search-hit').textContent,'<script>');assert.equal(view.root.querySelectorAll('script').length,0);
  input.value='missing term';input.oninput();
  assert.equal(view.root.querySelector('.diff-find-status').textContent,'No matches');
  assert.match(diff.querySelector('.diff-search-empty').textContent,/No matches/);
- assert.equal(control(view,'Previous difference').disabled,true);assert.equal(control(view,'Next difference').disabled,true);
+ assert.equal(control(view,'Previous difference').disabled,true);assert.equal(control(view,'Next difference').disabled,false);
  assert.equal(key(input,'Escape'),true);assert.equal(bar.hidden,true);assert.equal(input.value,'');
  assert.equal(view.document.activeElement,diff);assert.equal(diff.scrollTop,350);
  assert.match(diff.textContent,/unrelated change/);assert.equal(diff.querySelectorAll('.diff-search-hit').length,0);
@@ -650,4 +652,113 @@ test('find shortcut respects modifiers, composition, and child event handlers',(
  const source=view.root.querySelector('.git-code');source.onkeydown=event=>event.preventDefault();
  assert.equal(key(source,'f',{metaKey:true}),true);assert.equal(bar.hidden,true);
  view.render.destroy();assert.equal(key(view.document.body,'f',{metaKey:true}),false);assert.equal(bar.hidden,true);
+});
+
+test('Option+Up/Down continue into adjacent displayed files at their nearest difference',()=>{
+ const two='@@ -1,5 +1,5 @@\n-old one\n+new one\n context\n-old two\n+new two\n context\n-old three\n+new three';
+ const view=viewer(),initial=state({files:[file('a.go'),file('b.go'),file('c.go')],diff:two});
+ view.render(initial);
+ const position=()=>view.root.querySelector('.git-diff-position').textContent;
+ assert.equal(control(view,'Previous difference').disabled,true);
+ key(view.document.body,'ArrowDown',{altKey:true});key(view.document.body,'ArrowDown',{altKey:true});
+ assert.match(position(),/3 \/ 3/);assert.equal(view.requests.length,0);
+ assert.equal(control(view,'Next difference').disabled,false);
+ assert.equal(key(view.document.body,'ArrowDown',{altKey:true}),true);
+ assert.equal(view.requests.at(-1).operation,'file');assert.equal(view.requests.at(-1).file,1);
+ view.render({...initial,version:2,file:1});
+ assert.match(position(),/1 \/ 3/);
+ assert.equal(view.root.querySelector('.current-difference').dataset.change,'0');
+ // Upward navigation opens the previous file at its last difference and reveals it.
+ key(view.document.body,'ArrowUp',{altKey:true});assert.equal(view.requests.at(-1).file,0);
+ view.render({...initial,version:3,file:0});
+ assert.match(position(),/3 \/ 3/);
+ const current=view.root.querySelector('.current-difference');
+ assert.equal(current.dataset.change,'2');assert.ok(current.revealed>0);
+ // A file without text differences is shown; pressing again continues.
+ key(view.document.body,'ArrowDown',{altKey:true});assert.equal(view.requests.at(-1).file,1);
+ view.render({...initial,version:4,file:1,diff:'',diffNote:'No text differences with whitespace ignored.'});
+ assert.match(position(),/No text differences/);
+ assert.equal(control(view,'Previous difference').disabled,false);assert.equal(control(view,'Next difference').disabled,false);
+ key(view.document.body,'ArrowDown',{altKey:true});assert.equal(view.requests.at(-1).file,2);
+ view.render({...initial,version:5,file:2});
+ key(view.document.body,'ArrowDown',{altKey:true});key(view.document.body,'ArrowDown',{altKey:true});
+ assert.match(position(),/3 \/ 3/);assert.equal(control(view,'Next difference').disabled,true);
+ const requests=view.requests.length;key(view.document.body,'ArrowDown',{altKey:true});
+ assert.equal(view.requests.length,requests);
+ // Loading blocks cross-file reads, and a later ordinary selection is not repositioned.
+ key(view.document.body,'ArrowUp',{altKey:true});key(view.document.body,'ArrowUp',{altKey:true});key(view.document.body,'ArrowUp',{altKey:true});
+ view.render({...initial,version:6,file:2,loading:true});
+ assert.equal(control(view,'Previous difference').disabled,true);
+ view.render({...initial,version:6,file:1});
+ assert.match(position(),/3 \/ 3/);
+ view.render({...initial,version:7,file:0});
+ assert.match(position(),/1 \/ 3/);
+});
+
+test('Ignore whitespace is a per-window toggle that rereads the selected diff',()=>{
+ const view=viewer(),initial=state();view.render(initial);
+ const toggle=view.root.querySelector('.git-diff-whitespace');
+ assert.equal(toggle.textContent,'Ignore whitespace');assert.equal(toggle.attrs['aria-pressed'],'false');
+ toggle.click();
+ assert.deepEqual([view.requests.at(-1).operation,view.requests.at(-1).ignoreWhitespace,view.requests.at(-1).version],['whitespace',true,1]);
+ view.render({...initial,version:2,loading:true});
+ assert.equal(toggle.disabled,true);
+ view.render({...initial,version:2,ignoreWhitespace:true});
+ assert.equal(toggle.disabled,false);assert.equal(toggle.attrs['aria-pressed'],'true');
+ assert.equal(toggle.classList.contains('selected'),true);
+ assert.match(view.root.querySelector('.git-view-status').textContent,/Whitespace ignored/);
+ toggle.click();assert.equal(view.requests.at(-1).ignoreWhitespace,false);
+});
+
+test('ignored files are hidden from the list, navigation, and initial selection',()=>{
+ const files=[file('api_test.go'),file('main.go'),file('client_gen.go'),file('util.go')];
+ const view=viewer(),initial=state({files,file:0,diff:'@@ -1 +1 @@\n-old test\n+hidden test contents'});
+ view.render(initial);
+ // The first file is ignored: request the first displayed file without painting the ignored diff.
+ assert.equal(view.requests.length,1);assert.deepEqual([view.requests[0].operation,view.requests[0].file],['file',1]);
+ assert.doesNotMatch(view.root.querySelector('.git-diff').textContent,/hidden test contents/);
+ view.render(initial);assert.equal(view.requests.length,1);
+ view.render({...initial,version:2,loading:true});
+ view.render({...initial,version:2,file:1,diff:'@@ -1 +1 @@\n-old\n+main contents'});
+ const list=view.root.querySelector('.git-view-files').querySelector('.git-scroll-list');
+ assert.deepEqual(list.querySelectorAll('.git-file').map(row=>row.attrs['aria-label'].split(',')[0]),['main.go','util.go']);
+ assert.match(view.root.querySelector('.git-view-files').querySelector('h2').textContent,/2 \/ 4 FILES/);
+ assert.match(view.root.querySelector('.git-ignore-options').querySelector('summary').textContent,/2 hidden/);
+ assert.match(view.root.querySelector('.git-file-position').textContent,/1 \/ 2 files/);
+ assert.match(view.root.querySelector('.git-diff').textContent,/main contents/);
+ key(view.document.body,'ArrowRight',{altKey:true});assert.equal(view.requests.at(-1).file,3);
+ // Showing ignored files and editing patterns applies locally, without reading Git.
+ const requests=view.requests.length;
+ const show=view.root.querySelector('.git-show-ignored').querySelector('input');
+ show.checked=true;show.onchange();
+ assert.equal(list.querySelectorAll('.git-file').length,4);
+ assert.match(view.root.querySelector('.git-ignore-options').querySelector('summary').textContent,/0 hidden/);
+ show.checked=false;show.onchange();
+ const patterns=view.root.querySelector('.git-ignore-patterns');
+ patterns.value='util.go';patterns.oninput();
+ assert.deepEqual(list.querySelectorAll('.git-file').map(row=>row.attrs['aria-label'].split(',')[0]),['api_test.go','client_gen.go','main.go']);
+ assert.equal(view.requests.length,requests);
+ // When every file is ignored, explain it instead of showing an ignored diff.
+ patterns.value='*.go';patterns.oninput();
+ assert.equal(list.querySelectorAll('.git-file').length,0);
+ assert.match(list.textContent,/All 4 changed files are hidden/);
+ assert.equal(view.root.querySelector('.git-diff').hidden,true);
+ assert.match(view.root.querySelector('.git-detail-empty').textContent,/All changed files are ignored/);
+ assert.equal(view.requests.length,requests);
+});
+
+test('unified and side-by-side diffs mark word changes, including reflowed statements and search hits',()=>{
+ const view=viewer();
+ view.render(state({diff:'@@ -1,2 +1,3 @@\n context\n-\temails, _ := db.List(q, hidden)\n+\temails, err := db.List(\n+\t\tq, hidden|outsider)'}));
+ const marks=()=>view.root.querySelector('.git-diff').querySelectorAll('.git-inline-change').map(node=>node.textContent);
+ assert.deepEqual(marks(),['_','err','|outsider']);
+ const lines=view.root.querySelector('.git-diff').querySelectorAll('.git-diff-line');
+ assert.equal(lines[2].querySelector('.git-code').textContent,'-\temails, _ := db.List(q, hidden)');
+ assert.ok(lines[2].classList.contains('delete'));
+ layoutButton(view,'Side by side').click();
+ assert.deepEqual(marks(),['_','err','|outsider']);
+ key(view.document.body,'f',{metaKey:true});
+ const input=view.root.querySelector('.diff-find-input');input.value='outs';input.oninput();
+ const hit=view.root.querySelector('.git-diff').querySelector('.diff-search-hit');
+ assert.equal(hit.textContent,'outs');assert.ok(view.root.querySelector('.git-inline-change').contains(hit)||marks().includes('|outsider'));
 });

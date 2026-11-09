@@ -7,7 +7,9 @@ const syntaxSource = await readFile(new URL('../cmd/devjay/frontend/syntax-highl
 const searchSource = await readFile(new URL('../cmd/devjay/frontend/diff-search.js',import.meta.url),'utf8');
 const syntaxURL = `data:text/javascript;base64,${Buffer.from(syntaxSource).toString('base64')}`;
 const searchURL = `data:text/javascript;base64,${Buffer.from(searchSource.replace('./syntax-highlight.js',syntaxURL)).toString('base64')}`;
-const moduleSource = source.replace('./syntax-highlight.js',syntaxURL).replace('./diff-search.js',searchURL);
+const ignoreSource = await readFile(new URL('../cmd/devjay/frontend/file-ignore.js',import.meta.url),'utf8');
+const ignoreURL = `data:text/javascript;base64,${Buffer.from(ignoreSource).toString('base64')}`;
+const moduleSource = source.replace('./syntax-highlight.js',syntaxURL).replace('./diff-search.js',searchURL).replace('./file-ignore.js',ignoreURL);
 const {reviewTextLines,reviewDiffModel,reviewVisibleRows,reviewUnifiedRows,reviewCommitSummary,reviewFileMatches,reviewIgnoreMatchers,reviewFileIgnored} = await import(`data:text/javascript;base64,${Buffer.from(moduleSource).toString('base64')}`);
 
 test('full-file model preserves prefix and suffix, beginning/end insertions, deletions and CRLF',()=>{
@@ -74,7 +76,7 @@ function viewer(storage = new Map()) {
     dispatchEvent(event){event.target??=this;event.currentTarget=this;for(const listener of listeners[event.type]||[])listener(event);return !event.defaultPrevented;}};
   html.append(body);body.append(root);
   const frames=new Map(),timers=new Map();let nextFrame=0,nextTimer=0,now=0;
-  const context=vm.createContext({document,setTimeout:(fn,delay)=>{timers.set(++nextTimer,{fn,at:now+delay});return nextTimer;},clearTimeout:id=>timers.delete(id),requestAnimationFrame:fn=>{frames.set(++nextFrame,fn);return nextFrame;},cancelAnimationFrame:id=>frames.delete(id),localStorage:{setItem:(key,value)=>storage.set(key,value),getItem:key=>storage.has(key)?storage.get(key):null},sessionStorage:{setItem:(key,value)=>storage.set(key,value),getItem:key=>storage.get(key)||null,removeItem:key=>storage.delete(key)}});vm.runInContext(syntaxSource.replace(/^export /gm,'')+'\n'+searchSource.replace(/^import .*;\n/gm,'').replace(/^export /gm,'')+'\n'+source.replace(/^import .*;\n/gm,'').replace(/^export /gm,''),context);
+  const context=vm.createContext({document,setTimeout:(fn,delay)=>{timers.set(++nextTimer,{fn,at:now+delay});return nextTimer;},clearTimeout:id=>timers.delete(id),requestAnimationFrame:fn=>{frames.set(++nextFrame,fn);return nextFrame;},cancelAnimationFrame:id=>frames.delete(id),localStorage:{setItem:(key,value)=>storage.set(key,value),getItem:key=>storage.has(key)?storage.get(key):null},sessionStorage:{setItem:(key,value)=>storage.set(key,value),getItem:key=>storage.get(key)||null,removeItem:key=>storage.delete(key)}});vm.runInContext(syntaxSource.replace(/^export /gm,'')+'\n'+searchSource.replace(/^import .*;\n/gm,'').replace(/^export /gm,'')+'\n'+ignoreSource.replace(/^export /gm,'')+'\n'+source.replace(/^import .*;\n/gm,'').replace(/^export \{.*\};\n/gm,'').replace(/^export /gm,''),context);
   const requests=[],prefetchRequests=[];const api=context.createBranchReview(root,data=>{(data.operation==='review-prefetch'?prefetchRequests:requests).push(JSON.parse(JSON.stringify(data)));return true;});
   const flushFrames=()=>{const pending=[...frames.values()];frames.clear();for(const fn of pending)fn();};
   return {root,document,requests,prefetchRequests,frames,timers,flushFrames,advance(ms){now+=ms;for(const [id,timer] of [...timers])if(timer.at<=now){timers.delete(id);timer.fn();}},...api,prefetch(next){flushFrames();api.prefetch({prefetchID:prefetchRequests.at(-1)?.prefetchID,...next});}};

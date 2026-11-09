@@ -406,3 +406,83 @@ func TestBranchHistoryWithoutRemoteAndBeforeFirstCommit(t *testing.T) {
 		t.Fatalf("unlinked: %+v", v)
 	}
 }
+
+func TestViewerIgnoreWhitespaceRereadsStatsAndSelectedDiff(t *testing.T) {
+	repo := t.TempDir()
+	fixtureGit(t, repo, "init", "--initial-branch=main")
+	writeFixture(t, repo, "a.txt", "x\n  y\n")
+	writeFixture(t, repo, "b.txt", "one\n")
+	fixtureGit(t, repo, "add", ".")
+	fixtureGit(t, repo, "commit", "-m", "root")
+	writeFixture(t, repo, "a.txt", "x\n\ty \n")
+	writeFixture(t, repo, "b.txt", "two\n")
+	fixtureGit(t, repo, "add", ".")
+	fixtureGit(t, repo, "commit", "-m", "reindent")
+	commit := fixtureGit(t, repo, "rev-parse", "HEAD")
+	stats := func(v *GitView) map[string][3]int {
+		result := map[string][3]int{}
+		for _, f := range v.Files {
+			known := 0
+			if f.StatsKnown {
+				known = 1
+			}
+			result[f.Group+":"+f.Path] = [3]int{f.Added, f.Removed, known}
+		}
+		return result
+	}
+
+	v := GitView{Path: repo, Kind: "local"}
+	v.root = repo
+	v.Commits = []ViewCommit{{ID: commit}}
+	if err := selectViewCommit(context.Background(), &v, commit); err != nil {
+		t.Fatal(err)
+	}
+	if v.File != 0 || v.Files[0].Path != "a.txt" || !strings.Contains(v.Diff, "+\ty ") {
+		t.Fatalf("whitespace change hidden by default: %+v", v)
+	}
+	if err := selectViewWhitespace(context.Background(), &v, true); err != nil {
+		t.Fatal(err)
+	}
+	if v.Diff != "" || v.DiffNote != "No text differences with whitespace ignored." {
+		t.Fatalf("whitespace-only diff: %q %q", v.Diff, v.DiffNote)
+	}
+	if got := stats(&v); got["Commit:a.txt"] != [3]int{0, 0, 1} || got["Commit:b.txt"] != [3]int{1, 1, 1} {
+		t.Fatalf("whitespace-ignored stats: %+v", got)
+	}
+	key, _ := viewFileCacheKey(&v, 0)
+	if !key.ignoreWhitespace {
+		t.Fatal("cache key does not record the whitespace option")
+	}
+	selectViewFile(context.Background(), &v, 1)
+	if !strings.Contains(v.Diff, "+two") {
+		t.Fatalf("real change missing with whitespace ignored: %s", v.Diff)
+	}
+	if err := selectViewWhitespace(context.Background(), &v, false); err != nil {
+		t.Fatal(err)
+	}
+	if v.File != 1 || !strings.Contains(v.Diff, "+two") || stats(&v)["Commit:a.txt"] != [3]int{1, 1, 1} {
+		t.Fatalf("restoring whitespace lost selection or stats: %+v", v)
+	}
+
+	// Working-tree and index diffs use the same option without writing.
+	writeFixture(t, repo, "a.txt", "x\n  y \n")
+	writeFixture(t, repo, "b.txt", "three\n")
+	before := fixtureGit(t, repo, "status", "--porcelain=v2", "-z")
+	edits := GitView{Path: repo, Kind: "edits", IgnoreWhitespace: true}
+	if err := loadGitView(context.Background(), &edits, true); err != nil {
+		t.Fatal(err)
+	}
+	if got := stats(&edits); got["Unstaged:a.txt"] != [3]int{0, 0, 1} || got["Unstaged:b.txt"] != [3]int{1, 1, 1} {
+		t.Fatalf("working-tree stats: %+v", got)
+	}
+	if edits.Diff != "" || !strings.Contains(edits.DiffNote, "whitespace ignored") {
+		t.Fatalf("working-tree whitespace diff: %q %q", edits.Diff, edits.DiffNote)
+	}
+	if after := fixtureGit(t, repo, "status", "--porcelain=v2", "-z"); after != before {
+		t.Fatal("viewer changed checkout")
+	}
+	review := GitView{Kind: "review"}
+	if err := selectViewWhitespace(context.Background(), &review, true); err == nil || review.IgnoreWhitespace {
+		t.Fatal("Review whitespace must use its own option")
+	}
+}

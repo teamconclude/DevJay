@@ -69,6 +69,9 @@ func populateViewStats(ctx context.Context, v *GitView) {
 	}
 	for _, group := range groups {
 		args := []string{"diff", "--no-ext-diff", "--no-textconv", "--numstat", "-z", "--find-renames"}
+		if v.IgnoreWhitespace {
+			args = append(args, "--ignore-all-space")
+		}
 		if v.Kind == "edits" {
 			if group == "Staged" {
 				args = append(args, "--cached")
@@ -95,6 +98,9 @@ func populateViewStats(ctx context.Context, v *GitView) {
 			}
 			if counts, ok := stats[f.Path]; ok {
 				f.Added, f.Removed, f.Binary, f.StatsKnown = counts.Added, counts.Removed, counts.Binary, true
+			} else if v.IgnoreWhitespace {
+				// Ignoring whitespace omits files whose only changes are whitespace.
+				f.Added, f.Removed, f.Binary, f.StatsKnown = 0, 0, false, true
 			}
 		}
 	}

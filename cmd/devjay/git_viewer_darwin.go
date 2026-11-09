@@ -243,6 +243,9 @@ func (m *siteManager) openViewer(req viewerRequest, parent *application.WebviewW
 	})
 	state := &GitView{SiteID: req.SiteID, Name: filepath.Base(site.Site.Path), Path: site.Site.Path, Branch: site.Git.Branch, File: -1, RemoteNote: site.Git.RemoteNote, Rebased: site.Git.Rebased}
 	state.OldestFirst = m.config.BranchHistoryOldestFirst
+	if req.Kind != "review" {
+		state.IgnoreWhitespace = req.IgnoreWhitespace // Only a duplicated window carries this choice.
+	}
 	setViewMode(state, req.Kind)
 	m.viewers[id] = &gitViewerWindow{window: w, title: title, parent: parent, anchor: req.Anchor, used: m.viewerSequence, state: state, navigation: navigation}
 	m.watchView(id, w)
@@ -353,7 +356,7 @@ func (m *siteManager) registerViewerEvents() {
 			}
 			if req.Operation == "review-open" {
 				if site := m.runtime[r.state.SiteID]; site != nil && site.Ready {
-					open := viewerRequest{SiteID: r.state.SiteID, Kind: "review", NewWindow: true}
+					open := viewerRequest{SiteID: r.state.SiteID, Kind: "review", NewWindow: true, IgnoreWhitespace: r.state.IgnoreWhitespace}
 					if r.state.Review != nil {
 						open.BaseRef, open.IgnoreWhitespace = r.state.Review.BaseRef, r.state.Review.IgnoreWhitespace
 					}
@@ -414,6 +417,8 @@ func (m *siteManager) registerViewerEvents() {
 					return selectViewHistoryScope(ctx, v, req.Scope)
 				case "file":
 					selectViewFile(ctx, v, req.File)
+				case "whitespace":
+					return selectViewWhitespace(ctx, v, req.IgnoreWhitespace)
 				}
 				return nil
 			})

@@ -8,7 +8,9 @@ const syntaxSource=await readFile(new URL('../cmd/devjay/frontend/syntax-highlig
 source=source.replace('./syntax-highlight.js',`data:text/javascript;base64,${Buffer.from(syntaxSource).toString('base64')}`);
 const searchSource=(await readFile(new URL('../cmd/devjay/frontend/diff-search.js',import.meta.url),'utf8')).replace('./syntax-highlight.js',`data:text/javascript;base64,${Buffer.from(syntaxSource).toString('base64')}`);
 source=source.replace('./diff-search.js',`data:text/javascript;base64,${Buffer.from(searchSource).toString('base64')}`);
-const {diffRows,splitDiff,changedText,summarizeFiles,remoteHistoryContext,localHistoryContext,commitPresenceLabel,branchHistoryContext,viewCategory,sameDiffSelection}=await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
+const ignoreSource=await readFile(new URL('../cmd/devjay/frontend/file-ignore.js',import.meta.url),'utf8');
+source=source.replace('./file-ignore.js',`data:text/javascript;base64,${Buffer.from(ignoreSource).toString('base64')}`);
+const {diffRows,splitDiff,inlineChanges,summarizeFiles,remoteHistoryContext,localHistoryContext,commitPresenceLabel,branchHistoryContext,viewCategory,sameDiffSelection}=await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
 test('unified diff rows retain independent old and new line numbers',()=>{
  const rows=diffRows('--- a/file\n+++ b/file\n@@ -3,2 +3,3 @@\n context\n-old\n+new\n+added\n\\ No newline at end of file');
  assert.deepEqual(rows.slice(3,7).map(r=>[r.kind,r.old,r.current]),[['context',3,3],['delete',4,''],['add','',4],['add','',5]]);
@@ -45,11 +47,40 @@ test('split diff preserves no-newline annotations, literal source, additions and
  assert.equal(splitDiff('@@@ -1 -1 +1 @@@\n++conflict').supported,false);
 });
 
-test('inline change highlights only differing text, including Unicode and empty sides',()=>{
- assert.deepEqual(changedText('return old(value);','return new(value);'),[['return ','old','(value);'],['return ','new','(value);']]);
- assert.deepEqual(changedText('a😀z','a🌍z'),[['a','😀','z'],['a','🌍','z']]);
- assert.deepEqual(changedText('','added'),[['','',''],['','added','']]);
- assert.deepEqual(changedText('same','same'),[['same','',''],['same','','']]);
+test('inline changes mark differing words, including Unicode, and skip unrelated lines',()=>{
+ const marks=(lines,ranges)=>lines.map((line,index)=>ranges[index].map(([from,to])=>line.slice(from,to)));
+ const before=['import Api from "@conclude/core/Api"'],after=['import Api, { errorText } from "@conclude/core/Api"'];
+ const imports=inlineChanges(before,after);
+ assert.deepEqual(marks(before,imports.before),[[]]);assert.deepEqual(marks(after,imports.after),[[', { errorText }']]);
+ const comment=[['\tOrgID int64 // organization for audit'],['\tOrgID int64 // organization merged within']];
+ assert.deepEqual(marks(comment[1],inlineChanges(...comment).after),[['merged within']]);
+ assert.deepEqual(marks(['a😀z'],inlineChanges(['a😀z'],['a🌍z']).before),[['😀']]);
+ assert.equal(inlineChanges(['completely different text here'],['nothing alike at all, 123']),null);
+ assert.deepEqual(inlineChanges(['same'],['same']),{before:[[]],after:[[]]});
+});
+
+test('inline changes treat reflowed lines as one statement and ignore layout whitespace',()=>{
+ const marks=(lines,ranges)=>lines.map((line,index)=>ranges[index].map(([from,to])=>line.slice(from,to)));
+ const before=['\temails, _ := db.ListStrings(q, org.TeamIDs, UserIsHidden)'];
+ const after=['\temails, err := db.ListStrings(','\t\tq, org.TeamIDs, UserIsHidden,','\t)'];
+ const result=inlineChanges(before,after);
+ assert.deepEqual(marks(before,result.before),[['_']]);
+ assert.deepEqual(marks(after,result.after),[['err'],[','],[]]);
+ // Pure reflow has no content marks on either side.
+ const reflow=inlineChanges(['\tcall(a, b)'],['\tcall(','\t\ta,','\t\tb)']);
+ assert.deepEqual(reflow,{before:[[]],after:[[],[],[]]});
+ // Large blocks stay within the comparison budget instead of blocking rendering.
+ const lines=Array.from({length:400},(_,i)=>`value${i} := compute(${i}, other${i})`);
+ assert.equal(inlineChanges(lines,lines.map(line=>line+' // changed')),null);
+ const budget={cells:10};assert.equal(inlineChanges(before,after,budget),null);assert.equal(budget.cells,10);
+});
+
+test('split diff blocks carry shared inline ranges for both layouts',()=>{
+ const model=splitDiff('@@ -1,2 +1,3 @@\n context\n-\tx, _ := f(a, b)\n+\tx, err := f(\n+\t\ta, b)');
+ const deleted=model.unified.find(row=>row.kind==='delete'),added=model.unified.filter(row=>row.kind==='add');
+ assert.deepEqual(deleted.inline,[[4,5]]);assert.deepEqual(added.map(row=>row.inline),[[[4,7]],[]]);
+ assert.equal(model.rows.find(row=>row.kind==='change').before,deleted);
+ assert.equal(splitDiff('@@ -1 +1,2 @@\n+only\n+added').unified.some(row=>row.inline),false);
 });
 
 test('summary counts distinct paths and sums staged/unstaged lines separately',()=>{

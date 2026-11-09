@@ -64,6 +64,7 @@ func (m *siteManager) fileMenuTarget(source string, review bool) (viewerRequest,
 			site = nil // The source belongs to a removed or relocated folder.
 		}
 		req.Kind, parent = viewer.state.Kind, viewer.window
+		req.IgnoreWhitespace = viewer.state.IgnoreWhitespace
 		if viewer.state.Review != nil {
 			req.BaseRef = viewer.state.Review.BaseRef
 			req.IgnoreWhitespace = viewer.state.Review.IgnoreWhitespace

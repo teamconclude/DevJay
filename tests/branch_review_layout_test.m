@@ -56,7 +56,7 @@ int main(void) {
         }
         NSMutableString *js = [NSMutableString string];
         NSRegularExpression *imports=[NSRegularExpression regularExpressionWithPattern:@"^import .*;\\n" options:NSRegularExpressionAnchorsMatchLines error:nil];
-        for (NSString *name in @[@"syntax-highlight",@"diff-search",@"file-editor",@"git-viewer",@"branch-review"]) {
+        for (NSString *name in @[@"syntax-highlight",@"diff-search",@"file-ignore",@"file-editor",@"git-viewer",@"branch-review"]) {
             NSString *source=[NSString stringWithContentsOfFile:[NSString stringWithFormat:@"cmd/devjay/frontend/%@.js",name] encoding:NSUTF8StringEncoding error:nil];assert(source);
             source=[imports stringByReplacingMatchesInString:source options:0 range:NSMakeRange(0,source.length) withTemplate:@""];
             [js appendFormat:@"\n%@\n",[source stringByReplacingOccurrencesOfString:@"export " withString:@""]];

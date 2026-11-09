@@ -1,5 +1,7 @@
 import { syntaxLines } from './syntax-highlight.js';
 import { findTextMatches, filterSearchRows, appendSearchSyntax } from './diff-search.js';
+import { defaultReviewIgnorePatterns, reviewIgnoreMatchers, reviewFileIgnored, ignorePatternsStorageKey, storedIgnorePatterns, saveIgnorePatterns } from './file-ignore.js';
+export { defaultReviewIgnorePatterns, reviewIgnoreMatchers, reviewFileIgnored };
 // Branch Review owns presentation and selection per window. Repository data is
 // provided by the bounded, read-only Git reader; source text is never HTML.
 const reviewRowLimit = 5000;
@@ -88,38 +90,6 @@ export function reviewFileMatches(file, query) {
   const terms = query.toLocaleLowerCase().trim().split(/\s+/).filter(Boolean);
   const path = `${file.path} ${file.oldPath || ''}`.toLocaleLowerCase();
   return terms.every(term => path.includes(term));
-}
-
-export const defaultReviewIgnorePatterns = '*_test.go\n*_gen.go';
-
-// Filename patterns apply in every folder; path patterns are repository-relative.
-// ** crosses folders, while * and ? match within one path component.
-export function reviewIgnoreMatchers(value) {
-  return value.split(/[,\n]/).map(pattern => pattern.trim()).filter(Boolean).map(pattern => {
-    const rooted = pattern.startsWith('/');
-    pattern = pattern.replace(/^\//, '');
-    const directory = pattern.endsWith('/');
-    if (directory) pattern = pattern.slice(0, -1);
-    const anywhere = !rooted && !pattern.includes('/');
-    let source = '';
-    for (let i = 0; i < pattern.length; i++) {
-      const char = pattern[i];
-      if (char === '*') {
-        if (pattern[i + 1] === '*') {
-          while (pattern[i + 1] === '*') i++;
-          if (pattern[i + 1] === '/') { source += '(?:.*/)?'; i++; }
-          else source += '.*';
-        } else source += '[^/]*';
-      } else if (char === '?') source += '[^/]';
-      else source += char.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    }
-    return new RegExp((anywhere ? '(?:^|/)' : '^') + source + (directory ? '/.*$' : '$'));
-  });
-}
-
-export function reviewFileIgnored(file, matchers) {
-  // A rename out of an ignored name must remain reviewable.
-  return matchers.some(pattern => pattern.test(file.path));
 }
 
 export function createBranchReview(root, request, options = {}) {
@@ -790,7 +760,7 @@ export function createBranchReview(root, request, options = {}) {
   ignorePatterns.oninput = () => {
     if (editing || beginningEdit) return;
     ignoreMatchers = reviewIgnoreMatchers(ignorePatterns.value);
-    try { if (ignoreStorageKey) localStorage.setItem(ignoreStorageKey, ignorePatterns.value); } catch {}
+    if (ignoreStorageKey) saveIgnorePatterns(ignoreStorageKey, ignorePatterns.value);
     applyFileFilters();
   };
   showIgnored.onchange = applyFileFilters;
@@ -843,12 +813,10 @@ export function createBranchReview(root, request, options = {}) {
     if (destroyed) return;
     if (prefetchBatch && (next.version !== prefetchBatch.version || next.loading)) prefetchBatch = null;
     view = next;
-    const storageKey = 'devjay-branch-review-ignore:' + (view.path || view.siteID || '');
+    const storageKey = ignorePatternsStorageKey(view.path || view.siteID);
     if (storageKey !== ignoreStorageKey && !editing && !beginningEdit) {
       ignoreStorageKey = storageKey;
-      let saved = null;
-      try { saved = localStorage.getItem(storageKey); } catch {}
-      ignorePatterns.value = saved ?? defaultReviewIgnorePatterns;
+      ignorePatterns.value = storedIgnorePatterns(storageKey) ?? defaultReviewIgnorePatterns;
       ignoreMatchers = reviewIgnoreMatchers(ignorePatterns.value);
     }
     const review = view.review;
