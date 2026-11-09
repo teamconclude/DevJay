@@ -368,8 +368,13 @@ func TestReviewWhitespaceChoiceIsRememberedForNewReviews(t *testing.T) {
 	if !reviewOpenWhitespace(viewerRequest{Kind: "review"}, saved) || reviewOpenWhitespace(viewerRequest{Kind: "review"}, SiteConfig{}) {
 		t.Fatal("a new Review did not start with the saved whitespace choice")
 	}
-	if reviewOpenWhitespace(viewerRequest{Kind: "review", NewWindow: true}, saved) ||
-		!reviewOpenWhitespace(viewerRequest{Kind: "review", NewWindow: true, IgnoreWhitespace: true}, SiteConfig{}) {
+	// New windows without a source Review (strip, Settings, a Site, or a
+	// Changes/History window) still use the saved choice.
+	if !reviewOpenWhitespace(viewerRequest{Kind: "review", NewWindow: true}, saved) {
+		t.Fatal("a new Review window ignored the saved whitespace choice")
+	}
+	if reviewOpenWhitespace(viewerRequest{Kind: "review", NewWindow: true, reviewWhitespace: true}, saved) ||
+		!reviewOpenWhitespace(viewerRequest{Kind: "review", NewWindow: true, IgnoreWhitespace: true, reviewWhitespace: true}, SiteConfig{}) {
 		t.Fatal("a duplicated Review did not keep its source window's choice")
 	}
 	shown := &BranchReview{IgnoreWhitespace: false}

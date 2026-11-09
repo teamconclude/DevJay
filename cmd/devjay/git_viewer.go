@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -753,6 +754,8 @@ func selectViewWhitespace(ctx context.Context, v *GitView, ignore bool) error {
 		return nil
 	}
 	v.IgnoreWhitespace = ignore
+	// The worker's copy shares this slice with the published snapshot.
+	v.Files = slices.Clone(v.Files)
 	for i := range v.Files {
 		f := &v.Files[i]
 		f.Added, f.Removed, f.Binary, f.StatsKnown = 0, 0, false, false

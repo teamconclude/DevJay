@@ -67,7 +67,7 @@ func (m *siteManager) fileMenuTarget(source string, review bool) (viewerRequest,
 		req.IgnoreWhitespace = viewer.state.IgnoreWhitespace
 		if viewer.state.Review != nil {
 			req.BaseRef = viewer.state.Review.BaseRef
-			req.IgnoreWhitespace = viewer.state.Review.IgnoreWhitespace
+			req.IgnoreWhitespace, req.reviewWhitespace = viewer.state.Review.IgnoreWhitespace, true
 		}
 	} else if strings.HasPrefix(source, "git-viewer-") {
 		// The captured source closed before its queued command could run.

@@ -35,6 +35,9 @@ type viewerRequest struct {
 	PrefetchID       uint64              `json:"prefetchID"`
 	Page             int                 `json:"page"`
 	NewWindow        bool                `json:"newWindow"`
+	// A source Review window supplied IgnoreWhitespace. Unexported so only the
+	// manager sets it; other new Reviews start from the saved choice.
+	reviewWhitespace bool
 }
 
 // Each window owns its snapshot, selections, and cancellable read. UI events
@@ -359,9 +362,9 @@ func (m *siteManager) registerViewerEvents() {
 			}
 			if req.Operation == "review-open" {
 				if site := m.runtime[r.state.SiteID]; site != nil && site.Ready {
-					open := viewerRequest{SiteID: r.state.SiteID, Kind: "review", NewWindow: true, IgnoreWhitespace: r.state.IgnoreWhitespace}
+					open := viewerRequest{SiteID: r.state.SiteID, Kind: "review", NewWindow: true}
 					if r.state.Review != nil {
-						open.BaseRef, open.IgnoreWhitespace = r.state.Review.BaseRef, r.state.Review.IgnoreWhitespace
+						open.BaseRef, open.IgnoreWhitespace, open.reviewWhitespace = r.state.Review.BaseRef, r.state.Review.IgnoreWhitespace, true
 					}
 					m.openViewer(open, r.window, site)
 				}

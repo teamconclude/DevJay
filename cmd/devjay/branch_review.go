@@ -520,10 +520,11 @@ func branchReviewWorktreeFingerprint(ctx context.Context, root string, files []V
 	return fmt.Sprintf("%x", hash.Sum(nil)), nil
 }
 
-// A new Review starts with the last whitespace choice; a duplicated Review
-// keeps its source window's choice instead.
+// A new Review starts with the last whitespace choice; a Review opened from
+// another Review window keeps that window's choice instead. A new window from
+// the strip, Settings, a Site, or a Changes/History window has no Review choice.
 func reviewOpenWhitespace(req viewerRequest, config SiteConfig) bool {
-	if req.NewWindow {
+	if req.reviewWhitespace {
 		return req.IgnoreWhitespace
 	}
 	return config.ReviewIgnoreWhitespace

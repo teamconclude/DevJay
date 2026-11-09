@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -440,8 +442,24 @@ func TestViewerIgnoreWhitespaceRereadsStatsAndSelectedDiff(t *testing.T) {
 	if v.File != 0 || v.Files[0].Path != "a.txt" || !strings.Contains(v.Diff, "+\ty ") {
 		t.Fatalf("whitespace change hidden by default: %+v", v)
 	}
-	if err := selectViewWhitespace(context.Background(), &v, true); err != nil {
+	// viewerLoad's worker gets a shallow copy of the published snapshot. The
+	// snapshot must not change, even while it is serialized for an emission.
+	published := v
+	want := slices.Clone(published.Files)
+	serialized := make(chan struct{})
+	go func() {
+		defer close(serialized)
+		for range 20 {
+			_, _ = json.Marshal(&published)
+		}
+	}()
+	err := selectViewWhitespace(context.Background(), &v, true)
+	<-serialized
+	if err != nil {
 		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(published.Files, want) {
+		t.Fatalf("whitespace toggle changed the published snapshot: %+v", published.Files)
 	}
 	if v.Diff != "" || v.DiffNote != "No text differences with whitespace ignored." {
 		t.Fatalf("whitespace-only diff: %q %q", v.Diff, v.DiffNote)
