@@ -653,6 +653,56 @@ void devjay_show_viewer_on_site(void *pointer) {
     objc_setAssociatedObject(window,&viewerPlacementKey,nil,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
 
+// Viewer and Review windows open at the last size the user dragged one of
+// that kind to. Only completed live resizes are saved, so screen clamping or
+// tiling never replaces the choice. The window owns its observer; AppKit
+// unregisters it when the window releases it.
+@interface DevJayViewerSizeObserver : NSObject {
+    NSString *key;
+}
+- (id)initWithKey:(NSString *)value window:(NSWindow *)window;
+@end
+@implementation DevJayViewerSizeObserver
+- (id)initWithKey:(NSString *)value window:(NSWindow *)window {
+    if ((self = [super init])) {
+        key = [value copy];
+        [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(resized:) name:NSWindowDidEndLiveResizeNotification object:window];
+    }
+    return self;
+}
+- (void)resized:(NSNotification *)notification {
+    NSSize size = ((NSWindow *)notification.object).frame.size;
+    if (size.width > 0 && size.height > 0) [NSUserDefaults.standardUserDefaults setObject:NSStringFromSize(size) forKey:key];
+}
+- (void)dealloc {
+    [NSNotificationCenter.defaultCenter removeObserver:self];
+    [key release];
+    [super dealloc];
+}
+@end
+
+static char viewerSizeKey;
+
+void devjay_restore_viewer_size(void *pointer, int review) {
+    NSWindow *window = (NSWindow *)pointer;
+    if (!window || objc_getAssociatedObject(window,&viewerSizeKey)) return; // Once per window.
+    NSString *key = review ? @"DevJay.Viewer.ReviewSize" : @"DevJay.Viewer.Size";
+    NSString *saved = [NSUserDefaults.standardUserDefaults stringForKey:key];
+    if (saved) {
+        NSSize size = NSSizeFromString(saved);
+        if (isfinite(size.width) && isfinite(size.height) && size.width >= window.minSize.width && size.height >= window.minSize.height) {
+            // Placement runs next and clamps the frame to the target display.
+            NSRect frame = window.frame;
+            frame.origin.y += frame.size.height - size.height;
+            frame.size = size;
+            [window setFrame:frame display:NO];
+        }
+    }
+    DevJayViewerSizeObserver *observer = [[DevJayViewerSizeObserver alloc] initWithKey:key window:window];
+    objc_setAssociatedObject(window,&viewerSizeKey,observer,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    [observer release];
+}
+
 // Present the native alert as a dismissible window without NSAlert's automatic
 // screen centering or a modal loop that stalls the manager's main-thread calls.
 @interface DevJayMessageDialog : NSResponder <NSWindowDelegate> {

@@ -40,7 +40,7 @@ int main(void) {
             NSString *source=[NSString stringWithContentsOfFile:[NSString stringWithFormat:@"cmd/devjay/frontend/%@.css",name] encoding:NSUTF8StringEncoding error:nil];assert(source);[css appendString:source];
         }
         NSRegularExpression *imports=[NSRegularExpression regularExpressionWithPattern:@"^import .*;\\n" options:NSRegularExpressionAnchorsMatchLines error:nil];
-        for (NSString *name in @[@"syntax-highlight",@"diff-search",@"file-ignore",@"branch-review",@"pr-review"]) {
+        for (NSString *name in @[@"syntax-highlight",@"diff-search",@"file-ignore",@"view-preferences",@"branch-review",@"pr-review"]) {
             NSString *source=[NSString stringWithContentsOfFile:[NSString stringWithFormat:@"cmd/devjay/frontend/%@.js",name] encoding:NSUTF8StringEncoding error:nil];assert(source);
             source=[imports stringByReplacingMatchesInString:source options:0 range:NSMakeRange(0,source.length) withTemplate:@""];
             [js appendFormat:@"\n%@\n",[source stringByReplacingOccurrencesOfString:@"export " withString:@""]];

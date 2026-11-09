@@ -2,6 +2,7 @@ import { mountFileEditor } from './file-editor.js';
 import { syntaxLines } from './syntax-highlight.js';
 import { filterSearchRows, appendSearchSyntax } from './diff-search.js';
 import { defaultReviewIgnorePatterns, reviewIgnoreMatchers, reviewFileIgnored, ignorePatternsStorageKey, storedIgnorePatterns, saveIgnorePatterns } from './file-ignore.js';
+import { storedViewPreference, saveViewPreference, diffLayoutPreference, diffLayouts } from './view-preferences.js';
 // Diff contents are always text nodes, never HTML. Line numbers remain aligned
 // with unified hunks; combined conflict hunks are displayed verbatim.
 export function diffRows(text) {
@@ -388,7 +389,7 @@ export function mountGitViewer(root, request, suggestions, openBranches) {
   const renderEditor=mountFileEditor(editorControls,request);
   const note=el('p','git-diff-note');
   const diff=el('div','git-diff');diff.tabIndex=0;diff.setAttribute('aria-label','File diff');
-  let layout='unified',difference=-1,model=null,changeNodes=[],fileRows=[];
+  let layout=storedViewPreference(diffLayoutPreference,diffLayouts)||'unified',difference=-1,model=null,changeNodes=[],fileRows=[];
   const diffToolbar=el('div','git-diff-toolbar');diffToolbar.setAttribute('aria-label','Diff navigation');
   const differenceStatus=el('span','git-diff-position'),fileStatus=el('span','git-file-position');
   differenceStatus.setAttribute('aria-live','polite');
@@ -400,8 +401,11 @@ export function mountGitViewer(root, request, suggestions, openBranches) {
   const differenceControls=el('div','git-diff-navigation');differenceControls.append(previousDiff,nextDiff,differenceStatus);
   const fileControls=el('div','git-diff-navigation');fileControls.append(previousFile,fileStatus,nextFile);
   const layoutControls=el('div','git-diff-layout');layoutControls.setAttribute('aria-label','Diff layout');
-  const unifiedButton=button('Unified',()=>setLayout('unified'));
-  const splitButton=button('Side by side',()=>setLayout('split'));
+  // Only explicit layout choices are remembered; All branch changes switches
+  // this window to side by side without changing the saved preference.
+  const chooseLayout=next=>{if(setLayout(next))saveViewPreference(diffLayoutPreference,next);};
+  const unifiedButton=button('Unified',()=>chooseLayout('unified'));
+  const splitButton=button('Side by side',()=>chooseLayout('split'));
   layoutControls.append(unifiedButton,splitButton);
   const whitespaceButton=button('Ignore whitespace',()=>{if(state&&!state.loading)send('whitespace',{ignoreWhitespace:!state.ignoreWhitespace});},'git-diff-whitespace');
   whitespaceButton.title='Hide changes that only add, remove, or reindent whitespace';
@@ -473,9 +477,11 @@ export function mountGitViewer(root, request, suggestions, openBranches) {
     if(index>=0&&row)send('file',{file:row.index});
   }
   function setLayout(next){
-    if(!state||state.loading||next===layout)return;
+    if(!state||state.loading)return false;
+    if(next===layout)return true;
     layout=next;placeFiles();paintDiff(state);
     changeNodes[difference]?.scrollIntoView({block:'center',inline:'nearest'});
+    return true;
   }
   function appendInline(code,text,tokens,query,ranges,budget){
     let cursor=0;

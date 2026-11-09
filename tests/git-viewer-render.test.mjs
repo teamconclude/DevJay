@@ -8,10 +8,11 @@ const syntaxSource=(await readFile(new URL('../cmd/devjay/frontend/syntax-highli
 const searchSource=(await readFile(new URL('../cmd/devjay/frontend/diff-search.js',import.meta.url),'utf8')).replace(/^import .*;\n/gm,'').replace(/^export /gm,'');
 const viewerSource=(await readFile(new URL('../cmd/devjay/frontend/git-viewer.js',import.meta.url),'utf8')).replace(/^import .*;\n/gm,'').replace(/^export /gm,'');
 const ignoreSource=(await readFile(new URL('../cmd/devjay/frontend/file-ignore.js',import.meta.url),'utf8')).replace(/^export /gm,'');
+const preferenceSource=(await readFile(new URL('../cmd/devjay/frontend/view-preferences.js',import.meta.url),'utf8')).replace(/^export /gm,'');
 
 // Mount the production renderer. Fragments, focus and scroll are represented
 // here so assertions cover updates to the actual diff DOM, not just helpers.
-function viewer(openBranches) {
+function viewer(openBranches,storage) {
   let document;
   class Element {
     constructor(tag) {
@@ -51,8 +52,9 @@ function viewer(openBranches) {
     addEventListener(type,listener){(listeners[type]||=new Set()).add(listener);},removeEventListener(type,listener){listeners[type]?.delete(listener);},
     dispatchEvent(event){event.target??=this;event.currentTarget=this;for(const listener of listeners[event.type]||[])listener(event);return !event.defaultPrevented;}};
   html.append(body);body.append(root);
-  const context=vm.createContext({document});
-  vm.runInContext(syntaxSource+'\n'+searchSource+'\n'+editorSource+'\n'+ignoreSource+'\n'+viewerSource,context);
+  const localStorage=storage&&{getItem:key=>storage.has(key)?storage.get(key):null,setItem:(key,value)=>storage.set(key,value)};
+  const context=vm.createContext(storage?{document,localStorage}:{document});
+  vm.runInContext(syntaxSource+'\n'+searchSource+'\n'+editorSource+'\n'+ignoreSource+'\n'+preferenceSource+'\n'+viewerSource,context);
   const requests=[];
   return {root,document,requests,render:context.mountGitViewer(root,request=>requests.push(request),null,openBranches)};
 }
@@ -232,6 +234,23 @@ function key(target,key,modifiers={}) {
 
 const control=(view,label)=>view.root.querySelectorAll('button').find(node=>node.attrs['aria-label']?.startsWith(label));
 const layoutButton=(view,label)=>view.root.querySelector('.git-diff-layout').querySelectorAll('button').find(node=>node.textContent===label);
+
+test('the chosen diff layout is remembered, but All branch changes does not replace it',()=>{
+ const storage=new Map(),first=viewer(undefined,storage);first.render(state());
+ assert.equal(layoutButton(first,'Unified').attrs['aria-pressed'],'true');
+ layoutButton(first,'Side by side').click();
+ assert.equal(storage.get('devjay-view:diff-layout'),'split');
+ const second=viewer(undefined,storage);second.render(state());
+ assert.equal(layoutButton(second,'Side by side').attrs['aria-pressed'],'true');
+ layoutButton(second,'Unified').click();
+ const branch=state({kind:'branch',branchOnly:true,branchCommits:2,branchDiff:{base:'base',target:'origin/main'}});
+ second.render({...branch,version:2});second.root.querySelector('.git-branch-diff').click();
+ assert.equal(layoutButton(second,'Side by side').attrs['aria-pressed'],'true');
+ assert.equal(storage.get('devjay-view:diff-layout'),'unified');
+ // A loading window ignores the click and keeps the saved choice.
+ second.render({...branch,version:3,loading:true});layoutButton(second,'Side by side').click();
+ assert.equal(storage.get('devjay-view:diff-layout'),'unified');
+});
 
 test('side-by-side keeps commits left, aligns old/new rows and preserves navigation across refreshes',()=>{
  const view=viewer(),initial=state({kind:'branch',commit:'commit',parent:'parent',commits:[{id:'commit',subject:'Change'}],

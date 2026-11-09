@@ -4,6 +4,8 @@ package main
 int devjay_prepare_viewer_on_site(void *window, void *site, void *parent, double x, double y, double width, double height);
 int devjay_viewer_placement_status(void *window, void *site);
 void devjay_show_viewer_on_site(void *window);
+void devjay_restore_viewer_size(void *window, int review);
+unsigned int devjay_window_state(void *window);
 */
 import "C"
 
@@ -34,7 +36,15 @@ func (m *siteManager) registerViewerPlacementEvents() {
 }
 
 func (m *siteManager) viewerDesktopSite(r *gitViewerWindow) *siteRuntime {
-	if !m.config.ViewersOnSiteDesktop || r == nil || r.state == nil {
+	if !m.config.ViewersOnSiteDesktop {
+		return nil
+	}
+	return m.viewerSite(r)
+}
+
+// viewerSite is the viewer's Site while it can still identify a desktop.
+func (m *siteManager) viewerSite(r *gitViewerWindow) *siteRuntime {
+	if r == nil || r.state == nil {
 		return nil
 	}
 	site := m.runtime[r.state.SiteID]
@@ -72,26 +82,58 @@ func showViewerOnSite(window *application.WebviewWindow) {
 	application.InvokeSync(func() { C.devjay_show_viewer_on_site(window.NativeWindow()) })
 }
 
-func (m *siteManager) viewerNavigationCurrent(id string, r *gitViewerWindow, site *siteRuntime, navigation uint64) bool {
+// Placement chosen by the Site-desktop preference also ends if that
+// preference is turned off while it settles.
+func (m *siteManager) viewerNavigationCurrent(id string, r *gitViewerWindow, site *siteRuntime, navigation uint64, preferred bool) bool {
 	return m.viewers[id] == r && r.ready && r.navigation == navigation &&
-		windowNavigationGeneration.Load() == navigation && !m.recovery.paused && m.viewerDesktopSite(r) == site
+		windowNavigationGeneration.Load() == navigation && !m.recovery.paused && m.viewerSite(r) == site &&
+		(!preferred || m.config.ViewersOnSiteDesktop)
+}
+
+// A Site's desktop is visible when it is the current desktop of any display,
+// the same test that highlights its card in the strip.
+func siteDesktopVisible(window *application.WebviewWindow) bool {
+	var flags C.uint
+	application.InvokeSync(func() { flags = C.devjay_window_state(window.NativeWindow()) })
+	return flags&1 != 0
+}
+
+func restoreViewerSize(window *application.WebviewWindow, review bool) {
+	var value C.int
+	if review {
+		value = 1
+	}
+	application.InvokeSync(func() { C.devjay_restore_viewer_size(window.NativeWindow(), value) })
 }
 
 // Explicit opens share this path, whether creating a window or reusing one.
 // Verify the native viewer's Space assignment before showing it. Site windows
 // can remain hidden, and no MoveToActiveSpace flag can pull the viewer back.
+// Without the Site-desktop preference, a Site desktop that is already visible
+// on any display still receives the viewer; otherwise it opens on the current
+// desktop as before.
 func (m *siteManager) showViewer(id string) {
 	r := m.viewers[id]
 	if r == nil || !r.ready || r.navigation != windowNavigationGeneration.Load() || m.recovery.paused {
 		return
 	}
-	site := m.viewerDesktopSite(r)
+	restoreViewerSize(r.window, r.state.Kind == "review")
+	site, preferred := m.viewerDesktopSite(r), true
+	if site == nil {
+		site, preferred = m.viewerSite(r), false
+		if site != nil && !siteDesktopVisible(site.Window) {
+			site = nil
+		}
+	}
 	if site == nil {
 		showViewerWindow(r.window, r.parent, r.anchor)
 		return
 	}
 	fallback := func() {
 		showViewerWindow(r.window, r.parent, r.anchor)
+		if !preferred {
+			return // The current desktop was the expected default.
+		}
 		fresh := *r.state
 		fresh.Error = "The Site’s desktop is unavailable. This window opened on the current desktop."
 		r.state = &fresh
@@ -105,7 +147,7 @@ func (m *siteManager) showViewer(id string) {
 	deadline := time.Now().Add(2 * time.Second)
 	var present func()
 	present = func() {
-		if !m.viewerNavigationCurrent(id, r, site, navigation) {
+		if !m.viewerNavigationCurrent(id, r, site, navigation, preferred) {
 			return
 		}
 		status := viewerPlacementStatus(r.window, site.Window)

@@ -48,7 +48,7 @@ func TestViewerDesktopNavigationRejectsStaleRequests(t *testing.T) {
 			m := &siteManager{config: SiteConfig{ViewersOnSiteDesktop: true}, runtime: map[string]*siteRuntime{"a": site}, viewers: map[string]*gitViewerWindow{"viewer": r}}
 			navigation := windowNavigationGeneration.Add(1)
 			r.navigation = navigation
-			current := func() bool { return m.viewerNavigationCurrent("viewer", r, site, navigation) }
+			current := func() bool { return m.viewerNavigationCurrent("viewer", r, site, navigation, true) }
 			if !current() {
 				t.Fatal("ready Site rejected")
 			}
@@ -81,5 +81,33 @@ func TestViewerDesktopNavigationRejectsStaleRequests(t *testing.T) {
 				r.navigation = navigation
 			}
 		})
+	}
+}
+
+// A visible Site desktop is used without the preference, so toggling the
+// preference must not cancel it; every other staleness check still applies.
+func TestVisibleSiteDesktopNavigationIgnoresPreference(t *testing.T) {
+	site := &siteRuntime{Site: Site{ID: "a", Path: "/repo"}, Ready: true, Window: &application.WebviewWindow{}}
+	r := &gitViewerWindow{state: &GitView{SiteID: "a", Path: "/repo", Kind: "review"}, ready: true}
+	m := &siteManager{runtime: map[string]*siteRuntime{"a": site}, viewers: map[string]*gitViewerWindow{"viewer": r}}
+	navigation := windowNavigationGeneration.Add(1)
+	r.navigation = navigation
+	if m.viewerDesktopSite(r) != nil || m.viewerSite(r) != site {
+		t.Fatal("the Site should be a placement candidate only without the preference")
+	}
+	for _, enabled := range []bool{false, true, false} {
+		m.config.ViewersOnSiteDesktop = enabled
+		if !m.viewerNavigationCurrent("viewer", r, site, navigation, false) {
+			t.Fatal("preference change cancelled visible-desktop placement")
+		}
+	}
+	site.Site.Path = "/different-folder"
+	if m.viewerNavigationCurrent("viewer", r, site, navigation, false) {
+		t.Fatal("moved Site folder was accepted")
+	}
+	site.Site.Path = "/repo"
+	windowNavigationGeneration.Add(1)
+	if m.viewerNavigationCurrent("viewer", r, site, navigation, false) {
+		t.Fatal("newer navigation was accepted")
 	}
 }

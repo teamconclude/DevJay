@@ -228,6 +228,9 @@ func (m *siteManager) openViewer(req viewerRequest, parent *application.WebviewW
 		}
 		return
 	}
+	if req.Kind == "review" {
+		req.IgnoreWhitespace = reviewOpenWhitespace(req, m.config)
+	}
 	m.viewerSequence++
 	id := fmt.Sprintf("git-viewer-%d", m.viewerSequence)
 	title := gitViewerTitle(filepath.Base(site.Site.Path), req.Kind, site.Git.Branch, site.Git)

@@ -30,6 +30,7 @@ type CardPlacement struct {
 }
 type SiteConfig struct {
 	BranchHistoryOldestFirst bool                       `json:"branchHistoryOldestFirst,omitempty"`
+	ReviewIgnoreWhitespace   bool                       `json:"reviewIgnoreWhitespace,omitempty"`
 	ViewersOnSiteDesktop     bool                       `json:"viewersOnSiteDesktop,omitempty"`
 	Theme                    string                     `json:"theme,omitempty"`
 	SiteWindowsHidden        bool                       `json:"siteWindowsHidden,omitempty"`

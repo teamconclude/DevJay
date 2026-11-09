@@ -1,6 +1,7 @@
 import { syntaxLines } from './syntax-highlight.js';
 import { findTextMatches, filterSearchRows, appendSearchSyntax } from './diff-search.js';
 import { defaultReviewIgnorePatterns, reviewIgnoreMatchers, reviewFileIgnored, ignorePatternsStorageKey, storedIgnorePatterns, saveIgnorePatterns } from './file-ignore.js';
+import { storedViewPreference, saveViewPreference, diffLayoutPreference, diffLayouts } from './view-preferences.js';
 export { defaultReviewIgnorePatterns, reviewIgnoreMatchers, reviewFileIgnored };
 // Branch Review owns presentation and selection per window. Repository data is
 // provided by the bounded, read-only Git reader; source text is never HTML.
@@ -97,8 +98,14 @@ export function createBranchReview(root, request, options = {}) {
   const setDisabled = (node, value) => { if (node.disabled !== !!value) node.disabled = !!value; };
   const el = (tag, cls = '', text) => { const node = document.createElement(tag); node.className = cls; if (text !== undefined) node.textContent = text; return node; };
   const button = (text, title, run, cls = '') => { const node = el('button', cls, text); node.type = 'button'; node.title = title; node.setAttribute('aria-label', title); node.onclick = run; return node; };
-  let view = null, snapshotKey = '', selectedPath = '', activeChange = 0, layout = 'split', presentation = 'file', wrap = false;
-  let highlighting = true;
+  // Display choices are remembered for new Review windows. Whitespace is a
+  // comparison choice remembered by the backend; the base branch is not saved.
+  const booleans = ['true', 'false'];
+  let view = null, snapshotKey = '', selectedPath = '', activeChange = 0;
+  let layout = storedViewPreference(diffLayoutPreference, diffLayouts) || 'split';
+  let presentation = storedViewPreference('review-presentation', ['file', 'continuous']) || 'file';
+  let wrap = storedViewPreference('review-wrap', booleans) === 'true';
+  let highlighting = storedViewPreference('review-syntax', booleans) !== 'false';
   let revealPath = '', revealEdge = '';
   let scrollFrame = 0, selectionScrollTop = null;
   let prefetchFrame = 0, prefetchSequence = 0, prefetchBatch = null, visible = true, navigationFrame = 0;
@@ -134,6 +141,7 @@ export function createBranchReview(root, request, options = {}) {
   const controls = el('div', 'br-controls');
   const modeSelect = el('select', 'br-presentation'); modeSelect.setAttribute('aria-label', 'Review presentation');
   for (const [value, label] of [['file', 'Full file'], ['continuous', 'Continuous']]) { const option = el('option', '', label); option.value = value; modeSelect.append(option); }
+  modeSelect.value = presentation;
   const splitButton = button('◫', 'Side by side', () => setLayout('split'));
   const unifiedButton = button('☰', 'Unified', () => setLayout('unified'));
   const layouts = el('div', 'br-segmented'); layouts.append(splitButton, unifiedButton);
@@ -141,8 +149,8 @@ export function createBranchReview(root, request, options = {}) {
   const summary = el('summary', '', '⚙'); summary.title = 'Review options'; summary.setAttribute('aria-label', 'Review options');
   const optionsPanel = el('div', 'br-options-panel');
   const whitespaceLabel = el('label'); const whitespace = el('input'); whitespace.type = 'checkbox'; whitespaceLabel.append(whitespace, el('span', '', 'Ignore whitespace'));
-  const wrapLabel = el('label'); const wrapInput = el('input'); wrapInput.type = 'checkbox'; wrapLabel.append(wrapInput, el('span', '', 'Wrap long lines'));
-  const syntaxLabel = el('label'); const syntaxInput = el('input'); syntaxInput.type = 'checkbox'; syntaxInput.checked = true; syntaxLabel.append(syntaxInput, el('span', '', 'Syntax highlighting'));
+  const wrapLabel = el('label'); const wrapInput = el('input'); wrapInput.type = 'checkbox'; wrapInput.checked = wrap; wrapLabel.append(wrapInput, el('span', '', 'Wrap long lines'));
+  const syntaxLabel = el('label'); const syntaxInput = el('input'); syntaxInput.type = 'checkbox'; syntaxInput.checked = highlighting; syntaxLabel.append(syntaxInput, el('span', '', 'Syntax highlighting'));
   optionsPanel.append(el('strong', '', 'Review options'), whitespaceLabel, wrapLabel, syntaxLabel);
   settings.append(summary, optionsPanel);
   const editButton = button('Edit', 'Edit current working file', startEdit, 'br-edit-button');
@@ -443,7 +451,7 @@ export function createBranchReview(root, request, options = {}) {
     const files = matchingFiles(), index = files.findIndex(file => file.path === selectedPath), next = files[index + direction];
     if (next) selectFile(next.path, true, direction < 0 ? 'last' : 'first');
   }
-  function setLayout(value) { if (editing) return; layout = value; renderContent(); updateControls(); selectChange(activeChange, true); }
+  function setLayout(value) { if (editing) return; layout = value; saveViewPreference(diffLayoutPreference, value); renderContent(); updateControls(); selectChange(activeChange, true); }
   function remember(path, data) {
     cache.delete(path); cache.set(path, data);
     // Retain the complete comparison until its snapshot changes. Both the
@@ -796,10 +804,11 @@ export function createBranchReview(root, request, options = {}) {
   document.addEventListener('pointerdown', rememberList);
   baseSelect.onchange = () => { if (!editing) send('review-options', {baseRef:baseSelect.value, ignoreWhitespace:whitespace.checked}); };
   whitespace.onchange = () => { if (!editing) send('review-options', {baseRef:view.review.baseRef, ignoreWhitespace:whitespace.checked}); };
-  wrapInput.onchange = () => { wrap = wrapInput.checked; content.classList.toggle('br-wrap', wrap); };
+  wrapInput.onchange = () => { wrap = wrapInput.checked; content.classList.toggle('br-wrap', wrap); saveViewPreference('review-wrap', String(wrap)); };
   syntaxInput.onchange = () => {
     if (editing || beginningEdit) return;
     highlighting = syntaxInput.checked;
+    saveViewPreference('review-syntax', String(highlighting));
     const top = content.scrollTop, left = content.scrollLeft;
     const horizontal = new Map([...cards].map(([path, card]) => [path, [...card.querySelectorAll('.br-horizontal-scroll')].map(node => node.scrollLeft)]));
     renderContent(); content.scrollTop = top; content.scrollLeft = left;
@@ -807,7 +816,7 @@ export function createBranchReview(root, request, options = {}) {
       node.scrollLeft = positions[index] || 0; node.onscroll();
     });
   };
-  modeSelect.onchange = () => { if (editing) return; presentation = modeSelect.value; pages.clear(); renderContent(); updateControls(); selectChange(activeChange, true); };
+  modeSelect.onchange = () => { if (editing) return; presentation = modeSelect.value; saveViewPreference('review-presentation', presentation); pages.clear(); renderContent(); updateControls(); selectChange(activeChange, true); };
 
   function render(next) {
     if (destroyed) return;
