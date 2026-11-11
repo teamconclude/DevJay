@@ -351,6 +351,9 @@ export function createBranchReview(root, request, options = {}) {
     // Keep an explicit selection until the reader moves vertically again.
     selectionScrollTop = content.scrollTop;
   }
+  function revealSelectedFile() {
+    [...filesList.querySelectorAll('.br-file')].find(node => node.dataset.path === selectedPath)?.scrollIntoView({block:'nearest', inline:'nearest'});
+  }
   function syncVisibleFile() {
     scrollFrame = 0;
     if (destroyed || presentation !== 'continuous' || editing || beginningEdit || view?.loading || content.scrollTop === selectionScrollTop) return;
@@ -406,6 +409,7 @@ export function createBranchReview(root, request, options = {}) {
     // target per frame. Skipped files never become foreground Git reads.
     wanted.clear(); failed.delete(path);
     renderFiles();
+    revealSelectedFile();
     const paint = () => {
       renderCommits();
       if (presentation === 'file') { if (renderContent() && changed) content.scrollTop = 0; }
@@ -427,11 +431,13 @@ export function createBranchReview(root, request, options = {}) {
     const data = cache.get(path);
     const available = changeIndices(data);
     if (!available.length) return;
+    const revealFile = scroll || path !== selectedPath;
     selectionScrollTop = content.scrollTop;
     revealPath = ''; revealEdge = '';
     if (path !== selectedPath) { selectedPath = path; renderFiles(); }
     activeChange = available.find(change => change >= index) ?? available.at(-1);
     renderCommits(); updateControls();
+    if (revealFile) revealSelectedFile();
     for (const node of content.querySelectorAll('.br-change')) node.classList.toggle('br-current-change', node.dataset.path === path && Number(node.dataset.change) === activeChange);
     if (scroll) {
       let visible = displayedRows(data, path);
@@ -777,7 +783,7 @@ export function createBranchReview(root, request, options = {}) {
     const files = matchingFiles(), index = files.findIndex(file => file.path === selectedPath);
     const next = event.key === 'Home' ? 0 : event.key === 'End' ? files.length - 1 : event.key === 'ArrowDown' ? Math.min(files.length - 1, index + 1) : event.key === 'ArrowUp' ? Math.max(0, index - 1) : -1;
     if (next < 0 || !files[next]) return; event.preventDefault(); selectFile(files[next].path, true, '', !!event.repeat);
-    [...filesList.querySelectorAll('.br-file')].find(node => node.dataset.path === selectedPath)?.scrollIntoView({block:'nearest'});
+    revealSelectedFile();
   };
   const handleKeydown = event => {
     if (destroyed || !visible || event.defaultPrevented || event.isComposing) return;

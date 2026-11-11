@@ -193,6 +193,22 @@ int main(void) {
             waitForCheck(view,@"filePosition()==='←8 / 8→' && selectedPath()==='scroll-7.go'");
             check(view,@"(()=>{const row=document.querySelector('.br-file[aria-selected=true]').getBoundingClientRect(),list=document.querySelector('.br-files').getBoundingClientRect();return row.top>=list.top-1&&row.bottom<=list.bottom+1})()");
         }
+        // Diff navigation must keep an offscreen active file visible in the
+        // sidebar, in both directions, without taking focus from the diff.
+        [window setContentSize:NSMakeSize(720,600)];
+        evaluate(view,@"var sidebarFiles=Array.from({length:24},(_,i)=>({path:`sidebar-${i}.go`,status:'M'}));var sidebarFixture={...fixture,captured:'sidebar-navigation',version:90,files:sidebarFiles};var sidebarData=i=>({...fixture.review.selected,path:sidebarFiles[i].path,oldText:'old\\n',newText:'new\\n',hunks:[{oldStart:1,oldLines:1,newStart:1,newLines:1,commits:[]}]});for(let i=0;i<24;i++)review.render({...sidebarFixture,file:i,review:{...fixture.review,selected:sidebarData(i)}});var sidebarList=document.querySelector('.br-files');var activeFileVisible=()=>{const row=document.querySelector('.br-file[aria-selected=true]').getBoundingClientRect(),list=sidebarList.getBoundingClientRect();return row.top>=list.top-1&&row.bottom<=list.bottom+1};void 0");
+        for (NSString *presentation in @[@"file",@"continuous"]) {
+            for (NSString *layout in @[@"Side by side",@"Unified"]) {
+                evaluate(view,[NSString stringWithFormat:@"document.querySelector('.br-presentation').value='%@';document.querySelector('.br-presentation').onchange();document.querySelector('[aria-label=\"%@\"]').click();document.querySelector('.br-file').click();sidebarList.scrollTop=0;scrollArea.focus();void 0",presentation,layout]);
+                check(view,@"sidebarList.scrollHeight>sidebarList.clientHeight && activeFileVisible()");
+                check(view,@"(()=>{for(let i=1;i<24;i++){optionKey(scrollArea,'ArrowDown');if(selectedPath()!==sidebarFiles[i].path||!activeFileVisible())return false;}return sidebarList.scrollTop>0&&document.activeElement===scrollArea})()");
+                check(view,@"(()=>{for(let i=22;i>=0;i--){optionKey(scrollArea,'ArrowUp');if(selectedPath()!==sidebarFiles[i].path||!activeFileVisible())return false;}return document.activeElement===scrollArea})()");
+                // After manually scrolling the list away, file navigation
+                // must reveal the active row again.
+                evaluate(view,@"sidebarList.scrollTop=sidebarList.scrollHeight;button('→').click();void 0");
+                check(view,@"selectedPath()===sidebarFiles[1].path && activeFileVisible() && document.activeElement===scrollArea");
+            }
+        }
         // Larger counts must fit between the arrows at the minimum width.
         evaluate(view, @"document.querySelector('.br-change-position').textContent='234 / 234';document.querySelectorAll('.br-nav-group')[1].querySelector('.br-position').textContent='2000 / 2000';void 0");
         for (NSNumber *width in @[@1280,@900,@720]) {
