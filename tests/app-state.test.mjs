@@ -552,6 +552,21 @@ test('PR tags live in card headers, open the PR, and disappear when the PR is go
  }
 });
 
+test('In sync identifies its own menu and keeps ordinary clicks on the primary action',async()=>{
+ for(const search of ['', '?site=a']) {
+  const view=app(search), item=site('a');
+  item.git={branch:'main',head:'tip',summary:'Up to date'};
+  view.snapshot(state([item]));
+  const row=view.root.querySelector('.quiet-status');
+  assert.deepEqual(cardMenuTarget(row.children[1]),{siteID:'a',kind:'sync-status',number:0,bundleID:''});
+  await row.onclick();
+  const request=view.calls.find(([name])=>name==='devjay:card-default')[1];
+  assert.equal(request.kind,'sync-status');assert.equal(request.siteID,'a');
+  assert.equal(request.branch,'main');assert.equal(request.head,'tip');
+  assert.equal(view.calls.some(([name])=>name==='devjay:branches-open'||name==='devjay:action-prepare'||name==='devjay:action-confirm'),false);
+ }
+});
+
 test('approved status and review badges identify the PR for local cleanup menus',async()=>{
  for(const search of ['', '?site=a']) {
   const view=app(search), item=site('a');
@@ -561,7 +576,7 @@ test('approved status and review badges identify the PR for local cleanup menus'
    view.snapshot(state([item]));
    const approved=view.root.querySelector(reviews.length ? '.metric' : '.pr-status');
    assert.deepEqual(cardMenuTarget(approved),{siteID:'a',kind:'pr-status',number:42,bundleID:''});
-   assert.equal(cardMenuTarget(view.root.querySelector('.quiet-status')).kind,'branch');
+   assert.equal(cardMenuTarget(view.root.querySelector('.quiet-status')).kind,'sync-status');
    assert.equal(cardMenuTarget(view.root.querySelector('.card-title')).kind,'auto');
    assert.equal(cardMenuTarget(view.root.querySelector('.pr-tag')).kind,'site');
    await approved.onclick();

@@ -15,7 +15,7 @@ func TestNormalizeCardMenuRequest(t *testing.T) {
 	if !ok || got.Kind != "site" {
 		t.Fatalf("card background should select desktop navigation: %#v, %v", got, ok)
 	}
-	for _, kind := range []string{"auto", "site", "edits", "branch", "local", "remote", "return-status"} {
+	for _, kind := range []string{"auto", "site", "edits", "branch", "local", "remote", "return-status", "sync-status"} {
 		req := valid
 		req.Kind = kind
 		if got, ok := normalizeCardMenuRequest(req); !ok || got.Kind != kind {
@@ -29,6 +29,8 @@ func TestNormalizeCardMenuRequest(t *testing.T) {
 		func(r *cardMenuRequest) { r.PublishButton = true },
 		func(r *cardMenuRequest) { r.Kind = "return-status"; r.Number = 42 },
 		func(r *cardMenuRequest) { r.Kind = "return-status"; r.BundleID = "app" },
+		func(r *cardMenuRequest) { r.Kind = "sync-status"; r.Number = 42 },
+		func(r *cardMenuRequest) { r.Kind = "sync-status"; r.BundleID = "app" },
 		func(r *cardMenuRequest) { r.Kind = "branch"; r.BaseBranch = "develop\nother" },
 		func(r *cardMenuRequest) { r.Number = -1 },
 		func(r *cardMenuRequest) { r.BundleID = "app\x00other" },
@@ -42,6 +44,32 @@ func TestNormalizeCardMenuRequest(t *testing.T) {
 		change(&req)
 		if _, ok := normalizeCardMenuRequest(req); ok {
 			t.Errorf("accepted invalid request: %#v", req)
+		}
+	}
+}
+
+func TestInSyncMenuOpensBranchPickerAfterView(t *testing.T) {
+	for _, main := range []bool{false, true} {
+		status := GitStatus{Branch: "feature", Head: "tip", Summary: "Up to date", IsMainBranch: main}
+		req := cardMenuRequest{SiteID: "a", Kind: "sync-status"}
+		for _, option := range []*cardGitOption{nil, {Kind: "approved", Target: "main", approvedPR: &approvedBranchPR{Number: 42}}} {
+			items := cardMenuActions(req, status, option)
+			if len(items) < 2 || items[0].Action != cardMenuView || items[1].Action != cardMenuSwitchBranch || items[1].Title != "Switch branch…" {
+				t.Fatalf("wrong In sync menu order: %+v", items)
+			}
+			if cardMenuViewKind(req.Kind, status) != "branch" || !validCardMenuSelection(items, req, cardMenuSwitchBranch, PullRequestLink{}, status) {
+				t.Fatal("In sync navigation unavailable")
+			}
+			items[1].Disabled = true
+			if validCardMenuSelection(items, req, cardMenuSwitchBranch, PullRequestLink{}, status) {
+				t.Fatal("disabled branch picker accepted")
+			}
+		}
+		for _, kind := range []string{"auto", "site", "edits", "branch", "local", "remote", "return-status"} {
+			req.Kind = kind
+			if validCardMenuSelection(cardMenuActions(req, status, nil), req, cardMenuSwitchBranch, PullRequestLink{}, status) {
+				t.Fatalf("unoffered picker accepted for %s", kind)
+			}
 		}
 	}
 }
@@ -232,8 +260,18 @@ func TestReturnStatusMenuUsesReturnThenViewWithoutReviewOrBrowser(t *testing.T) 
 				t.Fatalf("missing primary return action: %+v", option)
 			}
 			items := cardMenuActions(req, status, option)
-			if len(items) != 2 || items[1].Title != "View branch" {
+			wantItems := 2
+			if merged {
+				wantItems = 3
+			}
+			if len(items) != wantItems || items[1].Title != "View branch" {
 				t.Fatalf("unexpected status actions: %v", items)
+			}
+			if merged && (items[2].Action != cardMenuSwitchBranch || items[2].Title != "Switch branch…") {
+				t.Fatalf("missing branch picker below View branch: %v", items)
+			}
+			if validCardMenuSelection(items, req, cardMenuSwitchBranch, PullRequestLink{}, status) != merged {
+				t.Fatal("branch picker availability does not match merged status")
 			}
 			for _, action := range []cardMenuAction{cardMenuViewDiffs, cardMenuOpenPR, cardMenuOpenPRNew} {
 				if validCardMenuSelection(items, req, action, PullRequestLink{}, status) {

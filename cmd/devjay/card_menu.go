@@ -66,6 +66,7 @@ const (
 	cardMenuOpenPR
 	cardMenuShowApp
 	cardMenuGoToSite
+	cardMenuSwitchBranch
 )
 
 func normalizeCardMenuRequest(req cardMenuRequest) (cardMenuRequest, bool) {
@@ -82,9 +83,9 @@ func normalizeCardMenuRequest(req cardMenuRequest) (cardMenuRequest, bool) {
 			!req.PublishRebased && !req.PublishButton && req.GitAction == "" && req.Anchor == nil &&
 			validCoordinate(req.X) && validCoordinate(req.Y)
 	}
-	return req, req.SiteID != "" && (validViewKind(req.Kind) || req.Kind == "auto" || req.Kind == "site" || req.isPRStatus() || req.Kind == "return-status") &&
+	return req, req.SiteID != "" && (validViewKind(req.Kind) || req.Kind == "auto" || req.Kind == "site" || req.isPRStatus() || req.Kind == "return-status" || req.Kind == "sync-status") &&
 		(!req.isPRStatus() || req.Number > 0) &&
-		(req.Kind != "return-status" || (req.Number == 0 && req.BundleID == "")) &&
+		((req.Kind != "return-status" && req.Kind != "sync-status") || (req.Number == 0 && req.BundleID == "")) &&
 		req.Number >= 0 && (req.BundleID == "" || (req.Number == 0 && validAppBundleID(req.BundleID))) &&
 		(req.BaseBranch == "" || (req.Kind == "branch" && req.Number == 0 && req.BundleID == "" && len(req.BaseBranch) <= 1024 && !strings.ContainsAny(req.BaseBranch, "\x00\r\n"))) &&
 		(!req.PublishRebased || (req.Kind == "branch" && req.Number == 0 && req.BundleID == "" && req.BaseBranch == "")) &&
@@ -187,7 +188,7 @@ func suggestedCardGitOption(req cardMenuRequest, git GitStatus) *cardGitOption {
 	// Ordinary card/branch menus offer one next step. Specific status rows keep
 	// their own action, and app/PR menus retain their dedicated purpose.
 	if req.Number == 0 && req.BundleID == "" && req.BaseBranch == "" && !req.PublishRebased {
-		if req.Kind == "auto" || req.Kind == "branch" {
+		if req.Kind == "auto" || req.Kind == "branch" || req.Kind == "sync-status" {
 			if option := approvedCardOption(0, git); option != nil {
 				return option
 			}
@@ -374,7 +375,7 @@ func validAppBundleID(bundle string) bool {
 // View branch chooses a tab from current local status without changing the
 // clicked metric's identity, which is also used to prepare suggested Git actions.
 func cardMenuViewKind(kind string, git GitStatus) string {
-	if kind == "auto" || kind == "branch" || kind == "edits" || kind == "review-status" || kind == "pr-status" || kind == "return-status" {
+	if kind == "auto" || kind == "branch" || kind == "edits" || kind == "review-status" || kind == "pr-status" || kind == "return-status" || kind == "sync-status" {
 		if git.Changes > 0 || git.Conflicts > 0 || git.Branch == "" || git.LocalNote != "" {
 			return "edits"
 		}
@@ -411,6 +412,7 @@ func cardMenuActions(req cardMenuRequest, git GitStatus, option *cardGitOption) 
 		return nil
 	}
 	view := cardMenuItem{Action: cardMenuView, Title: "View branch"}
+	switchBranch := cardMenuItem{Action: cardMenuSwitchBranch, Title: "Switch branch…", Hint: "Choose another branch, then review a separate confirmation"}
 	var review, gitAction cardMenuItem
 	if cardMenuOffersDiffs(req, git) {
 		review = cardMenuItem{Action: cardMenuViewDiffs, Title: "Review", Hint: "Compare the branch fork point with current files, including uncommitted edits"}
@@ -428,6 +430,10 @@ func cardMenuActions(req cardMenuRequest, git GitStatus, option *cardGitOption) 
 	switch {
 	case req.PublishButton:
 		items = []cardMenuItem{gitAction, review}
+	case req.Kind == "sync-status":
+		items = []cardMenuItem{view, switchBranch, review, gitAction}
+	case req.Kind == "return-status" && git.MergedPR != nil && git.MergedPR.SameHead:
+		items = []cardMenuItem{gitAction, view, switchBranch}
 	case option != nil && option.Kind == "approved":
 		items = []cardMenuItem{view, review, gitAction, browser, newTab}
 	case req.Number > 0 && req.Kind == "review-status":

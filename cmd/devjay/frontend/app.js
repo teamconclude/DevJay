@@ -312,7 +312,7 @@ function details(site, parent, showIDEStatus) {
     if (status.alert.text === 'Remote branch removed') row.dataset.viewKind = 'return-status';
     if (status.alert.publishRebased) row.dataset.publishRebased = 'true';
   }
-  if (status.quiet) line(status.quiet, 'good quiet-status', '✓', 'Matches the remote at the last successful check', 'branch');
+  if (status.quiet) line(status.quiet, 'good quiet-status', '✓', 'Matches the remote at the last successful check', 'sync-status');
   if (status.base) line(status.base, site.git.base.note ? 'warning' : 'base-update', '↳', status.baseTitle, 'branch').dataset.baseBranch = site.git.base.branch;
   const singlePR = pullRequests.length === 1 ? pullRequests[0].number : null;
   if (status.pr) {

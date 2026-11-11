@@ -109,6 +109,14 @@ func (m *siteManager) registerCardMenuEvents() {
 					req.appName = app.Name
 				}
 				actions := cardMenuActions(req, git, option)
+				if m.siteActionBusy(req.SiteID) {
+					for i := range actions {
+						if actions[i].Action == cardMenuSwitchBranch {
+							actions[i].Disabled = true
+							actions[i].Hint = "A Git action is already running for this Site. Wait for it to finish."
+						}
+					}
+				}
 				items := withCardMenuControls(actions, sender == "strip", m.config.SiteWindowsHidden)
 				applySelection := func(selected cardMenuAction) {
 					currentParent, currentSite := m.cardMenuSource(req, sender)
@@ -140,6 +148,8 @@ func (m *siteManager) registerCardMenuEvents() {
 						m.activate(req.SiteID)
 					case cardMenuView:
 						m.openViewer(viewerRequest{SiteID: req.SiteID, Kind: cardMenuViewKind(req.Kind, site.Git), Anchor: req.Anchor}, parent, site)
+					case cardMenuSwitchBranch:
+						m.openBranchPicker(req.SiteID, site, parent, req.Anchor)
 					case cardMenuSettings:
 						m.openSettings()
 					case cardMenuQuit:

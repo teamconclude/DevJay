@@ -8,7 +8,7 @@ function target(content, id = 'site-a') {
 }
 test('right-click targets category, heading, PR or app, with desktop navigation on the background', () => {
   assert.deepEqual(cardMenuTarget(target(null)), {siteID:'site-a',kind:'site',number:0,bundleID:''});
-  for (const kind of ['auto','edits','branch','local','remote']) assert.equal(cardMenuTarget(target({viewKind:kind})).kind,kind);
+  for (const kind of ['auto','edits','branch','local','remote','sync-status']) assert.equal(cardMenuTarget(target({viewKind:kind})).kind,kind);
   assert.equal(cardMenuTarget(target({prNumber:'1234'})).number,1234);
   assert.deepEqual(cardMenuTarget(target({viewKind:'review-status',prNumber:'1234'})),{siteID:'site-a',kind:'review-status',number:1234,bundleID:''});
   assert.equal(cardMenuTarget(target({appBundle:'com.jetbrains.goland'})).bundleID,'com.jetbrains.goland');

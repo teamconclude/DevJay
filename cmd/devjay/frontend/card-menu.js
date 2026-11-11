@@ -7,7 +7,7 @@ export function cardMenuTarget(target) {
   const number = Number(content?.dataset.prNumber);
   const kind = content?.dataset.viewKind;
   const fallback = number > 0 && content?.matches?.('.pr-status, .metric') ? 'pr-status' : 'site';
-  return {siteID: card.dataset.id, kind: ['auto', 'edits', 'branch', 'local', 'remote', 'review-status', 'return-status'].includes(kind) ? kind : fallback,
+  return {siteID: card.dataset.id, kind: ['auto', 'edits', 'branch', 'local', 'remote', 'review-status', 'return-status', 'sync-status'].includes(kind) ? kind : fallback,
     number: Number.isSafeInteger(number) && number > 0 ? number : 0, bundleID: content?.dataset.appBundle || '',
     ...(content?.dataset.baseBranch ? {baseBranch:content.dataset.baseBranch} : {}),
     ...(content?.dataset.publishRebased === 'true' ? {publishRebased:true} : {}),
