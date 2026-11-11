@@ -466,13 +466,15 @@ button.base-update:hover, button.base-update.status-hover, button.base-update:fo
 .suggestion-destination { overflow-wrap: anywhere; }
 .suggestion-delete { display: flex; align-items: flex-start; gap: 7px; margin-top: 14px; font-size: 12px; line-height: 18px; }
 .suggestion-delete span { overflow-wrap: anywhere; }
+.merge-option { display: flex; align-items: center; gap: 10px; margin-top: 12px; font-size: 12px; }
+.merge-method { flex: 1; min-width: 0; padding: 6px 8px; color: var(--text, #edf1f7); background: var(--control, #252d3b); border: 1px solid var(--border, #3c485c); border-radius: 5px; font: inherit; }
 .suggestion-warning { font-size: 12px; line-height: 17px; margin: 10px 0; }
 .action-details { margin: 12px 0; font-size: 11px; overflow-wrap: anywhere; }
 .action-details summary { cursor: pointer; color: var(--muted, #939fb2); }
 .suggestion-plan { overflow-wrap: anywhere; }
-.suggestions #app:has(.default-return) { height: 100vh; overflow: hidden; }
-.suggestions #app:has(.default-return) > .suggestion-plan { min-height: 0; overflow: auto; }
-.suggestions #app:has(.default-return) > :not(.suggestion-plan) { flex-shrink: 0; }
+.suggestions #app:has(.default-return, .merge-option:not([hidden])) { height: 100vh; overflow: hidden; }
+.suggestions #app:has(.default-return, .merge-option:not([hidden])) > .suggestion-plan { min-height: 0; overflow: auto; }
+.suggestions #app:has(.default-return, .merge-option:not([hidden])) > :not(.suggestion-plan) { flex-shrink: 0; }
 .suggestion-preview { font-size: 11px; color: var(--muted, #939fb2); margin: auto 0 12px; padding-top: 18px; }
 .action-countdown { display: inline-flex; align-items: center; gap: 6px; margin: 0 auto 0 0; font-variant-numeric: tabular-nums; cursor: pointer; }
 .action-auto-countdown { flex: 0 0 auto; margin: 0; }

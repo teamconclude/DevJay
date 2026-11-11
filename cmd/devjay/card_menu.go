@@ -67,6 +67,7 @@ const (
 	cardMenuShowApp
 	cardMenuGoToSite
 	cardMenuSwitchBranch
+	cardMenuMergePR
 )
 
 func normalizeCardMenuRequest(req cardMenuRequest) (cardMenuRequest, bool) {
@@ -436,6 +437,13 @@ func cardMenuActions(req cardMenuRequest, git GitStatus, option *cardGitOption) 
 		items = []cardMenuItem{gitAction, view, switchBranch}
 	case option != nil && option.Kind == "approved":
 		items = []cardMenuItem{view, review, gitAction, browser, newTab}
+		if req.Kind == "pr-status" {
+			merge := cardMenuItem{Action: cardMenuMergePR, Title: fmt.Sprintf("Merge PR #%d & return to %s…", req.Number, option.Target), Hint: "Merge the approved PR on GitHub, return to the default branch, and delete the local feature branch after confirmation", Disabled: gitAction.Disabled}
+			if merge.Disabled {
+				merge.Hint = gitAction.Hint
+			}
+			items = append([]cardMenuItem{merge}, items...)
+		}
 	case req.Number > 0 && req.Kind == "review-status":
 		items = []cardMenuItem{review, view, browser, newTab}
 	case req.Number > 0:

@@ -14,22 +14,29 @@ import (
 )
 
 type ActionRequest struct {
-	approvedPR   *approvedBranchPR // Supplied only by the card menu or its existing confirmation.
-	Anchor       *cardAnchor       `json:"anchor,omitempty"`
-	RequestID    string            `json:"requestID,omitempty"`
-	SiteID       string            `json:"siteID"`
-	Kind         string            `json:"kind"`
-	Branch       string            `json:"branch"`
-	Head         string            `json:"head"`
-	DeleteBranch bool              `json:"deleteBranch"`
-	TargetBranch string            `json:"targetBranch,omitempty"`
-	TargetRemote string            `json:"targetRemote,omitempty"`
-	UpdateTarget bool              `json:"updateTarget,omitempty"`
+	approvedPR           *approvedBranchPR // Supplied only by the card menu or its existing confirmation.
+	preferredMergeMethod string            // Manager preference, used only when no method is explicitly selected.
+
+	Anchor       *cardAnchor `json:"anchor,omitempty"`
+	RequestID    string      `json:"requestID,omitempty"`
+	SiteID       string      `json:"siteID"`
+	Kind         string      `json:"kind"`
+	Branch       string      `json:"branch"`
+	Head         string      `json:"head"`
+	DeleteBranch bool        `json:"deleteBranch"`
+	MergeMethod  string      `json:"mergeMethod,omitempty"`
+	TargetBranch string      `json:"targetBranch,omitempty"`
+	TargetRemote string      `json:"targetRemote,omitempty"`
+	UpdateTarget bool        `json:"updateTarget,omitempty"`
 }
 
 type CheckoutPlan struct {
 	ApprovedPR                                                         *approvedBranchPR `json:"approvedPR,omitempty"`
-	Commits                                                            int               `json:"commits,omitempty"`
+	mergeCommit                                                        string
+	preferredMergeMethod                                               string
+	MergeMethod                                                        string   `json:"mergeMethod,omitempty"`
+	MergeMethods                                                       []string `json:"mergeMethods,omitempty"`
+	Commits                                                            int      `json:"commits,omitempty"`
 	branchGeneration                                                   string
 	ID                                                                 string    `json:"id"`
 	Kind                                                               string    `json:"kind"`
@@ -195,7 +202,7 @@ func prepareCheckoutAction(ctx context.Context, path string, req ActionRequest, 
 			return nil, errors.New("A matching origin upstream is required. Publish this branch manually.")
 		}
 		p.Target, p.remote, p.remoteRef, p.trackingRef = s.Tracking, m.Remote, m.Merge, m.Ref
-	case "merged", "approved", "rebase":
+	case "merged", "approved", "merge-pr", "rebase":
 		if m.DefaultBranch == "" || s.IsMainBranch {
 			return nil, errors.New("Could not determine a different default branch.")
 		}
@@ -214,7 +221,7 @@ func prepareCheckoutAction(ctx context.Context, path string, req ActionRequest, 
 				return nil, errors.New("This branch does not exactly match a PR merged into the default branch. No checkout changes were made.")
 			}
 		}
-		if req.Kind == "approved" {
+		if req.Kind == "approved" || req.Kind == "merge-pr" {
 			if !req.approvedPR.matchesCheckout(s, m) {
 				return nil, errors.New("The approved PR and its upstream must match the current checkout.")
 			}
@@ -222,6 +229,11 @@ func prepareCheckoutAction(ctx context.Context, path string, req ActionRequest, 
 		}
 		if p.returnsToDefault() {
 			p.DeleteBranch = req.DeleteBranch
+			if req.Kind == "merge-pr" {
+				p.DeleteBranch = true
+				p.MergeMethod = req.MergeMethod
+				p.preferredMergeMethod = req.preferredMergeMethod
+			}
 			p.switchTarget, err = readSwitchBranch(ctx, path, p.Target)
 			p.targetLocalHead = p.switchTarget.head
 			if err != nil {
@@ -321,7 +333,7 @@ func prepareCheckoutAction(ctx context.Context, path string, req ActionRequest, 
 			return nil, errors.New("The branches changed during the check. Review the action again.")
 		}
 	}
-	if err := validateCheckoutPlan(ctx, p, p.Kind == "approved"); err != nil {
+	if err := validateCheckoutPlan(ctx, p, p.Kind == "approved" || p.Kind == "merge-pr"); err != nil {
 		return nil, err
 	}
 	return p, nil
@@ -361,13 +373,18 @@ func validateCheckoutPlan(ctx context.Context, p *CheckoutPlan, checkRemote bool
 	if p.Kind != "update" && !isPushAction(p.Kind) && p.Kind != "replace" && (m.DefaultBranch != p.Target || m.DefaultRef != p.trackingRef) {
 		return errors.New("The default branch changed. Review the action again.")
 	}
-	if p.Kind == "approved" {
+	if p.Kind == "approved" || (p.Kind == "merge-pr" && p.mergeCommit == "") {
 		if !p.ApprovedPR.matchesCheckout(s, m) {
 			return errors.New("The checkout no longer matches the approved PR and its upstream.")
 		}
 		if checkRemote {
 			if err := p.ApprovedPR.verifyPublished(ctx, p); err != nil {
 				return err
+			}
+			if p.Kind == "merge-pr" {
+				if err := checkPRMerge(ctx, p); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -422,12 +439,22 @@ func remoteBranchAt(ctx context.Context, path, remote, ref, head string) bool {
 }
 
 func applyCheckoutAction(ctx context.Context, p *CheckoutPlan) (result CheckoutAction) {
+	// Merging discovers a new remote tip. Keep the original confirmation immutable.
+	if p.Kind == "merge-pr" {
+		copy := *p
+		p = &copy
+	}
 	result = CheckoutAction{Status: "failed", Kind: p.Kind}
 	expectedResultHead := p.TargetHead
 	if isPushAction(p.Kind) {
 		expectedResultHead = p.Head
 	}
 	defer func() {
+		defer func() {
+			if p.Kind == "merge-pr" && p.mergeCommit != "" {
+				result.Message = fmt.Sprintf("PR #%d merged on GitHub. ", p.ApprovedPR.Number) + strings.ReplaceAll(result.Message, " Nothing was pushed.", "")
+			}
+		}()
 		result.Kind = p.Kind
 		verifyCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -551,6 +578,12 @@ func applyCheckoutAction(ctx context.Context, p *CheckoutPlan) (result CheckoutA
 	}
 	if err := backupOriginal(); err != nil {
 		return fail(err)
+	}
+	if p.Kind == "merge-pr" {
+		if err := mergePRAndRefreshTarget(ctx, p); err != nil {
+			return fail(err)
+		}
+		expectedResultHead = p.TargetHead
 	}
 	ctx = context.WithoutCancel(ctx)
 	if p.Kind == "switch" {

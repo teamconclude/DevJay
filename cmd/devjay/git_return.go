@@ -29,7 +29,7 @@ func (pr pullRequest) approvedReturn(repo string) *approvedBranchPR {
 }
 
 func (p *CheckoutPlan) returnsToDefault() bool {
-	return p.Kind == "merged" || p.Kind == "approved"
+	return p.Kind == "merged" || p.Kind == "approved" || p.Kind == "merge-pr"
 }
 
 func (pr *approvedBranchPR) matchesCheckout(s GitStatus, m gitMeta) bool {

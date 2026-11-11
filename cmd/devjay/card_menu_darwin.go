@@ -130,11 +130,17 @@ func (m *siteManager) registerCardMenuEvents() {
 						m.setStripMode(stripHidden)
 					case cardMenuHideSites, cardMenuShowSites:
 						m.setSiteWindowsHidden(selected == cardMenuHideSites)
-					case cardMenuGitAction:
+					case cardMenuGitAction, cardMenuMergePR:
 						if m.siteActionBusy(req.SiteID) {
 							return
 						}
 						if action, ok := option.request(req.SiteID, site.Git); ok {
+							if selected == cardMenuMergePR {
+								if option.Kind != "approved" || req.Kind != "pr-status" {
+									return
+								}
+								action.Kind = "merge-pr"
+							}
 							action.Anchor = req.Anchor
 							m.prepareAction(action, site, parent)
 						}

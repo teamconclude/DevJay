@@ -285,6 +285,55 @@ test('approved return names the open PR and requires a click to delete the local
  assert.deepEqual(calls[1],['action-confirm','keep']);
 }));
 
+test('merge and return explicitly confirms GitHub merge and local deletion without a countdown',t=>withDocument(()=>{
+ t.mock.timers.enable({apis:['setTimeout','Date'],now:1000});
+ const root=new Element('root'),calls=[];
+ const render=mountSuggestedActions(root,()=>{},(...args)=>calls.push(args));
+ const plan={id:'merge-token',kind:'merge-pr',approvedPR:{number:42},branch:'feature',head:'tip',target:'develop',targetHead:'base',deleteBranch:true,mergeMethod:'merge',mergeMethods:['merge','squash','rebase']};
+ render({suggestedSite:'site',sites:[{id:'site',git:{branch:'feature'}}],action:{siteID:'site',kind:'merge-pr',status:'ready',plan}});
+ assert.match(suggestionSteps(plan,true).join(' '),/merge PR #42 into develop on GitHub using a merge commit/);
+ assert.match(suggestionSteps(plan,true).join(' '),/Delete local branch feature only after the return succeeds/);
+ assert.match(classNode(root,'suggestion-preview').textContent,/PR remains merged/);
+ assert.equal(classNode(root,'action-countdown').hidden,true);
+ t.mock.timers.tick(10000);assert.deepEqual(calls,[]);
+ assert.equal(classNode(root,'suggestion-primary').textContent,'Merge & return to develop');
+ const checkbox=nodes(root).find(n=>n.tag==='input'&&n.type==='checkbox'&&n.className==='');
+ assert.equal(checkbox.checked,true);assert.equal(checkbox.disabled,true);
+ assert.equal(classNode(root,'merge-method').value,'merge');
+ classNode(root,'suggestion-primary').onclick();
+ assert.deepEqual(calls,[['action-confirm','merge-token']]);
+ assert.equal(actionLabels(plan,'running').title,'Merging PR and returning…');
+ assert.equal(actionLabels(plan,'failed').title,'PR merge and return stopped');
+}));
+
+test('merge method changes require a fresh confirmation and cannot confirm the previous plan while pending',()=>withDocument(()=>{
+ const root=new Element('root'),calls=[],render=mountSuggestedActions(root,()=>{},(...args)=>calls.push(args));
+ const plan={id:'squash-token',kind:'merge-pr',approvedPR:{number:42},branch:'feature',head:'tip',target:'develop',targetHead:'base',deleteBranch:true,mergeMethod:'squash',mergeMethods:['squash','rebase']};
+ const state={suggestedSite:'site',sites:[{id:'site',git:{branch:'feature'}}],action:{siteID:'site',kind:'merge-pr',status:'ready',plan}};
+ render(state);
+ const select=classNode(root,'merge-method'),confirm=classNode(root,'suggestion-primary');
+ assert.deepEqual(select.children.map(n=>n.value),['squash','rebase']);
+ assert.equal(select.value,'squash');
+ assert.match(suggestionSteps(plan,true).join(' '),/using squash and merge/);
+ select.value='rebase';select.onchange();
+ assert.deepEqual(calls,[['action-prepare',{siteID:'site',kind:'merge-pr',branch:'feature',head:'tip',targetBranch:'develop',deleteBranch:true,mergeMethod:'rebase'}]]);
+ render({...state,sites:[{...state.sites[0],path:'/repo'}]});
+ assert.equal(confirm.disabled,true);assert.equal(select.disabled,true);
+ confirm.onclick();assert.equal(calls.length,1);
+ render({...state,action:{...state.action,plan:{...plan,id:'rebase-token',mergeMethod:'rebase'}}});
+ assert.equal(select.value,'rebase');assert.equal(confirm.disabled,false);
+ assert.match(suggestionSteps({...plan,mergeMethod:'rebase'},true).join(' '),/using rebase and merge/);
+ confirm.onclick();assert.deepEqual(calls[1],['action-confirm','rebase-token']);assert.equal(select.disabled,true);
+}));
+
+test('failed merge method preparation restores the confirmed choice',()=>withDocument(async()=>{
+ const root=new Element('root'),render=mountSuggestedActions(root,()=>{},()=>Promise.reject(new Error('bridge disconnected')));
+ const plan={id:'merge-token',kind:'merge-pr',approvedPR:{number:42},branch:'feature',head:'tip',target:'develop',targetHead:'base',deleteBranch:true,mergeMethod:'squash',mergeMethods:['squash','rebase']};
+ render({suggestedSite:'site',sites:[{id:'site',git:{branch:'feature'}}],action:{siteID:'site',status:'ready',plan}});
+ const select=classNode(root,'merge-method');select.value='rebase';await select.onchange();
+ assert.equal(select.disabled,false);assert.equal(select.value,'squash');assert.equal(classNode(root,'suggestion-primary').disabled,false);
+}));
+
 test('return discloses default replacement and preserves both recovery references',()=>withDocument(()=>{
  const root=new Element('root'),calls=[];
  const render=mountSuggestedActions(root,()=>{},(...args)=>calls.push(args));

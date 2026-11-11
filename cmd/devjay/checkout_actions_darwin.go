@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -57,10 +58,13 @@ func (m *siteManager) prepareAction(req ActionRequest, r *siteRuntime, parent *a
 		m.actionReply(req.RequestID, "The Site is not ready or an action is already running for this Site. Refresh and try again.")
 		return
 	}
-	title := map[string]string{"switch": "Confirm branch switch", "replace": "Confirm branch replacement", "push": "Confirm push", "publish": "Confirm rebased push", "update": "Confirm branch update", "rebase": "Confirm rebase", "rebase-push": "Rebase and push", "merged": "Confirm return to default branch", "approved": "Confirm return to default branch"}[req.Kind]
+	title := map[string]string{"switch": "Confirm branch switch", "replace": "Confirm branch replacement", "push": "Confirm push", "publish": "Confirm rebased push", "update": "Confirm branch update", "rebase": "Confirm rebase", "rebase-push": "Rebase and push", "merged": "Confirm return to default branch", "approved": "Confirm return to default branch", "merge-pr": "Confirm PR merge and return"}[req.Kind]
 	if title == "" {
 		m.actionReply(req.RequestID, "Unknown action.")
 		return
+	}
+	if req.Kind == "merge-pr" {
+		req.preferredMergeMethod = m.config.mergeMethod()
 	}
 	d := m.ensureActionDialog(req.SiteID)
 	// Re-preparing within a dialog keeps its original parent/control anchor.
@@ -141,8 +145,8 @@ func (m *siteManager) registerCheckoutActions() {
 				m.actionReply(req.RequestID, "Choose a branch from this Site's branch picker before continuing.")
 				return
 			}
-			if req.Kind == "approved" {
-				// Only an existing approved-return dialog can change its deletion choice.
+			if req.Kind == "approved" || req.Kind == "merge-pr" {
+				// Only the same approved-PR dialog can re-prepare its action.
 				// Always keep the PR captured from the native menu.
 				if d == nil || d.action == nil || d.action.Plan == nil || d.action.Plan.ApprovedPR == nil ||
 					req.Branch != d.action.Plan.Branch || req.Head != d.action.Plan.Head || req.TargetBranch != d.action.Plan.Target {
@@ -177,6 +181,20 @@ func (m *siteManager) registerCheckoutActions() {
 				}
 				// Preparation validates the requested branch and commit against live Git.
 				parent = viewer.window
+			}
+			if req.Kind == "merge-pr" {
+				if !validMergeMethod(req.MergeMethod) || !slices.Contains(d.action.Plan.MergeMethods, req.MergeMethod) {
+					m.actionReply(req.RequestID, "Choose one of the available merge methods.")
+					return
+				}
+				if m.config.PreferredMergeMethod != req.MergeMethod {
+					c := m.config
+					c.PreferredMergeMethod = req.MergeMethod
+					if err := m.save(c); err != nil {
+						m.actionReply(req.RequestID, err.Error())
+						return
+					}
+				}
 			}
 			m.prepareAction(req, r, parent)
 		})

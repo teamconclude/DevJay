@@ -74,9 +74,15 @@ export function siteSuggestions(site) {
   return suggestions;
 }
 
-const returnsToDefault = kind => kind === 'merged' || kind === 'approved';
+const returnsToDefault = kind => kind === 'merged' || kind === 'approved' || kind === 'merge-pr';
 
 export function suggestionSteps(suggestion, deleteBranch) {
+  if (suggestion.kind === 'merge-pr') return [
+    `Recheck approval and passing checks, then merge PR #${suggestion.approvedPR.number} into ${suggestion.target} on GitHub using ${suggestion.mergeMethod === 'squash' ? 'squash and merge' : suggestion.mergeMethod === 'rebase' ? 'rebase and merge' : 'a merge commit'}.`,
+    suggestion.replaceDefault ? `Fetch the merged ${suggestion.target}, preserve its current local tip in a recovery reference, then replace the local default branch and switch to it.` :
+      `Fetch the merged ${suggestion.target}, switch to it, and fast-forward the local branch.`,
+    `Delete local branch ${suggestion.branch} only after the return succeeds. Keep its commits in a recovery reference.`,
+  ];
   if (suggestion.kind === 'rebase-push') return [`Rebase ${suggestion.branch} onto the latest ${suggestion.publishBase || suggestion.target}, then push the branch.`, 'Stop if either branch changes. Keep recovery copies of the original commits.'];
   if (suggestion.kind === 'publish') return [
     `Fetch the branch and latest ${suggestion.publishBase || 'default branch'}. Test the remote rebase and verify its commits are preserved locally.`,
@@ -131,9 +137,10 @@ export function actionLabels(plan, status = 'ready') {
     'rebase-push': {ready:'Rebase and push',preparing:'Checking rebase and push…',running:'Rebasing and pushing…',complete:'Branch rebased and pushed',failed:'Rebase and push stopped',button:'Rebase and push'},
     update: {ready:'Confirm branch update',preparing:'Checking branch update…',running:'Updating branch…',complete:'Branch updated',failed:'Branch update stopped',button:'Update branch'},
     rebase: {ready:'Confirm rebase',preparing:'Checking rebase…',running:'Rebasing branch…',complete:'Branch rebased',failed:'Rebase stopped',button:'Rebase branch'},
+    'merge-pr': {ready:'Confirm PR merge and return',preparing:'Checking PR merge…',running:'Merging PR and returning…',complete:'PR merged and branch returned',failed:'PR merge and return stopped',button:`Merge & return to ${plan.target || 'default branch'}`},
     return: {ready:'Confirm return to default branch',preparing:'Checking return to default branch…',running:'Returning to default branch…',complete:'Returned to default branch',failed:'Return to default branch stopped',button:`Return to ${plan.target}${plan.deleteBranch ? ' & delete branch' : ''}`},
   };
-  const label = labels[returnsToDefault(plan.kind) ? 'return' : plan.kind] || labels.return;
+  const label = labels[plan.kind === 'merge-pr' ? plan.kind : returnsToDefault(plan.kind) ? 'return' : plan.kind] || labels.return;
   return {title:label[status] || label.ready,button:label.button};
 }
 
@@ -184,6 +191,10 @@ export function mountSuggestedActions(root, close, actionEvent) {
   const remoteOption = el('label', 'suggestion-delete branch-remote-option'); remoteOption.hidden = true;
   const remoteCheckbox = el('input', 'branch-remote-checkbox'); remoteCheckbox.type = 'checkbox';
   const remoteText = el('span', ''); remoteOption.append(remoteCheckbox, remoteText);
+  const mergeOption = el('label', 'merge-option'); mergeOption.hidden = true;
+  mergeOption.title = 'Your choice is remembered for future merge dialogs.';
+  const mergeMethod = el('select', 'merge-method'); mergeMethod.setAttribute('aria-label', 'Merge method');
+  mergeOption.append(el('span', '', 'Merge method'), mergeMethod);
   const preview = el('p', 'suggestion-preview');
   const countdown = el('label', 'action-countdown help'); countdown.hidden = true;
   const autoCountdown = el('input', 'action-auto-countdown'); autoCountdown.type = 'checkbox'; autoCountdown.disabled = true;
@@ -193,10 +204,11 @@ export function mountSuggestedActions(root, close, actionEvent) {
   const back = el('button', 'branch-back', 'Choose another branch'); back.type = 'button'; back.hidden = true;
   const cancel = el('button', '', 'Cancel'); cancel.type = 'button'; cancel.onclick = close;
   const next = el('button', 'suggestion-primary'); next.type = 'button';
-  footer.append(back, countdown, cancel, next); root.append(chrome, heading, context, chooser, plan, deletion, remoteOption, preview, footer);
+  footer.append(back, countdown, cancel, next); root.append(chrome, heading, context, chooser, plan, deletion, remoteOption, mergeOption, preview, footer);
   let current = null, identity = '', choicesIdentity = '', chooserContext = '', preparingChoice = false;
   let countdownIdentity = '', countdownMode = '', timer = null, deadline = 0, countdownStopped = false;
   let closing = false, generation = 0, confirming = '', disposed = false;
+  let preparingMergeMethod = '';
   const confirmationKey = action => action?.status === 'ready' && action.plan?.id ? JSON.stringify([generation, action.siteID, action.plan.id]) : '';
   const countdownVerb = () => countdownMode === 'update' ? 'updating' : 'closing';
   const clearCountdown = () => { clearTimeout(timer); timer = null; };
@@ -211,7 +223,7 @@ export function mountSuggestedActions(root, close, actionEvent) {
     return recoverRequest(() => close({generation}), () => {
       if (generation === closingGeneration) {
         closing = false;
-        next.disabled = false;
+        next.disabled = !!preparingMergeMethod;
         if (countdownIdentity) stopCountdown();
       }
     });
@@ -264,7 +276,7 @@ export function mountSuggestedActions(root, close, actionEvent) {
     targetBranch:target.name,targetRemote:target.remote || '',updateTarget});
   next.onclick = () => {
     if (disposed || closing || confirming || next.disabled || !confirmationKey(current)) return;
-    next.disabled = remoteCheckbox.disabled = back.disabled = true;
+    next.disabled = remoteCheckbox.disabled = mergeMethod.disabled = back.disabled = true;
     cancel.disabled = dismiss.disabled = true;
     const pending = current, pendingKey = confirming = confirmationKey(current);
     clearCountdown();
@@ -276,7 +288,19 @@ export function mountSuggestedActions(root, close, actionEvent) {
       if (!disposed && confirming === pendingKey && confirmationKey(current) === pendingKey) {
         confirming = ''; next.disabled = back.disabled = cancel.disabled = dismiss.disabled = false;
         remoteCheckbox.disabled = remoteOption.hidden;
+        mergeMethod.disabled = mergeOption.hidden;
         if (countdownMode === 'update') { stopCountdown(); autoCountdown.disabled = false; }
+      }
+    });
+  };
+  mergeMethod.onchange = () => {
+    if (disposed || mergeMethod.disabled || mergeOption.hidden || current?.status !== 'ready' || current.plan?.kind !== 'merge-pr') return;
+    const pending = current, pendingKey = preparingMergeMethod = confirmationKey(current);
+    mergeMethod.disabled = next.disabled = true;
+    return recoverRequest(() => actionEvent('action-prepare', {siteID:pending.siteID,kind:'merge-pr',branch:pending.plan.branch,
+      head:pending.plan.head,targetBranch:pending.plan.target,deleteBranch:true,mergeMethod:mergeMethod.value}), () => {
+      if (!disposed && preparingMergeMethod === pendingKey && confirmationKey(current) === pendingKey) {
+        preparingMergeMethod = ''; mergeMethod.disabled = next.disabled = false; mergeMethod.value = pending.plan.mergeMethod;
       }
     });
   };
@@ -317,6 +341,7 @@ export function mountSuggestedActions(root, close, actionEvent) {
     if (key === identity) return;
     identity = key; current = action;
     if (confirming !== confirmationKey(action)) confirming = '';
+    if (preparingMergeMethod !== confirmationKey(action)) preparingMergeMethod = '';
     updateCountdown(action);
     const p = action?.plan;
     const kind = p?.kind || action?.kind;
@@ -326,22 +351,30 @@ export function mountSuggestedActions(root, close, actionEvent) {
     heading.textContent = kind === 'switch' && ['loading-branches','choosing'].includes(action?.status) ? 'Switch branch' : action ? labels.title : 'Confirm action';
     context.textContent = site ? `${site.name || site.path || ''} · ${p?.branch || action?.currentBranch || site.git.branch}${p ? ` → ${kind === 'rebase-push' ? p.publishBase : p.target}` : ''}` : '';
     context.title = site?.path || '';
-    next.hidden = action?.status !== 'ready'; next.disabled = closing || !!confirming;
+    next.hidden = action?.status !== 'ready'; next.disabled = closing || !!confirming || !!preparingMergeMethod;
     back.hidden = kind !== 'switch' || !['ready','failed'].includes(action?.status); back.disabled = !!confirming;
     next.textContent = labels.button;
     cancel.disabled = dismiss.disabled = action?.status === 'running' || !!confirming;
     cancel.textContent = action?.status === 'complete' ? 'Done' : action?.status === 'failed' ? 'Close' : 'Cancel';
     const finished = action?.status === 'complete' || action?.status === 'failed';
     dismiss.title = finished ? 'Close' : 'Cancel'; dismiss.setAttribute('aria-label', finished ? 'Close dialog' : 'Cancel action');
-    deletion.hidden = action?.status !== 'ready' || !returnsToDefault(kind);
+    deletion.hidden = action?.status !== 'ready' || !returnsToDefault(kind) || kind === 'merge-pr';
     checkbox.disabled = deletion.hidden; checkbox.checked = !!p?.deleteBranch;
     deleteText.textContent = `Delete local branch ${p?.branch || ''} afterward`;
     remoteOption.hidden = action?.status !== 'ready' || kind !== 'switch' || !p?.canUpdateTarget || p.createTarget || p.localAhead > 0 || !(p.remoteAhead > 0);
     remoteCheckbox.disabled = remoteOption.hidden || !!confirming; remoteCheckbox.checked = !!p?.updateTarget;
     remoteText.textContent = `Use newer remote version from ${p?.remoteTarget || ''} (${p?.remoteAhead || 0} newer ${p?.remoteAhead === 1 ? 'commit' : 'commits'})`;
+    mergeOption.hidden = action?.status !== 'ready' || kind !== 'merge-pr';
+    mergeMethod.disabled = mergeOption.hidden || !!confirming || !!preparingMergeMethod;
+    if (!mergeOption.hidden && !preparingMergeMethod) {
+      const names = {merge:'Create a merge commit',squash:'Squash and merge',rebase:'Rebase and merge'};
+      mergeMethod.replaceChildren(...(p.mergeMethods || []).map(method => { const option = el('option', '', names[method]); option.value = method; return option; }));
+      mergeMethod.value = p.mergeMethod;
+    }
     preview.hidden = compact || action?.status === 'complete';
     preview.textContent = action?.status === 'running' ? 'Finishing the operation before this window can close.' :
       choosing ? 'Select a branch to review before switching.' :
+      kind === 'merge-pr' ? 'This merges the PR on GitHub and deletes the local feature branch after returning. If local cleanup fails, the PR remains merged.' :
       kind === 'approved' ? 'This cleans up your local checkout. The pull request stays open on GitHub.' :
       kind === 'switch' ? (site?.git.conflicts ? 'Resolve the conflicted files before switching branches.' :
         site?.git.changes ? 'Stash unfinished edits in your Git client, or commit them if ready, then switch branches. DevJay does not stash or restore edits automatically.' :
@@ -412,7 +445,8 @@ export function mountSuggestedActions(root, close, actionEvent) {
     } else if (action?.status === 'ready') {
       const list = el('ol', '');
       for (const step of suggestionSteps({...p,tracking:site?.git.base?.tracking || p.target}, p.deleteBranch)) list.append(el('li', '', step));
-      const revisions = p.kind === 'push' || p.kind === 'publish' ? `${p.targetHead.slice(0,8)} → ${p.head.slice(0,8)}` : `${p.head.slice(0,8)} → ${p.targetHead.slice(0,8)}`;
+      const revisions = p.kind === 'merge-pr' ? `PR ${p.head.slice(0,8)} → ${p.target} (currently ${p.targetHead.slice(0,8)})` :
+        p.kind === 'push' || p.kind === 'publish' ? `${p.targetHead.slice(0,8)} → ${p.head.slice(0,8)}` : `${p.head.slice(0,8)} → ${p.targetHead.slice(0,8)}`;
       plan.replaceChildren(el('p', 'help copyable', revisions), list);
       if (p.deleteBranch) plan.append(el('p', 'warning', `This also deletes local branch ${p.branch}. A recovery reference will retain its commits.`));
       if (returnsToDefault(p.kind) && p.replaceDefault) plan.append(el('p', 'warning default-return', `Local ${p.target} has ${p.localAhead} ${p.localAhead === 1 ? 'commit' : 'commits'} outside ${p.remoteTarget}'s history. Their changes may already exist upstream under different commit IDs. All current ${p.target} commits will be retained in a separate recovery reference; only the remote version will be used for ${p.target}.`));

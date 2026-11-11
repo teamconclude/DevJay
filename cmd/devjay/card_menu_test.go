@@ -152,7 +152,7 @@ func TestCardMenuContentsAndPrimaryAction(t *testing.T) {
 		{cardMenuRequest{Kind: "site", Number: 42}, GitStatus{}, nil, "Open PR #42 in browser|Open PR #42 in new browser tab", []cardMenuAction{cardMenuOpenPR, cardMenuOpenPRNew}},
 		{cardMenuRequest{Kind: "review-status", Number: 42}, GitStatus{Head: "head"}, nil, "Review|View branch|Open PR #42 in browser|Open PR #42 in new browser tab", []cardMenuAction{cardMenuViewDiffs, cardMenuView, cardMenuOpenPR, cardMenuOpenPRNew}},
 		{cardMenuRequest{Kind: "review-status", Number: 42}, GitStatus{}, nil, "View branch|Open PR #42 in browser|Open PR #42 in new browser tab", []cardMenuAction{cardMenuView, cardMenuOpenPR, cardMenuOpenPRNew}},
-		{cardMenuRequest{Kind: "pr-status", Number: 42}, GitStatus{Head: "head"}, approved, "View branch|Review|Return to develop & delete local branch…|Open PR #42 in browser|Open PR #42 in new browser tab", []cardMenuAction{cardMenuView, cardMenuViewDiffs, cardMenuGitAction, cardMenuOpenPR, cardMenuOpenPRNew}},
+		{cardMenuRequest{Kind: "pr-status", Number: 42}, GitStatus{Head: "head"}, approved, "Merge PR #42 & return to develop…|View branch|Review|Return to develop & delete local branch…|Open PR #42 in browser|Open PR #42 in new browser tab", []cardMenuAction{cardMenuMergePR, cardMenuView, cardMenuViewDiffs, cardMenuGitAction, cardMenuOpenPR, cardMenuOpenPRNew}},
 	} {
 		var titles []string
 		var actions []cardMenuAction
@@ -614,8 +614,17 @@ func TestApprovedReturnCardMenu(t *testing.T) {
 	for _, menu := range []cardMenuRequest{{Kind: "branch"}, {Kind: "auto"}, {Kind: "pr-status", Number: 42}} {
 		option := makeCardGitOption(menu, status)
 		items := cardMenuActions(menu, status, option)
+		offset := 0
+		if menu.Kind == "pr-status" {
+			offset = 1
+			if len(items) == 0 || items[0].Action != cardMenuMergePR {
+				t.Fatalf("Approved status must prepare merge first: %v", items)
+			}
+		} else if validCardMenuSelection(items, menu, cardMenuMergePR, PullRequestLink{}, status) {
+			t.Fatal("merge offered outside the Approved status")
+		}
 		if option == nil || option.title() != "Return to develop & delete local branch…" ||
-			len(items) < 3 || items[0].Action != cardMenuView || items[1].Action != cardMenuViewDiffs || items[2].Action != cardMenuGitAction {
+			len(items) < offset+3 || items[offset].Action != cardMenuView || items[offset+1].Action != cardMenuViewDiffs || items[offset+2].Action != cardMenuGitAction {
 			t.Fatalf("wrong actions for %v: %+v", menu, option)
 		}
 		req, ok := option.request("s", status)
