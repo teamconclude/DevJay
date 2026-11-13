@@ -56,7 +56,7 @@ export CGO_CFLAGS="${CGO_CFLAGS:--O2 -g} -mmacosx-version-min=$minimum"
 export CGO_LDFLAGS="${CGO_LDFLAGS:-} -mmacosx-version-min=$minimum"
 for arch in "${architectures[@]}"; do
     echo "Building DevJay $version for ${arch}..."
-    CGO_ENABLED=1 GOOS=darwin GOARCH="$arch" go build -trimpath \
+    CGO_ENABLED=1 GOOS=darwin GOARCH="$arch" ./scripts/go.sh build -trimpath \
         -ldflags="-s -w -X main.buildVersion=$version -extldflags=-mmacosx-version-min=$minimum" \
         -o "$work/DevJay-$arch" ./cmd/devjay
 done

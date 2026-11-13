@@ -30,6 +30,8 @@ make run
 
 This builds and opens `bin/DevJay.app`. Development and installed builds share Sites, Profiles, window positions, and preferences. Only one copy runs at a time; opening another copy brings the running app forward. Quit DevJay before rebuilding or switching copies. No npm installation or Wails CLI is needed.
 
+Use the Make targets or `./scripts/go.sh build ./cmd/devjay` for builds. The wrapper applies a temporary Go standard-library fix for failed command launches on macOS; it does not modify your installed Go toolchain. See [build and validation](docs/ARCHITECTURE.md#build-and-validation) for direct test commands.
+
 ## Get started
 
 1. Choose **DevJay → Settings…**, press **⌘,**, or right-click a card and choose **DevJay settings…**.

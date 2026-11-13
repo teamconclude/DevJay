@@ -4,11 +4,12 @@ export MACOSX_DEPLOYMENT_TARGET := $(MACOS_MIN)
 CGO_CFLAGS ?= -O2 -g
 export CGO_CFLAGS := $(CGO_CFLAGS) -mmacosx-version-min=$(MACOS_MIN)
 GO_LINK_FLAGS := -extldflags=-mmacosx-version-min=$(MACOS_MIN)
+GO_TEST_TIMEOUT ?= 20m
 
 .PHONY: build run check installer release
 build:
 	mkdir -p "$(APP)/Contents/MacOS" "$(APP)/Contents/Resources"
-	CGO_ENABLED=1 go build -ldflags="$(GO_LINK_FLAGS) -X main.buildChannel=development" -o "$(APP)/Contents/MacOS/DevJay" ./cmd/devjay
+	CGO_ENABLED=1 ./scripts/go.sh build -ldflags="$(GO_LINK_FLAGS) -X main.buildChannel=development" -o "$(APP)/Contents/MacOS/DevJay" ./cmd/devjay
 	cp build/DevJay.icns "$(APP)/Contents/Resources/DevJay.icns"
 	cp build/Info.plist "$(APP)/Contents/Info.plist"
 	codesign --force --sign - "$(APP)"
@@ -24,6 +25,7 @@ run: build
 
 check:
 	@for script in scripts/*.sh cmd/devjay/native_scripts/update.sh; do bash -n "$$script" || exit; done
+	CGO_ENABLED=1 ./scripts/go.sh run -ldflags="$(GO_LINK_FLAGS)" tests/exec_failure.go
 	@set -e; geometry_bin=$$(mktemp "$${TMPDIR:-/tmp}/devjay-layout.XXXXXX"); \
 	trap 'rm -f "$$geometry_bin"' EXIT; \
 	clang -Wall -Wextra -Werror tests/layout_geometry_test.c -o "$$geometry_bin"; \
@@ -89,8 +91,8 @@ check:
 	trap 'rm -f "$$pr_review_bin"' EXIT; \
 	clang -Wall -Wextra -Werror -fblocks -framework AppKit -framework WebKit tests/pr_review_layout_test.m -o "$$pr_review_bin"; \
 	"$$pr_review_bin"
-	go test -ldflags="$(GO_LINK_FLAGS)" ./...
-	go vet ./...
+	./scripts/go.sh test -timeout="$(GO_TEST_TIMEOUT)" -ldflags="$(GO_LINK_FLAGS)" ./...
+	./scripts/go.sh vet ./...
 	node --input-type=module --check < cmd/devjay/frontend/app.js
 	node --test tests/*.test.mjs
 	plutil -lint build/Info.plist

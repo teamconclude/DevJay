@@ -206,6 +206,8 @@ The DMG presents only `DevJay.app` and an Applications folder shortcut for drag-
 
 Use macOS 13+, Go 1.27.1+, Xcode Command Line Tools, Git, and Node for checks. `gh` with existing authentication is optional for live GitHub state. `go.mod` pins Wails; no Wails CLI or npm install is needed.
 
+The full Go suite creates many disposable Git repositories. `make check` allows 20 minutes for it; override `GO_TEST_TIMEOUT` if needed. This is a suite deadline, independent of application subprocess timeouts.
+
 ```sh
 make check     # Go tests/vet, JS tests/syntax, native checks, plist validation
 make build     # bin/DevJay.app, development identity, ad-hoc signed
@@ -214,7 +216,11 @@ make installer VERSION=0.8.0 # universal DMG, ZIP and SHA-256 checksums in dist/
 make release TAG=v0.8.0       # arm64 and amd64 release builds; no publication
 ```
 
-Run these commands from the repository root. Direct Go builds target `./cmd/devjay`; `go test ./...` and `go vet ./...` still cover the entire module. Quit the development app before rebuilding it. `make installer ARCH=arm64` or `ARCH=amd64` selects one architecture. Packaging uses a temporary build, leaves `bin/` untouched, verifies signatures/architectures and the mounted image, and takes `VERSION` or the development placeholder from `build/Info.plist`. `DIST_DIR` overrides the output directory. The packaged plist receives the release version in both bundle version fields without changing the source plist. Installers are ad-hoc signed unless signing is configured. A universal binary and macOS 13 deployment target are not evidence of testing on every supported machine.
+Run these commands from the repository root. Direct builds use `./scripts/go.sh build ./cmd/devjay`; `./scripts/go.sh test ./...` and `./scripts/go.sh vet ./...` cover the entire module with the same build fix. Quit the development app before rebuilding it. `make installer ARCH=arm64` or `ARCH=amd64` selects one architecture. Packaging uses a temporary build, leaves `bin/` untouched, verifies signatures/architectures and the mounted image, and takes `VERSION` or the development placeholder from `build/Info.plist`. `DIST_DIR` overrides the output directory. The packaged plist receives the release version in both bundle version fields without changing the source plist. Installers are ad-hoc signed unless signing is configured. A universal binary and macOS 13 deployment target are not evidence of testing on every supported machine.
+
+`scripts/go.sh` generates a temporary Go build overlay for both Darwin architectures. Go 1.27.4’s `syscall` failed-exec path calls libc `exit()`, which can run inherited CoreSpotlight/AppKit cleanup handlers in a forked child and crash before the requested command starts. The overlay redirects that package’s generated exit trampoline to `_exit()` through a unique `libc_devjay_child_exit` import, preserving the launch error and bypassing those handlers. The unique symbol prevents `x/sys/unix`’s global `libc_exit` import from overriding the correction in the linked app. It covers application and dependency command launches without changing command arguments, cancellation, or retry behavior. The installed Go source stays untouched; the overlay is removed when the command finishes. The generator runs on the host architecture even for cross-builds, accepts an already-fixed binding, and stops on unrecognized source or a competing overlay. Make targets and installer/release builds all use the wrapper; plain `go build` bypasses this workaround. Reassess it when upgrading Go.
+
+`make check` includes `tests/exec_failure.go`, an isolated Go/libc harness that registers a harmless native exit handler and checks that concurrent failed launches never invoke it. Cases cover missing and non-executable files, invalid executable format, missing script interpreters, invalid working directories, and successful execution. Original error codes must be preserved. `TestFailedExecExitBinding` also inspects the final linked test binary’s ARM64/AMD64 trampoline and import stub to catch dependency symbol collisions; setting `DEVJAY_EXIT_BINARY` checks a thin development or release app artifact. The tests use temporary files and no DevJay configuration. Run the native harness alone with `./scripts/go.sh run tests/exec_failure.go`.
 
 The Check workflow runs `make check` on macOS for main and pull requests. The release workflow in `.github/workflows/release.yml` follows Galley: pushing a numeric `vMAJOR.MINOR.PATCH` tag runs checks on macOS, derives the version from the tag, builds arm64 and amd64 (Intel x86_64) DMG/ZIP packages with checksums, and uploads them with `gh`. Manual dispatch accepts an existing numeric tag and checks out that tag explicitly. New releases remain drafts until all assets upload; reruns replace the same tag’s assets. `scripts/build-release.sh` accepts the tag locally and never creates or pushes tags. With all five signing secrets documented in README, it imports one Developer ID Application identity into a temporary keychain. The app is signed with hardened runtime, notarized and stapled before ZIP creation; the DMG is signed, notarized and stapled separately. The script removes its keychain on exit. Apple credentials are used only for release packaging.
 
@@ -224,7 +230,7 @@ For changes to concurrency or operation lifetime, also run the Go race suite wit
 
 ```sh
 MACOSX_DEPLOYMENT_TARGET=13.0 CGO_CFLAGS='-O2 -g -mmacosx-version-min=13.0' \
-  go test -race -ldflags='-extldflags=-mmacosx-version-min=13.0' ./...
+  ./scripts/go.sh test -race -ldflags='-extldflags=-mmacosx-version-min=13.0' ./...
 ```
 
 Tests use disposable repositories and do not contact GitHub or modify development repositories. Native checks cover geometry, power/recovery behavior, and bridge regressions; live interaction still needs manual testing. Exercise relevant add/remove, sorting/dragging, inactive-window clicks, minimized Sites, multi-monitor/Space placement, quit/relaunch, and display changes. Record machine/macOS details and actual outcomes. Remaining validation and feature gaps, together with prior validation results, are in [PLAN.md](../PLAN.md).
