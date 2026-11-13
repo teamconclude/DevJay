@@ -52,6 +52,15 @@ int main(void) {
             AuthorLayoutDelegate *delegate=[[[AuthorLayoutDelegate alloc] init] autorelease];view.navigationDelegate=delegate;window.contentView=view;
             loaded=NO;[view loadHTMLString:html baseURL:nil];spin(&loaded);
             evaluate(view,@"var item={id:'a',path:'/tmp/c1',prefix:'~/',name:'c1',position:{label:'Desktop 5'},window:{},developmentAppsKnown:true,developmentApps:[{name:'GoLand',bundleID:'goland',agents:['Codex','Claude Code']}],git:{branch:'lars/customer-api-plan',summary:'Up to date',pullRequests:[{number:2865,state:'Approved',ciState:'success',otherAuthor:{login:'laknoll'}}]}};var fixture={sites:[item],preferences:{showIDEStatus:true},layout:'horizontal'};render(fixture)");
+            // Conflicts override approval/CI color in both themes, without hiding CI.
+            for (NSString *theme in @[@"dark", @"light"]) {
+                evaluate(view,[NSString stringWithFormat:@"fixture.theme='%@';item.git.pullRequests[0].mergeConflict=true;item.git.pullRequests[0].ciState='failure';render(fixture)",theme]);
+                NSString *color=[theme isEqualToString:@"light"] ? @"rgb(128, 83, 20)" : @"rgb(238, 210, 164)";
+                assert([evaluate(view,[NSString stringWithFormat:@"(()=>{const tag=document.querySelector('.pr-tag');return tag.classList.contains('pr-conflict')&&getComputedStyle(tag).color==='%@'&&tag.textContent==='× #2865'&&tag.title.includes('Merge conflicts')&&tag.title.includes('CI failed');})()",color]) boolValue]);
+                evaluate(view,@"item.git.pullRequests[0].mergeConflict=false;item.git.pullRequests[0].ciState='success';render(fixture)");
+                assert([evaluate(view,@"document.querySelector('.pr-tag').classList.contains('pr-approved')&&!document.querySelector('.pr-tag').title.includes('Merge conflicts')") boolValue]);
+            }
+            evaluate(view,@"delete fixture.theme;render(fixture)");
             // Measure actual card renderer and CSS in both layouts. One fixed-size
             // avatar shares the existing app row and must not change its height.
             for(NSString *layout in @[@"horizontal",@"vertical",@"custom"]) {

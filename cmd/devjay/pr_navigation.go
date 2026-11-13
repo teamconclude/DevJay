@@ -16,6 +16,7 @@ type PullRequestLink struct {
 	State          string             `json:"state"`
 	IsDraft        bool               `json:"isDraft"`
 	CIState        string             `json:"ciState,omitempty"`
+	MergeConflict  bool               `json:"mergeConflict,omitempty"`
 	OtherAuthor    *PullRequestAuthor `json:"otherAuthor,omitempty"`
 }
 
@@ -62,6 +63,7 @@ func openPullRequestLinks(data []byte, repo string) []PullRequestLink {
 		}
 		if link, ok := pullRequestLink(repo, pr.Number, state, pr.IsDraft); ok {
 			link.CIState = pullRequestCIState(pr)
+			link.MergeConflict = pr.Mergeable == "CONFLICTING"
 			link.approvedReturn = pr.approvedReturn(repo)
 			result = append(result, link)
 			seen[pr.Number] = true

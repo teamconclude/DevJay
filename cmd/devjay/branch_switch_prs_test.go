@@ -8,7 +8,7 @@ import (
 
 func TestBranchPRsMatchRepositoryAndUpstreamAndShareQueries(t *testing.T) {
 	data := []byte(`[
- {"number":12,"headRefName":"remote-name","headRepository":{"nameWithOwner":"owner/repo"},"headRepositoryOwner":{"login":"owner"},"reviewDecision":"APPROVED","headRefOid":"abc","statusCheckRollup":[{"__typename":"CheckRun","status":"COMPLETED","conclusion":"FAILURE"}]},
+ {"number":12,"mergeable":"CONFLICTING","headRefName":"remote-name","headRepository":{"nameWithOwner":"owner/repo"},"headRepositoryOwner":{"login":"owner"},"reviewDecision":"APPROVED","headRefOid":"abc","statusCheckRollup":[{"__typename":"CheckRun","status":"COMPLETED","conclusion":"FAILURE"}]},
  {"number":13,"headRefName":"remote-name","headRepository":{"nameWithOwner":"owner/fork"},"headRepositoryOwner":{"login":"owner"},"reviewDecision":"APPROVED"}
 ]`)
 	choices := []BranchChoice{
@@ -24,7 +24,7 @@ func TestBranchPRsMatchRepositoryAndUpstreamAndShareQueries(t *testing.T) {
 	}
 	for _, index := range []int{0, 1} {
 		prs := result[index].PullRequests
-		if len(prs) != 1 || prs[0].Number != 12 || prs[0].State != "Approved" || prs[0].CIState != "failure" {
+		if len(prs) != 1 || prs[0].Number != 12 || prs[0].State != "Approved" || prs[0].CIState != "failure" || !prs[0].MergeConflict {
 			t.Fatalf("wrong PR association: %+v", result[index])
 		}
 	}

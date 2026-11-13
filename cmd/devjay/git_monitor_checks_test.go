@@ -20,9 +20,10 @@ func TestPendingChecksRefreshUsesOneQueryAndPreservesRemoteAndReviews(t *testing
 	if err := os.WriteFile(filepath.Join(root, "gh"), []byte(script), 0700); err != nil {
 		t.Fatal(err)
 	}
+	mergeable := "CONFLICTING"
 	writeReply := func(head, conclusion string) {
 		t.Helper()
-		data := `[{"number":12,"headRefOid":"` + head + `","headRepositoryOwner":{"login":"team"},"reviewDecision":"APPROVED","statusCheckRollup":[` + checkRun("COMPLETED", conclusion) + `]}]`
+		data := `[{"number":12,"mergeable":"` + mergeable + `","headRefOid":"` + head + `","headRepositoryOwner":{"login":"team"},"reviewDecision":"APPROVED","statusCheckRollup":[` + checkRun("COMPLETED", conclusion) + `]}]`
 		if err := os.WriteFile(fixture, []byte(data), 0600); err != nil {
 			t.Fatal(err)
 		}
@@ -40,16 +41,22 @@ func TestPendingChecksRefreshUsesOneQueryAndPreservesRemoteAndReviews(t *testing
 	if cache.Key != "branch-identity" || cache.Checked != checked || cache.Attempted != checked || cache.BaseChecked != checked || !reflect.DeepEqual(cache.Reviews, reviews) {
 		t.Fatalf("CI query overwrote remote/review cache: %+v", cache)
 	}
-	if len(cache.PullRequests) != 1 || cache.PullRequests[0].CIState != "success" || cache.ChecksAttempted.IsZero() || cache.PullRequests[0].OtherAuthor == nil || cache.PullRequests[0].OtherAuthor.Login != "someone-else" {
+	if len(cache.PullRequests) != 1 || !cache.PullRequests[0].MergeConflict || cache.PullRequests[0].CIState != "success" || cache.ChecksAttempted.IsZero() || cache.PullRequests[0].OtherAuthor == nil || cache.PullRequests[0].OtherAuthor.Login != "someone-else" {
 		t.Fatalf("check result missing: %+v", cache)
 	}
 	data, err := os.ReadFile(calls)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Count(string(data), "\n") != 1 || !strings.Contains(string(data), "pr list --repo team/project --head feature") || strings.Contains(string(data), "api ") {
+	if strings.Count(string(data), "\n") != 1 || !strings.Contains(string(data), "pr list --repo team/project --head feature") || !strings.Contains(string(data), "statusCheckRollup,mergeable") || strings.Contains(string(data), "api ") {
 		t.Fatalf("pending checks made unrelated requests: %s", data)
 	}
+	mergeable = "UNKNOWN"
+	writeReply("head", "SUCCESS")
+	if refreshPullRequestChecks(context.Background(), m, &cache) || cache.PullRequests[0].MergeConflict {
+		t.Fatal("unknown mergeability retained a conflict or required a full refresh")
+	}
+	mergeable = "CONFLICTING"
 	writeReply("new-head", "FAILURE")
 	if !refreshPullRequestChecks(context.Background(), m, &cache) || len(cache.Reviews) != 0 || cache.PullRequests[0].CIState != "failure" {
 		t.Fatalf("changed pushed head retained stale review findings: %+v", cache)
@@ -67,7 +74,7 @@ func TestPendingChecksRefreshUsesOneQueryAndPreservesRemoteAndReviews(t *testing
 		t.Fatal(err)
 	}
 	before := append([]PullRequestLink(nil), cache.PullRequests...)
-	if refreshPullRequestChecks(context.Background(), m, &cache) || cache.PullRequests[0].CIState != "unknown" || before[0].CIState != "failure" {
+	if refreshPullRequestChecks(context.Background(), m, &cache) || cache.PullRequests[0].CIState != "unknown" || before[0].CIState != "failure" || cache.PullRequests[0].MergeConflict || !before[0].MergeConflict {
 		t.Fatal("failed query kept old state or mutated another cache's slice")
 	}
 	if !cache.ChecksRetry || nextPullRequestCheck(m, cache, gitPollingCadence(true, checked, checked)) != cache.ChecksAttempted.Add(time.Minute) {
@@ -76,9 +83,10 @@ func TestPendingChecksRefreshUsesOneQueryAndPreservesRemoteAndReviews(t *testing
 	if err := os.WriteFile(filepath.Join(root, "gh"), []byte(script), 0700); err != nil {
 		t.Fatal(err)
 	}
+	mergeable = "MERGEABLE"
 	writeReply("new-head", "SUCCESS")
 	refreshPullRequestChecks(context.Background(), m, &cache)
-	if cache.ChecksRetry {
+	if cache.ChecksRetry || cache.PullRequests[0].MergeConflict {
 		t.Fatal("recovered completed checks retained retry polling")
 	}
 }

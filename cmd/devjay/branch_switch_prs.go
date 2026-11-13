@@ -15,7 +15,7 @@ func readBranchPullRequests(ctx context.Context, path string, choices []BranchCh
 		return githubRepo(gitString(ctx, path, "remote", "get-url", remote))
 	}, func(repo string) ([]byte, error) {
 		return runCommand(ctx, 15*time.Second, "gh", "pr", "list", "--repo", repo, "--state", "open", "--limit", "100",
-			"--json", "number,isDraft,reviewDecision,headRepositoryOwner,headRepository,headRefName,headRefOid,statusCheckRollup")
+			"--json", "number,isDraft,reviewDecision,headRepositoryOwner,headRepository,headRefName,headRefOid,statusCheckRollup,mergeable")
 	})
 }
 

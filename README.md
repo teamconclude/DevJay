@@ -65,7 +65,7 @@ In a ready branch-update dialog, uncheck **Auto updating in 5 seconds.** or pres
 
 Git actions for different Sites have independent dialogs and can run in parallel across independent repositories. Successful dialogs close after a five-second countdown; press **Esc** to stop the countdown and keep the result open, or click **Done** to close immediately.
 
-Approved and merged PR tags are green; failing CI takes priority in red. Click the colored PR tag in a card’s upper-right corner to open its pull request. DevJay can reuse tabs in Safari, Chrome, Edge, and Brave with macOS Automation permission; right-click the tag to open a new tab alongside existing PRs.
+PR tags are yellow when GitHub reports merge conflicts. Otherwise, approved and merged PR tags are green, with failing CI taking priority in red. Conflict tags retain any CI failure symbol; hover for both statuses. Click the colored PR tag in a card’s upper-right corner to open its pull request. DevJay can reuse tabs in Safari, Chrome, Edge, and Brave with macOS Automation permission; right-click the tag to open a new tab alongside existing PRs.
 
 When a PR is authored by someone else, their GitHub avatar appears at the card’s bottom-right. Hover for their username; click to open the PR. Your own PRs have no avatar.
 

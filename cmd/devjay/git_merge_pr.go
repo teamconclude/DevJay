@@ -34,7 +34,7 @@ func checkPRMerge(ctx context.Context, p *CheckoutPlan) error {
 	}
 	var current struct {
 		pullRequest
-		Mergeable, MergeStateStatus, BaseRefOid string
+		MergeStateStatus, BaseRefOid string
 	}
 	out, err := runCommand(ctx, 15*time.Second, "gh", "pr", "view", strconv.Itoa(pr.Number), "--repo", "github.com/"+pr.repo,
 		"--json", approvedPRFields+",mergeable,mergeStateStatus,baseRefOid")

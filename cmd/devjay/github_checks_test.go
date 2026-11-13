@@ -114,6 +114,19 @@ func TestPullRequestCIPreservesReviewStateAndTrustedLink(t *testing.T) {
 	}
 }
 
+func TestPullRequestConflictRequiresExplicitGitHubConflict(t *testing.T) {
+	for _, mergeable := range []string{"CONFLICTING", "MERGEABLE", "UNKNOWN", "", "BLOCKED"} {
+		data, err := json.Marshal([]map[string]any{{"number": 12, "mergeable": mergeable, "reviewDecision": "APPROVED", "headRepositoryOwner": map[string]string{"login": "team"}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		links := openPullRequestLinks(data, "team/project")
+		if len(links) != 1 || links[0].MergeConflict != (mergeable == "CONFLICTING") || links[0].State != "Approved" {
+			t.Fatalf("mergeability %q changed approval or misreported conflicts: %+v", mergeable, links)
+		}
+	}
+}
+
 func TestRefreshRemoteReadsCIWithExistingPRLookupAndClearsOldResult(t *testing.T) {
 	root := t.TempDir()
 	log, fixture := filepath.Join(root, "calls"), filepath.Join(root, "open.json")
@@ -131,13 +144,13 @@ esac
 		t.Fatal(err)
 	}
 	cache := remoteCache{}
-	for _, stage := range []struct{ conclusion, want string }{{"FAILURE", "failure"}, {"SUCCESS", "success"}} {
-		data := `[{"number":12,"headRefOid":"pushed-head","headRepositoryOwner":{"login":"team"},"reviewDecision":"APPROVED","statusCheckRollup":[` + checkRun("COMPLETED", stage.conclusion) + `]}]`
+	for _, stage := range []struct{ conclusion, want, mergeable string }{{"FAILURE", "failure", "CONFLICTING"}, {"SUCCESS", "success", "MERGEABLE"}} {
+		data := `[{"number":12,"mergeable":"` + stage.mergeable + `","headRefOid":"pushed-head","headRepositoryOwner":{"login":"team"},"reviewDecision":"APPROVED","statusCheckRollup":[` + checkRun("COMPLETED", stage.conclusion) + `]}]`
 		if err := os.WriteFile(fixture, []byte(data), 0600); err != nil {
 			t.Fatal(err)
 		}
 		refreshRemote(context.Background(), gitMeta{GitHubRepo: "team/project", Branch: "feature", OID: "unpushed-local-head"}, &cache)
-		if len(cache.PullRequests) != 1 || cache.PullRequests[0].CIState != stage.want || cache.PullRequests[0].State != "Approved" {
+		if len(cache.PullRequests) != 1 || cache.PullRequests[0].CIState != stage.want || cache.PullRequests[0].State != "Approved" || cache.PullRequests[0].MergeConflict != (stage.mergeable == "CONFLICTING") {
 			t.Fatalf("CI %s refresh = %+v", stage.conclusion, cache.PullRequests)
 		}
 	}
@@ -145,7 +158,7 @@ esac
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Count(string(calls), "pr list ") != 2 || strings.Count(string(calls), "headRefOid,statusCheckRollup") != 2 || strings.Contains(string(calls), "pr checks") {
+	if strings.Count(string(calls), "pr list ") != 2 || strings.Count(string(calls), "statusCheckRollup,mergeable") != 2 || strings.Contains(string(calls), "pr checks") {
 		t.Fatalf("CI did not use only the existing PR lookup: %s", calls)
 	}
 	// Failed GitHub reads must not leave a known failure/success attached as if

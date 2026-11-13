@@ -362,6 +362,8 @@ html:not([data-local-drag-press]) .strip *, html:not([data-local-drag-press]) .w
 .pr-tag.pr-approved:hover, .pr-tag.pr-approved.status-hover, .pr-tag.pr-merged:hover, .pr-tag.pr-merged.status-hover { border-color: var(--success, #9be0b9); background: var(--success-hover, #4ca77b40); }
 .pr-tag.ci-failed { border-color: var(--error-border, #ef878999); background: var(--error-bg, #e3535a26); color: var(--error, #ffb7ba); }
 .pr-tag.ci-failed:hover, .pr-tag.ci-failed.status-hover { border-color: var(--error, #ffb0b2); background: var(--error-hover, #e3535a40); }
+.pr-tag.pr-conflict { border-color: var(--warning-border, #dcb57499); background: var(--warning-bg, #dcb57426); color: var(--warning, #eed2a4); }
+.pr-tag.pr-conflict:hover, .pr-tag.pr-conflict.status-hover { border-color: var(--warning, #eed2a4); background: var(--warning-bg, #dcb57440); }
 
 /* Separate the branch heading from compact, independently readable status rows. */
 .card-status { border-top: 1px solid var(--separator, #ffffff12); padding-top: 7px; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
@@ -500,6 +502,7 @@ button.base-update:hover, button.base-update.status-hover, button.base-update:fo
 .branch-choice-prs { display: flex; gap: 8px; font-size: 11px; line-height: 15px; color: var(--muted, #a7b2c3); min-width: 0; max-width: 100%; overflow: hidden; }
 .branch-pr { color: var(--purple, #d1baff); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .branch-pr.pr-approved, .branch-pr.pr-merged { color: var(--success, #9be0b9); }
+.branch-pr.pr-conflict { color: var(--warning, #eed2a4); }
 .branch-pr.ci-failed { color: var(--error, #ffb7ba); }
 .branch-pr-note { white-space: nowrap; }
 .branch-choice-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

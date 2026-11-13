@@ -1306,6 +1306,26 @@ test('approved and merged card PRs are green unless CI needs attention, and draf
  }
 });
 
+test('conflicted PRs are yellow with conflict tooltips and retain CI indicators, then clear on refresh',()=>{
+ for(const search of ['', '?site=a']) {
+  const view=app(search);
+  for(const [stateName,isDraft,ciState] of [['Approved',false,'success'],['Open',false,'failure'],['Draft',true,'pending'],['Review required',false,'action_required']]) {
+   const pr={number:42,state:stateName,isDraft,ciState,mergeConflict:true};
+   const show=()=>view.snapshot(state([{...site('a'),git:{branch:'feature',pullRequests:[pr]}}]));
+   show();const tag=view.root.querySelector('.pr-tag');
+   assert.equal(tag.classList.contains('pr-conflict'),true);
+   assert.equal(tag.classList.contains('pr-approved'),false);assert.equal(tag.classList.contains('ci-failed'),false);
+   assert.match(tag.title,/Merge conflicts/);assert.match(tag.dataset.appTooltip,/Merge conflicts/);assert.match(tag.attrs['aria-label'],/Merge conflicts/);
+   if(ciState==='failure') {assert.equal(tag.textContent,'× #42');assert.match(tag.title,/CI failed/);}
+   pr.mergeConflict=false;show();
+   assert.equal(view.root.querySelector('.pr-tag').classList.contains('pr-conflict'),false);
+   assert.doesNotMatch(view.root.querySelector('.pr-tag').title,/Merge conflicts/);
+  }
+  assert.equal(prTagTone({state:'Merged',mergeConflict:true}),'pr-merged');
+  assert.doesNotMatch(prDescription({number:42,state:'Merged',mergeConflict:true}),/Merge conflicts/);
+ }
+});
+
 test('PR merged status uses return actions while the numbered badge keeps browser actions',async()=>{
  for(const search of ['', '?site=a']) {
   const view=app(search),item=site('a','feature');

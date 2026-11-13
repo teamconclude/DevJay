@@ -1,6 +1,6 @@
 import { updatePresentation } from './updater.js';
 import { mountShortcutSettings } from './shortcut-settings.js';
-import { prCheckIndicator, prTagTone } from './pr-status.js';
+import { prCheckIndicator, prTagTone, prDescription } from './pr-status.js';
 import { Events, Window } from '/wails/runtime.js';
 import { createBridge } from './bridge.js';
 import { nextNotice } from './notice.js';
@@ -238,7 +238,7 @@ function details(site, parent, showIDEStatus) {
       const ci = prCheckIndicator(pr);
       const tag = button(`${ci.symbol ? `${ci.symbol} ` : ''}#${pr.number}`, () => openPR(pr.number), `pr-tag status-link ${prTagTone(pr)}`.trim());
       tag.dataset.prNumber = String(pr.number);
-      const description = [`PR #${pr.number}`, pr.isDraft ? 'Draft' : pr.state, ci.label].filter(Boolean).join(' · ');
+      const description = `PR ${prDescription(pr)}`;
       tag.title = `Open ${description} in browser`;
       tag.dataset.appTooltip = description;
       tag.setAttribute('aria-label', tag.title); tags.append(tag);

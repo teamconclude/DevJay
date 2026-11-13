@@ -11,10 +11,11 @@ export function prCheckIndicator(pr) {
   }
 }
 export function prTagTone(pr) {
+  if (pr.mergeConflict && pr.state !== 'Merged') return 'pr-conflict';
   if (['failure','action_required'].includes(pr.ciState)) return 'ci-failed';
   if (pr.state === 'Merged') return 'pr-merged';
   return pr.state === 'Approved' && !pr.isDraft ? 'pr-approved' : '';
 }
 export function prDescription(pr) {
-  return [`#${pr.number}`, pr.isDraft ? 'Draft' : pr.state, prCheckIndicator(pr).label].filter(Boolean).join(' · ');
+  return [`#${pr.number}`, pr.isDraft ? 'Draft' : pr.state, pr.mergeConflict && pr.state !== 'Merged' ? 'Merge conflicts' : '', prCheckIndicator(pr).label].filter(Boolean).join(' · ');
 }

@@ -417,6 +417,9 @@ test('branch rows show PR review and CI independently, support PR search, and pr
  search.value='#42';search.oninput();assert.deepEqual(rows.map(n=>n.hidden),[true,false,true]);
  enriched.action.branches[1].pullRequests[0].ciState='success';render(enriched);
  assert.match(classNode(root,'branch-pr').className,/pr-approved/);assert.match(classNode(root,'branch-pr').textContent,/CI passed/);
+ enriched.action.branches[1].pullRequests[0].mergeConflict=true;render(enriched);
+ assert.match(classNode(root,'branch-pr').className,/pr-conflict/);assert.match(classNode(root,'branch-pr').textContent,/Merge conflicts/);
+ search.value='merge conflicts';search.oninput();assert.deepEqual(rows.map(n=>n.hidden),[true,false,true]);
 }));
 
 test('a typed PR number finds a newly discovered remote branch and selects it for confirmation',()=>withDocument(()=>{

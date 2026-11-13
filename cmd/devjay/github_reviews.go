@@ -17,6 +17,7 @@ type pullRequest struct {
 	Number                          int
 	IsDraft                         bool
 	ReviewDecision                  string
+	Mergeable                       string
 	HeadRefOid                      string
 	State, HeadRefName, BaseRefName string
 	HeadRepository                  struct{ NameWithOwner string }
