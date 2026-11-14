@@ -175,7 +175,7 @@ func TestCardRebasePreparationFetchesLatestAndPinsDefaultIdentity(t *testing.T) 
 		} else {
 			changed.TargetRemote = "other"
 		}
-		if _, err := prepareCheckoutAction(context.Background(), repo, changed, nil); err == nil || !strings.Contains(err.Error(), "default branch changed") {
+		if _, err := prepareCheckoutAction(context.Background(), repo, changed, nil); err == nil || !strings.Contains(err.Error(), "target branch changed") {
 			t.Fatalf("accepted different %s: %v", field, err)
 		}
 	}
@@ -249,10 +249,16 @@ fi; done`)
 func TestReturnRequiresExactMergedHeadAndBaseEvenWhenKeepingBranch(t *testing.T) {
 	repo, _ := rebaseFixture(t, false)
 	req := actionRequest(t, repo, "merged")
+	req.TargetBranch = "develop"
 	before := checkoutFingerprint(t, repo)
 	for _, remove := range []bool{false, true} {
 		req.DeleteBranch = remove
-		for _, pr := range []*MergedPullRequest{nil, {Head: "other", Base: "develop"}, {Head: req.Head, Base: "other"}} {
+		for _, pr := range []*MergedPullRequest{nil,
+			{Head: "other", Base: "develop", MergedAt: time.Now().Add(time.Second)},
+			{Head: req.Head, Base: "other", MergedAt: time.Now().Add(time.Second)},
+			{Head: req.Head, Base: "", MergedAt: time.Now().Add(time.Second)},
+			{Head: req.Head, Base: "feature", MergedAt: time.Now().Add(time.Second)},
+		} {
 			if _, err := prepareCheckoutAction(context.Background(), repo, req, pr); err == nil {
 				t.Fatal("nonmatching merged branch accepted")
 			}
@@ -273,8 +279,46 @@ func TestReturnRequiresExactMergedHeadAndBaseEvenWhenKeepingBranch(t *testing.T)
 	}
 }
 
+func TestMergedReturnCreatesPRTargetWithoutCachedDefault(t *testing.T) {
+	repo, seed := rebaseFixture(t, false)
+	fixtureGit(t, seed, "fetch", "origin", "feature")
+	fixtureGit(t, seed, "merge", "--no-edit", "origin/feature")
+	fixtureGit(t, seed, "push")
+	fixtureGit(t, repo, "branch", "-D", "develop")
+	fixtureGit(t, repo, "symbolic-ref", "--delete", "refs/remotes/origin/HEAD")
+	req := actionRequest(t, repo, "merged")
+	req.TargetBranch, req.DeleteBranch = "develop", true
+	merged := &MergedPullRequest{Number: 42, Head: req.Head, Base: "develop", MergedAt: time.Now().Add(time.Second)}
+	plan, err := prepareCheckoutAction(context.Background(), repo, req, merged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fixtureGit(t, repo, "branch", "--show-current") != "feature" {
+		t.Fatal("preparation switched branches before confirmation")
+	}
+	result := applyCheckoutAction(context.Background(), plan)
+	if result.Status != "complete" || result.CurrentBranch != "develop" || result.CurrentHead != plan.TargetHead {
+		t.Fatalf("did not return to PR target: %+v", result)
+	}
+	if fixtureGit(t, repo, "rev-parse", "--abbrev-ref", "@{upstream}") != "origin/develop" {
+		t.Fatal("new target branch does not track the PR base")
+	}
+	if head, err := refHead(context.Background(), repo, "refs/heads/feature"); err != nil || head != "" {
+		t.Fatal("merged branch was not deleted")
+	}
+	if fixtureGit(t, repo, "rev-parse", result.Recovery) != req.Head {
+		t.Fatal("missing feature recovery")
+	}
+}
+
 func TestMergedCardActionAfterRemoteDeletion(t *testing.T) {
 	repo, seed := rebaseFixture(t, false)
+	// The PR targets develop even though origin's default is production.
+	fixtureGit(t, seed, "push", "origin", "HEAD:production")
+	fixtureGit(t, repo, "fetch", "origin")
+	fixtureGit(t, repo, "branch", "production", "origin/production")
+	fixtureGit(t, repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/production")
+	production := fixtureGit(t, repo, "rev-parse", "production")
 	head := fixtureGit(t, repo, "rev-parse", "HEAD")
 	// Model a real merged PR whose remote feature branch has been removed.
 	fixtureGit(t, seed, "fetch", "origin", "feature")
@@ -282,7 +326,7 @@ func TestMergedCardActionAfterRemoteDeletion(t *testing.T) {
 	fixtureGit(t, seed, "push")
 	fixtureGit(t, seed, "push", "origin", "--delete", "feature")
 	merged := &MergedPullRequest{Number: 42, Head: head, Base: "develop", SameHead: true, MergedAt: time.Now().Add(time.Second)}
-	status := GitStatus{Branch: "feature", Head: head, DefaultBranch: "develop", Tracking: "origin/feature", MergedPR: merged}
+	status := GitStatus{Branch: "feature", Head: head, DefaultBranch: "production", Tracking: "origin/feature", MergedPR: merged}
 	option := makeCardGitOption(cardMenuRequest{Kind: "site", Number: 42}, status)
 	req, ok := option.request("site", status)
 	if !ok {
@@ -291,7 +335,7 @@ func TestMergedCardActionAfterRemoteDeletion(t *testing.T) {
 	before := checkoutFingerprint(t, repo)
 	changed := req
 	changed.TargetBranch = "main"
-	if _, err := prepareCheckoutAction(context.Background(), repo, changed, merged); err == nil || !strings.Contains(err.Error(), "default branch changed") {
+	if _, err := prepareCheckoutAction(context.Background(), repo, changed, merged); err == nil || !strings.Contains(err.Error(), "target branch changed") {
 		t.Fatalf("changed menu destination accepted: %v", err)
 	}
 	plan, err := prepareCheckoutAction(context.Background(), repo, req, merged)
@@ -313,6 +357,9 @@ func TestMergedCardActionAfterRemoteDeletion(t *testing.T) {
 	}
 	if fixtureGit(t, repo, "rev-parse", result.Recovery) != head {
 		t.Fatal("missing recovery commits")
+	}
+	if fixtureGit(t, repo, "rev-parse", "production") != production {
+		t.Fatal("return changed the unrelated default branch")
 	}
 }
 

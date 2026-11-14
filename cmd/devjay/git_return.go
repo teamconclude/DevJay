@@ -28,7 +28,7 @@ func (pr pullRequest) approvedReturn(repo string) *approvedBranchPR {
 	return &approvedBranchPR{Number: pr.Number, repo: repo, branch: pr.HeadRefName, base: pr.BaseRefName, head: pr.HeadRefOid}
 }
 
-func (p *CheckoutPlan) returnsToDefault() bool {
+func (p *CheckoutPlan) returnsToBranch() bool {
 	return p.Kind == "merged" || p.Kind == "approved" || p.Kind == "merge-pr"
 }
 
@@ -55,13 +55,14 @@ func (pr *approvedBranchPR) verifyPublished(ctx context.Context, p *CheckoutPlan
 	return nil
 }
 
-// A confirmed return can replace a diverged default branch. Its old tip may
+// A confirmed return can replace a diverged target branch. Its old tip may
 // contain unique work, so keep it outside the rolling successful-action backups.
 // No patch-equivalence claim or destructive checkout is needed for preservation.
-func replaceDefaultForReturn(ctx context.Context, p *CheckoutPlan, result *CheckoutAction) error {
-	if !p.returnsToDefault() || !p.ReplaceDefault || p.targetLocalHead == "" {
-		return errors.New("The default branch replacement was not prepared. Review the return again.")
+func replaceTargetForReturn(ctx context.Context, p *CheckoutPlan, result *CheckoutAction) error {
+	if !p.returnsToBranch() || !p.ReplaceDefault || p.targetLocalHead == "" {
+		return errors.New("The target branch replacement was not prepared. Review the return again.")
 	}
+	// Retain the historical namespace for target backups, including non-default bases.
 	backup := "refs/devjay/default-backups/" + p.ID
 	if _, err := actionGit(ctx, p.path, "update-ref", "--no-deref", "--create-reflog", "-m", "DevJay: preserve "+p.Target+" before return", backup, p.targetLocalHead, ""); err != nil {
 		return fmt.Errorf("Could not preserve local %s. Both branches were kept; no checkout changes were made.", p.Target)
@@ -73,7 +74,7 @@ func replaceDefaultForReturn(ctx context.Context, p *CheckoutPlan, result *Check
 		return err
 	}
 	if _, err := actionGit(ctx, p.path, "switch", "--detach", "--no-overwrite-ignore", "--no-recurse-submodules", p.TargetHead); err != nil {
-		return errors.New("Could not load the default branch's remote files safely. Local work and both branches were kept; inspect the checkout before retrying.")
+		return errors.New("Could not load the target branch's remote files safely. Local work and both branches were kept; inspect the checkout before retrying.")
 	}
 	state, current := inspectLocal(ctx, p.path)
 	if current.ReadError != nil || current.Branch != "(detached)" || current.OID != p.TargetHead || state.Changes != 0 || state.Conflicts != 0 {
@@ -84,13 +85,13 @@ func replaceDefaultForReturn(ctx context.Context, p *CheckoutPlan, result *Check
 		return fmt.Errorf("Local %s changed or is now in use elsewhere. The checkout is detached; both branches and recovery references were kept.", p.Target)
 	}
 	if head, err := refHead(ctx, p.path, backup); err != nil || head != p.targetLocalHead {
-		return errors.New("The default-branch recovery reference changed. The checkout is detached; both branches were kept. Finish manually.")
+		return errors.New("The target-branch recovery reference changed. The checkout is detached; both branches were kept. Finish manually.")
 	}
-	if _, err := actionGit(ctx, p.path, "update-ref", "--no-deref", "-m", "DevJay: return to confirmed default", "refs/heads/"+p.Target, p.TargetHead, p.targetLocalHead); err != nil {
+	if _, err := actionGit(ctx, p.path, "update-ref", "--no-deref", "-m", "DevJay: return to confirmed target", "refs/heads/"+p.Target, p.TargetHead, p.targetLocalHead); err != nil {
 		return fmt.Errorf("Local %s changed during the return. The checkout is detached; the feature branch and recovery references were kept. Finish manually.", p.Target)
 	}
 	if _, err := actionGit(ctx, p.path, "switch", "--no-guess", "--no-overwrite-ignore", "--no-recurse-submodules", "--", p.Target); err != nil {
-		return fmt.Errorf("Local %s was updated, but could not be checked out. Its previous tip is preserved in the default-branch recovery reference. The feature branch was kept; finish manually.", p.Target)
+		return fmt.Errorf("Local %s was updated, but could not be checked out. Its previous tip is preserved in the target-branch recovery reference. The feature branch was kept; finish manually.", p.Target)
 	}
 	return nil
 }

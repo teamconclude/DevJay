@@ -6,15 +6,19 @@ const prSource = await readFile(new URL('../cmd/devjay/frontend/pr-status.js', i
 source = source.replace('./pr-status.js', `data:text/javascript;base64,${Buffer.from(prSource).toString('base64')}`);
 const {postMergeSuggestion} = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
 const git = {branch:'feature',defaultBranch:'trunk',mergedPR:{number:4,sameHead:true,base:'trunk'}};
-test('suggestions require a merged PR and use the repository default', () => {
+test('suggestions require a merged PR and return to its target independent of the repository default', () => {
  assert.equal(postMergeSuggestion(undefined),null);
  assert.equal(postMergeSuggestion({git:{branch:'feature'}}),null);
  const s = postMergeSuggestion({git});
  assert.equal(s.target,'trunk'); assert.equal(s.branch,'feature'); assert.equal(s.canDelete,true);
- assert.equal(postMergeSuggestion({git:{...git,defaultBranch:''}}),null);
+ for (const defaultBranch of ['production', '']) {
+  const suggestion = postMergeSuggestion({git:{...git,defaultBranch}});
+  assert.equal(suggestion.target, 'trunk');
+  assert.equal(suggestion.title, 'Return to trunk');
+ }
 });
-test('return suggestion is absent for changed, conflicted, stale, reused or wrong-base branches', () => {
- for(const change of [{changes:1},{conflicts:1},{localNote:'cached'},{isMainBranch:true},{mergedPR:{number:4,sameHead:false,base:'trunk'}},{mergedPR:{number:4,sameHead:true,base:'release'}}]) {
+test('return suggestion is absent for changed, conflicted, stale, reused or missing/self-target branches', () => {
+ for(const change of [{changes:1},{conflicts:1},{localNote:'cached'},{isMainBranch:true},{mergedPR:{number:4,sameHead:false,base:'trunk'}},{mergedPR:{number:4,sameHead:true,base:''}},{mergedPR:{number:4,sameHead:true,base:'feature'}}]) {
   const s=postMergeSuggestion({git:{...git,...change}});
   assert.equal(s,null);
  }
@@ -250,6 +254,16 @@ test('best action is rightmost, prerequisite actions win, and at most three are 
  assert.equal(recommendedActions([{kind:'update',blocked:true},{kind:'push'}]).at(-1).kind,'push');
 }));
 
+test('merged viewer action pins the PR target and names it in confirmation',()=>withDocument(()=>{
+ const root=new Element('section'),calls=[];
+ const site={id:'site',git:{branch:'feature',head:'merged-head',defaultBranch:'production',mergedPR:{number:42,sameHead:true,base:'develop'}}};
+ mountViewerSuggestions(root,request=>calls.push(request))(site);
+ nodes(root).find(n=>n.textContent==='Return to develop').onclick();
+ assert.deepEqual(calls,[{siteID:'site',kind:'merged',branch:'feature',head:'merged-head',deleteBranch:false,targetBranch:'develop'}]);
+ assert.deepEqual(actionLabels({kind:'merged',target:'develop',deleteBranch:true}),{title:'Confirm return to develop',button:'Return to develop & delete branch'});
+ assert.equal(actionLabels({kind:'merged',target:'develop'},'complete').title,'Returned to develop');
+}));
+
 test('optional merged-branch deletion requires a newly prepared confirmation',()=>withDocument(()=>{
  const root=new Element('root'),calls=[];
  const render=mountSuggestedActions(root,()=>{},(...args)=>calls.push(args));
@@ -350,7 +364,7 @@ test('return discloses default replacement and preserves both recovery reference
  for(const status of ['failed','complete']) {
   render({...state,action:{...state.action,status,recovery:'refs/devjay/backups/return',defaultRecovery:'refs/devjay/default-backups/return'}});
   assert.ok(nodes(root).some(n=>n.textContent==='Recovery: refs/devjay/backups/return'));
-  assert.ok(nodes(root).some(n=>n.textContent==='Default branch recovery: refs/devjay/default-backups/return'));
+  assert.ok(nodes(root).some(n=>n.textContent==='Target branch recovery: refs/devjay/default-backups/return'));
  }
  render.dispose();
 }));

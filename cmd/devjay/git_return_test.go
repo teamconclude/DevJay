@@ -13,6 +13,9 @@ import (
 func divergedReturnFixture(t *testing.T) (string, string, *CheckoutPlan) {
 	t.Helper()
 	repo, seed := rebaseFixture(t, false)
+	fixtureGit(t, seed, "push", "origin", "HEAD:production")
+	fixtureGit(t, repo, "fetch", "origin")
+	fixtureGit(t, repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/production")
 	fixtureGit(t, repo, "switch", "develop")
 	writeFixture(t, repo, "local-default", "orgID\n")
 	fixtureGit(t, repo, "add", ".")
@@ -93,7 +96,7 @@ func TestReturnReplacesDivergedDefaultAndKeepsBothRecoveries(t *testing.T) {
 }
 
 func TestReturnReplacementStopsForChangedState(t *testing.T) {
-	for _, scenario := range []string{"dirty", "staged", "untracked", "default", "tracking", "feature", "remote", "worktree", "expired", "backup-failed", "ignored"} {
+	for _, scenario := range []string{"dirty", "staged", "untracked", "default", "source-default", "tracking", "feature", "remote", "worktree", "expired", "backup-failed", "ignored"} {
 		t.Run(scenario, func(t *testing.T) {
 			repo, seed, p := divergedReturnFixture(t)
 			switch scenario {
@@ -106,6 +109,8 @@ func TestReturnReplacementStopsForChangedState(t *testing.T) {
 				writeFixture(t, repo, "untracked", "unsaved work\n")
 			case "default":
 				fixtureGit(t, repo, "update-ref", "refs/heads/develop", p.Head)
+			case "source-default":
+				fixtureGit(t, repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/feature")
 			case "tracking":
 				fixtureGit(t, repo, "config", "branch.develop.merge", "refs/heads/other")
 			case "feature":
@@ -162,7 +167,7 @@ reattach=false
 for arg in "$@"; do
  if test "$arg" = --detach; then detach=true; fi
  if test "$arg" = --no-guess; then reattach=true; fi
- if test "$arg" = 'DevJay: return to confirmed default' && test "$DEVJAY_TEST_RETURN_SCENARIO" = default-at-update; then
+ if test "$arg" = 'DevJay: return to confirmed target' && test "$DEVJAY_TEST_RETURN_SCENARIO" = default-at-update; then
   "$DEVJAY_TEST_GIT" -C "$DEVJAY_TEST_REPO" update-ref refs/heads/develop "$DEVJAY_TEST_OTHER_HEAD" || exit $?
  fi
 done

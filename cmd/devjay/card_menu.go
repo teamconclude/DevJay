@@ -155,14 +155,14 @@ func suggestedCardGitOption(req cardMenuRequest, git GitStatus) *cardGitOption {
 	}
 	if !req.PublishRebased && req.BaseBranch == "" && req.BundleID == "" &&
 		git.MergedPR != nil && git.MergedPR.SameHead && git.MergedPR.Number > 0 &&
-		git.MergedPR.Head == git.Head && git.DefaultBranch != "" && git.MergedPR.Base == git.DefaultBranch &&
+		git.MergedPR.Head == git.Head && git.MergedPR.Base != "" && git.MergedPR.Base != git.Branch &&
 		!git.IsMainBranch && git.Branch != git.DefaultBranch && (req.Number == 0 || req.Number == git.MergedPR.Number) {
-		option := &cardGitOption{Kind: "merged", Branch: git.Branch, Head: git.Head, Target: git.DefaultBranch, Tracking: git.Tracking, MergedNumber: git.MergedPR.Number}
+		option := &cardGitOption{Kind: "merged", Branch: git.Branch, Head: git.Head, Target: git.MergedPR.Base, Tracking: git.Tracking, MergedNumber: git.MergedPR.Number}
 		switch {
 		case git.LocalNote != "" || git.Head == "" || git.Branch == "" || git.Branch == "(detached)" || git.Branch == "Detached HEAD":
 			option.DisabledReason = "Local branch status is unavailable. Refresh the Site."
 		case git.Conflicts > 0:
-			option.DisabledReason = "Resolve local conflicts before returning to the default branch."
+			option.DisabledReason = "Resolve local conflicts before returning to the target branch."
 		case git.Changes > 0:
 			option.DisabledReason = "Commit or stash local edits before deleting this branch."
 		}
@@ -327,7 +327,7 @@ func (option *cardGitOption) tooltip() string {
 	case "approved":
 		return fmt.Sprintf("Verify approved PR #%d and its remote tip, then confirm local branch cleanup.", option.approvedPR.Number)
 	case "merged":
-		return "Check the default branch, then confirm returning to it. The confirmation lets you keep or delete the merged local branch."
+		return "Check the PR target branch, then confirm returning to it. The confirmation lets you keep or delete the merged local branch."
 	case "return":
 		return "Check the default branch, then confirm switching to it while keeping this local branch."
 	default:

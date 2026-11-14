@@ -203,23 +203,25 @@ func prepareCheckoutAction(ctx context.Context, path string, req ActionRequest, 
 		}
 		p.Target, p.remote, p.remoteRef, p.trackingRef = s.Tracking, m.Remote, m.Merge, m.Ref
 	case "merged", "approved", "merge-pr", "rebase":
-		if m.DefaultBranch == "" || s.IsMainBranch {
-			return nil, errors.New("Could not determine a different default branch.")
-		}
-		if (req.TargetBranch != "" && req.TargetBranch != m.DefaultBranch) || (req.TargetRemote != "" && req.TargetRemote != m.DefaultRemote) {
-			return nil, errors.New("The default branch changed. Open the action again.")
-		}
-		p.Target, p.remote, p.remoteRef, p.trackingRef = m.DefaultBranch, m.DefaultRemote, "refs/heads/"+m.DefaultBranch, m.DefaultRef
-		if _, err := git(ctx, path, "check-ref-format", "--branch", p.Target); err != nil {
-			return nil, errors.New("The default branch name cannot be checked out safely.")
-		}
+		target := m.DefaultBranch
 		if req.Kind == "merged" {
 			if merged == nil {
 				return nil, errors.New("The merged PR is no longer available. Refresh the Site.")
 			}
-			if !mergedPRMatchesBranch(merged, m) || merged.Base != p.Target {
-				return nil, errors.New("This branch does not exactly match a PR merged into the default branch. No checkout changes were made.")
+			if !mergedPRMatchesBranch(merged, m) {
+				return nil, errors.New("This branch does not exactly match the merged PR. No checkout changes were made.")
 			}
+			target = merged.Base
+		}
+		if target == "" || target == m.Branch || s.IsMainBranch {
+			return nil, errors.New("Could not determine a different return or rebase target branch.")
+		}
+		if (req.TargetBranch != "" && req.TargetBranch != target) || (req.TargetRemote != "" && req.TargetRemote != m.DefaultRemote) {
+			return nil, errors.New("The target branch changed. Open the action again.")
+		}
+		p.Target, p.remote, p.remoteRef, p.trackingRef = target, m.DefaultRemote, "refs/heads/"+target, "refs/remotes/"+m.DefaultRemote+"/"+target
+		if _, err := git(ctx, path, "check-ref-format", "--branch", p.Target); err != nil {
+			return nil, errors.New("The target branch name cannot be checked out safely.")
 		}
 		if req.Kind == "approved" || req.Kind == "merge-pr" {
 			if !req.approvedPR.matchesCheckout(s, m) {
@@ -227,7 +229,7 @@ func prepareCheckoutAction(ctx context.Context, path string, req ActionRequest, 
 			}
 			p.ApprovedPR = req.approvedPR
 		}
-		if p.returnsToDefault() {
+		if p.returnsToBranch() {
 			p.DeleteBranch = req.DeleteBranch
 			if req.Kind == "merge-pr" {
 				p.DeleteBranch = true
@@ -237,10 +239,10 @@ func prepareCheckoutAction(ctx context.Context, path string, req ActionRequest, 
 			p.switchTarget, err = readSwitchBranch(ctx, path, p.Target)
 			p.targetLocalHead = p.switchTarget.head
 			if err != nil {
-				return nil, errors.New("Could not read the local default branch.")
+				return nil, errors.New("Could not read the local target branch.")
 			}
 			if branchInOtherWorktree(ctx, path, p.Target) {
-				return nil, errors.New("The default branch is checked out in another worktree. Update it there.")
+				return nil, errors.New("The target branch is checked out in another worktree. Update it there.")
 			}
 		}
 	default:
@@ -263,7 +265,7 @@ func prepareCheckoutAction(ctx context.Context, path string, req ActionRequest, 
 		return nil, errors.New("The remote branch is unavailable.")
 	}
 	old := p.Head
-	if p.returnsToDefault() {
+	if p.returnsToBranch() {
 		old = p.targetLocalHead
 	}
 	if p.Kind == "push" {
@@ -289,23 +291,23 @@ func prepareCheckoutAction(ctx context.Context, path string, req ActionRequest, 
 	}
 	if p.Kind != "rebase" && !isPushAction(p.Kind) && p.Kind != "replace" && old != "" {
 		if _, err := git(ctx, path, "merge-base", "--is-ancestor", old, p.TargetHead); err != nil {
-			if !p.returnsToDefault() || !exitedWith(err, 1) {
+			if !p.returnsToBranch() || !exitedWith(err, 1) {
 				branch := p.Branch
-				if p.returnsToDefault() {
+				if p.returnsToBranch() {
 					branch = p.Target
 				}
 				return nil, fmt.Errorf("Local branch %s cannot be fast-forwarded. Update it manually; no checkout changes were made.", branch)
 			}
-			// A confirmed return may replace a stale default branch,
+			// A confirmed return may replace a stale target branch,
 			// but the confirmation must disclose the replacement and retain its tip.
 			p.ReplaceDefault = true
 			p.RemoteTarget = strings.TrimPrefix(p.trackingRef, "refs/remotes/")
 			out, err := git(ctx, path, "rev-list", "--left-right", "--count", old+"..."+p.TargetHead, "--")
 			if err != nil {
-				return nil, errors.New("Could not compare the local default branch with its remote.")
+				return nil, errors.New("Could not compare the local target branch with its remote.")
 			}
 			if n, err := fmt.Sscanf(string(out), "%d %d", &p.LocalAhead, &p.RemoteAhead); err != nil || n != 2 || p.LocalAhead <= 0 || p.RemoteAhead < 0 {
-				return nil, errors.New("Could not read the default branch commit counts.")
+				return nil, errors.New("Could not read the target branch commit counts.")
 			}
 			if err := safeSwitchTree(ctx, path, p.TargetHead); err != nil {
 				return nil, err
@@ -370,8 +372,13 @@ func validateCheckoutPlan(ctx context.Context, p *CheckoutPlan, checkRemote bool
 	if (p.Kind == "update" || isPushAction(p.Kind) || p.Kind == "replace") && (m.Ref != p.trackingRef || m.Merge != p.remoteRef || m.Remote != p.remote) {
 		return errors.New("The upstream changed. Review the action again.")
 	}
-	if p.Kind != "update" && !isPushAction(p.Kind) && p.Kind != "replace" && (m.DefaultBranch != p.Target || m.DefaultRef != p.trackingRef) {
+	if p.Kind != "merged" && p.Kind != "update" && !isPushAction(p.Kind) && p.Kind != "replace" && (m.DefaultBranch != p.Target || m.DefaultRef != p.trackingRef) {
 		return errors.New("The default branch changed. Review the action again.")
+	}
+	// A merged return pins the PR base, independently of the remote's default.
+	// Still protect a source branch that became the default during confirmation.
+	if p.Kind == "merged" && (s.IsMainBranch || m.DefaultRemote != p.remote) {
+		return errors.New("The return source or remote changed. Review the action again.")
 	}
 	if p.Kind == "approved" || (p.Kind == "merge-pr" && p.mergeCommit == "") {
 		if !p.ApprovedPR.matchesCheckout(s, m) {
@@ -393,10 +400,10 @@ func validateCheckoutPlan(ctx context.Context, p *CheckoutPlan, checkRemote bool
 			return err
 		}
 	}
-	if p.returnsToDefault() {
+	if p.returnsToBranch() {
 		target, err := readSwitchBranch(ctx, p.path, p.Target)
 		if err != nil || target != p.switchTarget || branchInOtherWorktree(ctx, p.path, p.Target) {
-			return errors.New("The local default branch changed or is in use elsewhere. Review the action again.")
+			return errors.New("The local target branch changed or is in use elsewhere. Review the action again.")
 		}
 	}
 	if isPushAction(p.Kind) {
@@ -473,7 +480,7 @@ func applyCheckoutAction(ctx context.Context, p *CheckoutPlan) (result CheckoutA
 		}
 		result.CurrentBranch, result.CurrentHead = s.Branch, meta.OID
 		branch := p.Branch
-		if p.returnsToDefault() || p.Kind == "switch" {
+		if p.returnsToBranch() || p.Kind == "switch" {
 			branch = p.Target
 		}
 		if result.Status == "complete" && (meta.Branch != branch || meta.OID != expectedResultHead) {
@@ -605,11 +612,11 @@ func applyCheckoutAction(ctx context.Context, p *CheckoutPlan) (result CheckoutA
 		result.Status, result.Message = "complete", "Replaced "+p.Branch+" with the confirmed "+p.Target+" history. Original commits remain in the recovery reference. Nothing was pushed."
 		return result
 	}
-	if p.returnsToDefault() && p.ReplaceDefault {
-		if err := replaceDefaultForReturn(ctx, p, &result); err != nil {
+	if p.returnsToBranch() && p.ReplaceDefault {
+		if err := replaceTargetForReturn(ctx, p, &result); err != nil {
 			return fail(err)
 		}
-	} else if p.returnsToDefault() {
+	} else if p.returnsToBranch() {
 		args := []string{"switch", "--no-guess", "--no-overwrite-ignore", "--no-recurse-submodules"}
 		if p.targetLocalHead == "" {
 			args = append(args, "--create", p.Target, "--no-track", p.TargetHead)
@@ -617,16 +624,16 @@ func applyCheckoutAction(ctx context.Context, p *CheckoutPlan) (result CheckoutA
 			args = append(args, "--", p.Target)
 		}
 		if _, err := actionGit(ctx, p.path, args...); err != nil {
-			return fail(errors.New("Could not switch safely to the default branch. Local work was not discarded; inspect the checkout before retrying."))
+			return fail(errors.New("Could not switch safely to the target branch. Local work was not discarded; inspect the checkout before retrying."))
 		}
 		if p.targetLocalHead == "" {
 			if _, err := actionGit(ctx, p.path, "branch", "--set-upstream-to="+strings.TrimPrefix(p.trackingRef, "refs/remotes/"), "--", p.Target); err != nil {
-				return fail(errors.New("The default branch was created and checked out, but tracking could not be configured. Set its upstream manually. The old branch was kept."))
+				return fail(errors.New("The target branch was created and checked out, but tracking could not be configured. Set its upstream manually. The old branch was kept."))
 			}
 		}
 	}
 	expectedBranch, expectedHead := p.Branch, p.Head
-	if p.returnsToDefault() {
+	if p.returnsToBranch() {
 		expectedBranch, expectedHead = p.Target, p.targetLocalHead
 		if expectedHead == "" || p.ReplaceDefault {
 			expectedHead = p.TargetHead
@@ -635,7 +642,7 @@ func applyCheckoutAction(ctx context.Context, p *CheckoutPlan) (result CheckoutA
 	_, current, err := cleanCheckout(ctx, p.path)
 	if err != nil || current.Branch != expectedBranch || current.OID != expectedHead {
 		if p.ReplaceDefault {
-			return fail(fmt.Errorf("The checkout changed after updating %s. The feature branch was kept and the previous default tip is preserved in its recovery reference. Inspect the checkout manually.", p.Target))
+			return fail(fmt.Errorf("The checkout changed after updating %s. The feature branch was kept and the previous target tip is preserved in its recovery reference. Inspect the checkout manually.", p.Target))
 		}
 		return fail(errors.New("The checkout changed during the operation. Stopped before updating or deleting any branch."))
 	}
@@ -656,17 +663,17 @@ func applyCheckoutAction(ctx context.Context, p *CheckoutPlan) (result CheckoutA
 			return result
 		}
 		if err != nil || current.Branch != p.Target || current.OID != p.TargetHead || branchInOtherWorktree(ctx, p.path, p.Branch) {
-			return fail(errors.New("The default branch was updated, but the old branch could not safely be deleted. It was kept."))
+			return fail(errors.New("The target branch was updated, but the old branch could not safely be deleted. It was kept."))
 		}
 		if _, err := actionGit(ctx, p.path, "update-ref", "--no-deref", "-d", "refs/heads/"+p.Branch, p.Head); err != nil {
-			return fail(errors.New("The default branch was updated, but the old branch changed and was kept."))
+			return fail(errors.New("The target branch was updated, but the old branch changed and was kept."))
 		}
 		// Removing the ref is compare-and-swap guarded. Leave branch config alone:
 		// another Git client may already be recreating a branch with the same name.
 	}
 	result.Status, result.Message = "complete", "Updated "+expectedBranch+" from the remote. Nothing was pushed."
 	if p.ReplaceDefault {
-		result.Message += " The previous " + p.Target + " tip remains in its default-branch recovery reference."
+		result.Message += " The previous " + p.Target + " tip remains in its target-branch recovery reference."
 	}
 	if p.DeleteBranch {
 		result.Message += " Deleted local branch " + p.Branch + "; its commits remain in the recovery reference."

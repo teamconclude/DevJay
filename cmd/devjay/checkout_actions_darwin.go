@@ -58,7 +58,7 @@ func (m *siteManager) prepareAction(req ActionRequest, r *siteRuntime, parent *a
 		m.actionReply(req.RequestID, "The Site is not ready or an action is already running for this Site. Refresh and try again.")
 		return
 	}
-	title := map[string]string{"switch": "Confirm branch switch", "replace": "Confirm branch replacement", "push": "Confirm push", "publish": "Confirm rebased push", "update": "Confirm branch update", "rebase": "Confirm rebase", "rebase-push": "Rebase and push", "merged": "Confirm return to default branch", "approved": "Confirm return to default branch", "merge-pr": "Confirm PR merge and return"}[req.Kind]
+	title := map[string]string{"switch": "Confirm branch switch", "replace": "Confirm branch replacement", "push": "Confirm push", "publish": "Confirm rebased push", "update": "Confirm branch update", "rebase": "Confirm rebase", "rebase-push": "Rebase and push", "merged": "Confirm return to PR target branch", "approved": "Confirm return to default branch", "merge-pr": "Confirm PR merge and return"}[req.Kind]
 	if title == "" {
 		m.actionReply(req.RequestID, "Unknown action.")
 		return

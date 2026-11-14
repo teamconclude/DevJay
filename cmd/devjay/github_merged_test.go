@@ -130,8 +130,8 @@ func TestReturnSuggestionRequiresCleanExactMergedTip(t *testing.T) {
 		{name: "reused branch", head: "new-tip", base: "develop"},
 		{name: "local edits", head: "old-tip", base: "develop", edits: 1},
 		{name: "conflicts", head: "old-tip", base: "develop", conflicts: 1},
-		{name: "different base", head: "old-tip", base: "main"},
-		{name: "unknown default", head: "old-tip"},
+		{name: "different default", head: "old-tip", base: "production", want: true},
+		{name: "unknown default", head: "old-tip", want: true},
 		{name: "unverified local", head: "old-tip", base: "develop", stale: true},
 	}
 	for _, tc := range cases {

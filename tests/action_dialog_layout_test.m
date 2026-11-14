@@ -97,7 +97,7 @@ int main(void) {
             evaluate(view,@"render({...returnState,action:{...returnState.action,kind:'merge-pr',plan:{...returnPlan,kind:'merge-pr',replaceDefault:false,approvedPR:{number:42},mergeMethod:'rebase',mergeMethods:['squash','rebase']}}});void 0");
             assert([evaluate(view,@"document.body.scrollWidth<=innerWidth+1 && document.body.scrollHeight<=innerHeight+1 && document.querySelector('.suggestion-primary').getBoundingClientRect().bottom<=innerHeight && document.querySelector('.merge-method').value==='rebase' && document.querySelector('.suggestion-plan').textContent.includes('using rebase and merge')") boolValue]);
             evaluate(view,@"render({...returnState,action:{...returnState.action,status:'failed',message:'The checkout changed. Both branches were kept.',recovery:'refs/devjay/backups/0123456789abcdef0123456789abcdef',defaultRecovery:'refs/devjay/default-backups/0123456789abcdef0123456789abcdef'}});void 0");
-            assert([evaluate(view,@"document.body.scrollWidth<=innerWidth+1 && document.body.scrollHeight<=innerHeight+1 && document.querySelector('.suggestion-plan').textContent.includes('Default branch recovery: refs/devjay/default-backups/')") boolValue]);
+            assert([evaluate(view,@"document.body.scrollWidth<=innerWidth+1 && document.body.scrollHeight<=innerHeight+1 && document.querySelector('.suggestion-plan').textContent.includes('Target branch recovery: refs/devjay/default-backups/')") boolValue]);
         }
         puts("Action dialog WebKit layout and countdown checks passed");
     }

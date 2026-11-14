@@ -59,9 +59,9 @@ func hasSuggestedActions(s GitStatus) bool {
 }
 
 // The GitHub lookup already matches repository and exact branch name. Only the
-// merged tip on a clean checkout is eligible to return to the default branch.
+// merged tip on a clean checkout is eligible to return to the PR target branch.
 func canReturnAfterMerge(s GitStatus) bool {
-	return s.MergedPR != nil && s.MergedPR.SameHead && s.DefaultBranch != "" &&
-		s.MergedPR.Base == s.DefaultBranch && !s.IsMainBranch && s.Changes == 0 &&
+	return s.MergedPR != nil && s.MergedPR.SameHead && s.MergedPR.Base != "" &&
+		s.MergedPR.Base != s.Branch && !s.IsMainBranch && s.Changes == 0 &&
 		s.Conflicts == 0 && s.LocalNote == ""
 }

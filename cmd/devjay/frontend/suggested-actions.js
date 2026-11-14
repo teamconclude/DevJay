@@ -21,9 +21,9 @@ export function postMergeSuggestion(site) {
   if (!site?.git.mergedPR) return null;
   const git = site.git;
   // A reused branch name is history, not a completed development context.
-  if (!git.mergedPR.sameHead || !git.defaultBranch || git.mergedPR.base !== git.defaultBranch || git.isMainBranch || localWarning(git, 'returning to the default branch')) return null;
-  return {kind: 'merged', branch: git.branch, target: git.defaultBranch || '', number: git.mergedPR.number,
-    title: `Return to the default branch: ${git.defaultBranch || 'unknown'}`,
+  if (!git.mergedPR.sameHead || !git.mergedPR.base || git.mergedPR.base === git.branch || git.isMainBranch || localWarning(git, 'returning to the PR target branch')) return null;
+  return {kind: 'merged', branch: git.branch, target: git.mergedPR.base, number: git.mergedPR.number,
+    title: `Return to ${git.mergedPR.base}`,
     canDelete: true, blocked: false, warning: ''};
 }
 
@@ -74,7 +74,7 @@ export function siteSuggestions(site) {
   return suggestions;
 }
 
-const returnsToDefault = kind => kind === 'merged' || kind === 'approved' || kind === 'merge-pr';
+const returnsToBranch = kind => kind === 'merged' || kind === 'approved' || kind === 'merge-pr';
 
 export function suggestionSteps(suggestion, deleteBranch) {
   if (suggestion.kind === 'merge-pr') return [
@@ -138,9 +138,9 @@ export function actionLabels(plan, status = 'ready') {
     update: {ready:'Confirm branch update',preparing:'Checking branch update…',running:'Updating branch…',complete:'Branch updated',failed:'Branch update stopped',button:'Update branch'},
     rebase: {ready:'Confirm rebase',preparing:'Checking rebase…',running:'Rebasing branch…',complete:'Branch rebased',failed:'Rebase stopped',button:'Rebase branch'},
     'merge-pr': {ready:'Confirm PR merge and return',preparing:'Checking PR merge…',running:'Merging PR and returning…',complete:'PR merged and branch returned',failed:'PR merge and return stopped',button:`Merge & return to ${plan.target || 'default branch'}`},
-    return: {ready:'Confirm return to default branch',preparing:'Checking return to default branch…',running:'Returning to default branch…',complete:'Returned to default branch',failed:'Return to default branch stopped',button:`Return to ${plan.target}${plan.deleteBranch ? ' & delete branch' : ''}`},
+    return: {ready:`Confirm return to ${plan.target || 'PR target branch'}`,preparing:`Checking return to ${plan.target || 'PR target branch'}…`,running:`Returning to ${plan.target || 'PR target branch'}…`,complete:`Returned to ${plan.target || 'PR target branch'}`,failed:'Branch return stopped',button:`Return to ${plan.target}${plan.deleteBranch ? ' & delete branch' : ''}`},
   };
-  const label = labels[plan.kind === 'merge-pr' ? plan.kind : returnsToDefault(plan.kind) ? 'return' : plan.kind] || labels.return;
+  const label = labels[plan.kind === 'merge-pr' ? plan.kind : returnsToBranch(plan.kind) ? 'return' : plan.kind] || labels.return;
   return {title:label[status] || label.ready,button:label.button};
 }
 
@@ -305,7 +305,7 @@ export function mountSuggestedActions(root, close, actionEvent) {
     });
   };
   checkbox.onchange = () => {
-    if (checkbox.disabled || current?.status !== 'ready' || !returnsToDefault(current.plan?.kind)) return;
+    if (checkbox.disabled || current?.status !== 'ready' || !returnsToBranch(current.plan?.kind)) return;
     checkbox.disabled = next.disabled = true;
     const pending = current;
     return recoverRequest(() => actionEvent('action-prepare', {siteID:pending.siteID,kind:pending.plan.kind,branch:pending.plan.branch,
@@ -358,7 +358,7 @@ export function mountSuggestedActions(root, close, actionEvent) {
     cancel.textContent = action?.status === 'complete' ? 'Done' : action?.status === 'failed' ? 'Close' : 'Cancel';
     const finished = action?.status === 'complete' || action?.status === 'failed';
     dismiss.title = finished ? 'Close' : 'Cancel'; dismiss.setAttribute('aria-label', finished ? 'Close dialog' : 'Cancel action');
-    deletion.hidden = action?.status !== 'ready' || !returnsToDefault(kind) || kind === 'merge-pr';
+    deletion.hidden = action?.status !== 'ready' || !returnsToBranch(kind) || kind === 'merge-pr';
     checkbox.disabled = deletion.hidden; checkbox.checked = !!p?.deleteBranch;
     deleteText.textContent = `Delete local branch ${p?.branch || ''} afterward`;
     remoteOption.hidden = action?.status !== 'ready' || kind !== 'switch' || !p?.canUpdateTarget || p.createTarget || p.localAhead > 0 || !(p.remoteAhead > 0);
@@ -449,7 +449,7 @@ export function mountSuggestedActions(root, close, actionEvent) {
         p.kind === 'push' || p.kind === 'publish' ? `${p.targetHead.slice(0,8)} → ${p.head.slice(0,8)}` : `${p.head.slice(0,8)} → ${p.targetHead.slice(0,8)}`;
       plan.replaceChildren(el('p', 'help copyable', revisions), list);
       if (p.deleteBranch) plan.append(el('p', 'warning', `This also deletes local branch ${p.branch}. A recovery reference will retain its commits.`));
-      if (returnsToDefault(p.kind) && p.replaceDefault) plan.append(el('p', 'warning default-return', `Local ${p.target} has ${p.localAhead} ${p.localAhead === 1 ? 'commit' : 'commits'} outside ${p.remoteTarget}'s history. Their changes may already exist upstream under different commit IDs. All current ${p.target} commits will be retained in a separate recovery reference; only the remote version will be used for ${p.target}.`));
+      if (returnsToBranch(p.kind) && p.replaceDefault) plan.append(el('p', 'warning default-return', `Local ${p.target} has ${p.localAhead} ${p.localAhead === 1 ? 'commit' : 'commits'} outside ${p.remoteTarget}'s history. Their changes may already exist upstream under different commit IDs. All current ${p.target} commits will be retained in a separate recovery reference; only the remote version will be used for ${p.target}.`));
       if (p.kind === 'replace') plan.append(el('p', 'warning', 'The local branch will use the rewritten remote history. Its old commits will be kept in a recovery reference.'));
       if (p.kind === 'rebase') plan.append(el('p', 'warning', 'Rebasing rewrites commit IDs. Review the result before pushing.'));
       if (p.kind === 'publish') plan.append(el('p', 'warning', 'Remote commit IDs will change. Git conflict checks do not replace tests or code review.'));
@@ -465,7 +465,7 @@ export function mountSuggestedActions(root, close, actionEvent) {
       if (action?.files?.length) { const files=el('ul','copyable'); for(const file of action.files) files.append(el('li','',file)); plan.append(files); }
       if (action?.currentHead) plan.append(el('p','help copyable',`Current checkout: ${action.currentBranch} · ${action.currentHead.slice(0,8)}`));
       if (action?.recovery) plan.append(el('p','help copyable',`Recovery: ${action.recovery}`));
-      if (action?.defaultRecovery) plan.append(el('p','help copyable default-return',`Default branch recovery: ${action.defaultRecovery}`));
+      if (action?.defaultRecovery) plan.append(el('p','help copyable default-return',`Target branch recovery: ${action.defaultRecovery}`));
     }
   };
   render.escape = () => {
@@ -501,7 +501,8 @@ export function mountViewerSuggestions(root, prepareAction) {
       button.onclick=()=>{
         if(button.disabled)return;
         button.disabled=true;
-        return recoverRequest(() => prepareAction({siteID:site.id,kind:suggestion.kind,branch:site.git.branch,head:site.git.head,deleteBranch:false}), () => { button.disabled=false; });
+        return recoverRequest(() => prepareAction({siteID:site.id,kind:suggestion.kind,branch:site.git.branch,head:site.git.head,deleteBranch:false,
+          ...(suggestion.kind === 'merged' ? {targetBranch:suggestion.target} : {})}), () => { button.disabled=false; });
       };
       buttons.append(button);
     });

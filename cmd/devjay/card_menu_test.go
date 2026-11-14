@@ -225,7 +225,7 @@ func TestMergedCardMenuPreparesDeletionAndRejectsChangedState(t *testing.T) {
 	for _, change := range []func(*GitStatus){
 		func(s *GitStatus) { s.Changes = 1 }, func(s *GitStatus) { s.Conflicts = 1 }, func(s *GitStatus) { s.LocalNote = "cached" },
 		func(s *GitStatus) { s.Head = "new" }, func(s *GitStatus) { s.Branch = "other" }, func(s *GitStatus) { s.Tracking = "other/feature" },
-		func(s *GitStatus) { s.DefaultBranch = "main" }, func(s *GitStatus) { s.DefaultBranch = "" }, func(s *GitStatus) { s.IsMainBranch = true },
+		func(s *GitStatus) { s.IsMainBranch = true },
 		func(s *GitStatus) { s.MergedPR.SameHead = false }, func(s *GitStatus) { s.MergedPR.Head = "other" },
 		func(s *GitStatus) { s.MergedPR.Base = "main" }, func(s *GitStatus) { s.MergedPR.Number = 43 }, func(s *GitStatus) { s.MergedPR = nil },
 	} {
@@ -244,6 +244,33 @@ func TestMergedCardMenuPreparesDeletionAndRejectsChangedState(t *testing.T) {
 	dirty.Changes = 1
 	if option := makeCardGitOption(cardMenuRequest{Kind: "branch"}, dirty); option == nil || option.DisabledReason == "" {
 		t.Fatal("dirty merged branch must explain why cleanup is disabled")
+	}
+}
+
+func TestMergedCardMenuReturnsToPRBaseInsteadOfDefault(t *testing.T) {
+	for _, defaultBranch := range []string{"production", ""} {
+		status := GitStatus{Branch: "feature", Head: "head", DefaultBranch: defaultBranch,
+			MergedPR: &MergedPullRequest{Number: 42, Head: "head", SameHead: true, Base: "develop"}}
+		req := cardMenuRequest{Kind: "return-status"}
+		option := makeCardGitOption(req, status)
+		items := cardMenuActions(req, status, option)
+		if len(items) != 3 || items[0].Title != "Return to develop…" || items[0].Action != cardMenuGitAction {
+			t.Fatalf("missing PR-base return: %+v", items)
+		}
+		action, ok := option.request("site", status)
+		if !ok || action.Kind != "merged" || action.TargetBranch != "develop" || !action.DeleteBranch {
+			t.Fatalf("wrong return request: %+v", action)
+		}
+		status.MergedPR.Base = "release"
+		if _, ok := option.request("site", status); ok {
+			t.Fatal("changed PR target accepted from stale menu")
+		}
+		for _, base := range []string{"", "feature"} {
+			status.MergedPR.Base = base
+			if makeCardGitOption(req, status) != nil {
+				t.Fatal("missing or self-targeting PR base offered cleanup")
+			}
+		}
 	}
 }
 
