@@ -99,7 +99,21 @@ int main(void) {
             evaluate(view,@"render({...returnState,action:{...returnState.action,status:'failed',message:'The checkout changed. Both branches were kept.',recovery:'refs/devjay/backups/0123456789abcdef0123456789abcdef',defaultRecovery:'refs/devjay/default-backups/0123456789abcdef0123456789abcdef'}});void 0");
             assert([evaluate(view,@"document.body.scrollWidth<=innerWidth+1 && document.body.scrollHeight<=innerHeight+1 && document.querySelector('.suggestion-plan').textContent.includes('Target branch recovery: refs/devjay/default-backups/')") boolValue]);
         }
-        puts("Action dialog WebKit layout and countdown checks passed");
+        // The long branch name from the reported replacement dialog must fit
+        // without scrolling until the user explicitly expands its details.
+        for (NSString *theme in @[@"dark",@"light"]) {
+            for (NSNumber *width in @[@460,@400]) {
+                [window setContentSize:NSMakeSize(width.doubleValue,470)];
+                evaluate(view,[NSString stringWithFormat:@"document.documentElement.dataset.theme='%@';render({suggestedSite:'c1',actionGeneration:7,sites:[site],action:{siteID:'c1',kind:'replace',status:'ready',plan:{id:'replacement-%@-%@',kind:'replace',branch:'lars/teams-probe-readback-stamp',target:'origin/lars/teams-probe-readback-stamp',head:'fc9e72212345',targetHead:'2be080912345'}}})",theme,theme,width]);
+                assert([evaluate(view,@"!document.querySelector('.confirmation-details').open && document.querySelector('.confirmation-details summary').textContent==='Show details' && document.querySelector('.confirmation-details').getBoundingClientRect().height<=document.querySelector('.confirmation-details summary').getBoundingClientRect().height+1 && document.body.scrollHeight<=innerHeight+1 && document.querySelector('.suggestion-footer').getBoundingClientRect().bottom<=innerHeight") boolValue]);
+                assert([evaluate(view,@"document.querySelector('.suggestion-plan > .warning').getBoundingClientRect().height>0 && document.querySelector('.confirmation-details').textContent.includes('fc9e7221 → 2be08091')") boolValue]);
+                evaluate(view,@"document.querySelector('.confirmation-details summary').click()");
+                assert([evaluate(view,@"document.querySelector('.confirmation-details').open && document.querySelector('.confirmation-details summary').textContent==='Hide details' && document.querySelector('.confirmation-details ol').getBoundingClientRect().height>0 && document.body.scrollHeight<=innerHeight+1 && document.querySelector('.suggestion-footer').getBoundingClientRect().bottom<=innerHeight") boolValue]);
+                evaluate(view,@"document.querySelector('.confirmation-details summary').click()");
+                assert([evaluate(view,@"!document.querySelector('.confirmation-details').open && document.querySelector('.confirmation-details summary').textContent==='Show details' && document.body.scrollHeight<=innerHeight+1") boolValue]);
+            }
+        }
+        puts("Action dialog WebKit layout, disclosure and countdown checks passed");
     }
     return 0;
 }

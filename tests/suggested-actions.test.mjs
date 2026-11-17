@@ -62,6 +62,23 @@ const branchState=()=>({suggestedSite:'site',sites:[{id:'site',name:'project',pa
  ]}});
 const switchPlan=(patch={})=>({id:'switch-token',kind:'switch',branch:'feature',head:'head123456',target:'main',targetHead:'target123456',targetRemote:'',remoteTarget:'origin/main',canUpdateTarget:true,updateTarget:false,remoteAhead:3,localAhead:0,createTarget:false,...patch});
 
+test('confirmation hashes and steps are optional details while warnings stay visible',()=>withDocument(()=>{
+ const root=new Element('root'),render=mountSuggestedActions(root,()=>{},()=>{}),state=branchState();
+ const action={siteID:'site',kind:'replace',status:'ready',plan:switchPlan({id:'replace-token',kind:'replace'})};
+ render({...state,action});
+ const details=classNode(root,'confirmation-details'),summary=details.children[0],plan=classNode(root,'suggestion-plan');
+ assert.equal(details.open,false);assert.equal(summary.textContent,'Show details');
+ assert.ok(details.children.some(n=>n.textContent==='head1234 → target12'));
+ assert.equal(nodes(details).filter(n=>n.tag==='li').length,4);
+ assert.ok(plan.children.some(n=>n.className==='warning' && /rewritten remote history/.test(n.textContent)));
+ details.open=true;details.ontoggle();assert.equal(summary.textContent,'Hide details');
+ render({...state,sites:[{...state.sites[0],git:{...state.sites[0].git,changes:1}}],action});
+ assert.equal(classNode(root,'confirmation-details'),details);assert.equal(details.open,true);
+ render({...state,action:{...action,plan:{...action.plan,id:'new-plan'}}});
+ assert.equal(details.open,false);assert.equal(summary.textContent,'Show details');
+ render.dispose();
+}));
+
 test('branch discovery waits for explicit choice and filtering survives snapshots without replacing search',()=>withDocument(()=>{
  const root=new Element('root'),calls=[],render=mountSuggestedActions(root,()=>{},(...args)=>calls.push(args)),state=branchState();
  render({...state,action:{...state.action,status:'loading-branches',branches:undefined}});

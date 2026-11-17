@@ -473,10 +473,12 @@ button.base-update:hover, button.base-update.status-hover, button.base-update:fo
 .suggestion-warning { font-size: 12px; line-height: 17px; margin: 10px 0; }
 .action-details { margin: 12px 0; font-size: 11px; overflow-wrap: anywhere; }
 .action-details summary { cursor: pointer; color: var(--muted, #939fb2); }
+.confirmation-details { font-size: inherit; }
+.confirmation-details summary { font-size: 12px; }
 .suggestion-plan { overflow-wrap: anywhere; }
-.suggestions #app:has(.default-return, .merge-option:not([hidden])) { height: 100vh; overflow: hidden; }
-.suggestions #app:has(.default-return, .merge-option:not([hidden])) > .suggestion-plan { min-height: 0; overflow: auto; }
-.suggestions #app:has(.default-return, .merge-option:not([hidden])) > :not(.suggestion-plan) { flex-shrink: 0; }
+.suggestions #app:has(.confirmation-details[open], .default-return, .merge-option:not([hidden])) { height: 100vh; overflow: hidden; }
+.suggestions #app:has(.confirmation-details[open], .default-return, .merge-option:not([hidden])) > .suggestion-plan { min-height: 0; overflow: auto; }
+.suggestions #app:has(.confirmation-details[open], .default-return, .merge-option:not([hidden])) > :not(.suggestion-plan) { flex-shrink: 0; }
 .suggestion-preview { font-size: 11px; color: var(--muted, #939fb2); margin: auto 0 12px; padding-top: 18px; }
 .action-countdown { display: inline-flex; align-items: center; gap: 6px; margin: 0 auto 0 0; font-variant-numeric: tabular-nums; cursor: pointer; }
 .action-auto-countdown { flex: 0 0 auto; margin: 0; }

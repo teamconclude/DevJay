@@ -185,6 +185,11 @@ export function mountSuggestedActions(root, close, actionEvent) {
   const discovery = el('p', 'branch-discovery-note help copyable');
   chooser.append(searchLabel, choices, empty, discovery);
   const plan = el('section', 'suggestion-plan');
+  const confirmationDetails = el('details', 'action-details confirmation-details');
+  const detailsSummary = el('summary', '', 'Show details');
+  confirmationDetails.append(detailsSummary);
+  confirmationDetails.ontoggle = () => { detailsSummary.textContent = confirmationDetails.open ? 'Hide details' : 'Show details'; };
+  let detailsIdentity = '';
   const deletion = el('label', 'suggestion-delete');
   const checkbox = el('input', ''); checkbox.type = 'checkbox';
   const deleteText = el('span', ''); deletion.append(checkbox, deleteText);
@@ -447,7 +452,14 @@ export function mountSuggestedActions(root, close, actionEvent) {
       for (const step of suggestionSteps({...p,tracking:site?.git.base?.tracking || p.target}, p.deleteBranch)) list.append(el('li', '', step));
       const revisions = p.kind === 'merge-pr' ? `PR ${p.head.slice(0,8)} → ${p.target} (currently ${p.targetHead.slice(0,8)})` :
         p.kind === 'push' || p.kind === 'publish' ? `${p.targetHead.slice(0,8)} → ${p.head.slice(0,8)}` : `${p.head.slice(0,8)} → ${p.targetHead.slice(0,8)}`;
-      plan.replaceChildren(el('p', 'help copyable', revisions), list);
+      const nextDetailsIdentity = JSON.stringify([generation, p.id]);
+      if (detailsIdentity !== nextDetailsIdentity) {
+        detailsIdentity = nextDetailsIdentity;
+        confirmationDetails.open = false;
+        detailsSummary.textContent = 'Show details';
+      }
+      confirmationDetails.replaceChildren(detailsSummary, el('p', 'help copyable', revisions), list);
+      plan.replaceChildren(confirmationDetails);
       if (p.deleteBranch) plan.append(el('p', 'warning', `This also deletes local branch ${p.branch}. A recovery reference will retain its commits.`));
       if (returnsToBranch(p.kind) && p.replaceDefault) plan.append(el('p', 'warning default-return', `Local ${p.target} has ${p.localAhead} ${p.localAhead === 1 ? 'commit' : 'commits'} outside ${p.remoteTarget}'s history. Their changes may already exist upstream under different commit IDs. All current ${p.target} commits will be retained in a separate recovery reference; only the remote version will be used for ${p.target}.`));
       if (p.kind === 'replace') plan.append(el('p', 'warning', 'The local branch will use the rewritten remote history. Its old commits will be kept in a recovery reference.'));
